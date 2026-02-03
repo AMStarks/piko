@@ -1,0 +1,18 @@
+[Unit]
+Description=Piko WebChat (Llama 3.1 8B via Ollama)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/webchat-piko
+ExecStart=/usr/bin/node server.js
+Restart=on-failure
+RestartSec=5
+Environment=PORT=3000
+Environment=OLLAMA_URL=http://localhost:11434/v1/chat/completions
+Environment=OLLAMA_MODEL=llama3.1:latest
+# Optional: Grok (xAI) second opinion when Piko isn't satisfied with Cursor result. Set on Optimus, never commit.
+# Environment=GROK_API_KEY=
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,984 @@
+================================================================================
+PIKO — ENTIRE CODEBASE
+================================================================================
+Repository: Piko (ClawFriend)
+Path: /Users/starkers/Projects/Piko (or equivalent)
+Generated: 2026-02-02
+
+This file contains the full source and config for:
+- Lightweight Telegram + Ollama bot (telegram-bot/)
+- OpenClaw-on-Optimus scripts and config templates (scripts/)
+- Project sync and setup scripts (root)
+- Bot identity/persona (IDENTITY.md, SOUL.md)
+
+The live OpenClaw (Clawd) implementation on Optimus is in:
+  PIKO_CLAWD_OPTIMUS_IMPLEMENTATION.txt
+
+================================================================================
+DIRECTORY TREE (code and key config)
+================================================================================
+
+Piko/
+├── telegram-bot/
+│   ├── bot.js           # Main bot: Telegram + Ollama, /cursor and /task first
+│   ├── auth.js          # Auth: isBotConfigured(), isTaskAllowed()
+│   ├── auth.test.js     # Unit tests for auth
+│   ├── IDENTITY.md      # Bot identity (ClawFriend/Piko)
+│   ├── SOUL.md          # Bot behavior rules
+│   └── DEPLOY_TO_OPTIMUS.md
+├── scripts/
+│   ├── optimus-openclaw-config.json      # OpenClaw config template
+│   └── optimus-openclaw-reset-and-install.sh
+├── sync-projects-to-optimus.sh
+├── openclaw-setup.sh
+├── complete-whatsapp-setup.sh
+├── setup-whatsapp.sh
+├── install-better-model.sh
+├── PIKO_CLAWD_OPTIMUS_IMPLEMENTATION.txt  # Snapshot of Clawd on Optimus
+└── (many .md docs at root — see list at end)
+
+================================================================================
+1. telegram-bot/bot.js
+================================================================================
+
+#!/usr/bin/env node
+/**
+ * Lightweight Telegram + Ollama bot with /cursor handled FIRST (before LLM).
+ * Deploy to Optimus: /root/telegram-ollama-bot/bot.js
+ * Token: set TELEGRAM_TOKEN env or replace below.
+ */
+const https = require('https');
+const http = require('http');
+const dns = require('dns');
+const fs = require('fs');
+const path = require('path');
+const { exec } = require('child_process');
+const { promisify } = require('util');
+const execAsync = promisify(exec);
+
+dns.setDefaultResultOrder('ipv4first');
+
+const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || process.env.TELEGRAM_BOT_TOKEN || 'YOUR_BOT_TOKEN';
+const OLLAMA_URL = 'http://localhost:11434/v1/chat/completions';
+const OLLAMA_MODEL = 'llama3.1:latest';
+const MACBOOK_USER = 'starkers';
+const MACBOOK_IP = '192.168.0.245';
+const SSH_KEY = '/root/.ssh/id_optimus_to_macbook';
+const CURSOR_WORKDIR = '/Users/starkers/Projects';
+/** Default project for /task when none specified (subdir of CURSOR_WORKDIR). Override with PIKO_DEFAULT_PROJECT env. */
+const DEFAULT_PROJECT = process.env.PIKO_DEFAULT_PROJECT || 'Piko';
+/** Cursor CLI path on MacBook (non-interactive SSH has minimal PATH; use full path). */
+const CURSOR_CLI = '/usr/local/bin/cursor';
+/** Cursor Agent CLI for headless tasks (agent -p --force "task"). */
+const AGENT_CLI = '/Users/starkers/.local/bin/agent';
+const TASK_TIMEOUT_MS = 600000; // 10 min for autonomous tasks
+/** When Mac is off: run Cursor on Optimus (wrapper uses Xvfb + timeout). */
+const PROJECTS_OPTIMUS = '/root/projects';
+const CURSOR_OPTIMUS_SCRIPT = '/root/run-cursor-optimus.sh';
+
+/** Load system prompt from IDENTITY.md + SOUL.md in bot dir; fallback to default if missing. */
+function loadSystemPrompt() {
+  const dir = __dirname;
+  const defaultPrompt = 'You are ClawFriend, a witty and empathetic AI assistant. Respond naturally and concisely. No meta-commentary about messages or commands.';
+  let identity = '';
+  let soul = '';
+  try {
+    identity = fs.readFileSync(path.join(dir, 'IDENTITY.md'), 'utf8').trim();
+  } catch (_) {}
+  try {
+    soul = fs.readFileSync(path.join(dir, 'SOUL.md'), 'utf8').trim();
+  } catch (_) {}
+  if (identity || soul) {
+    return [identity, soul].filter(Boolean).join('\n\n').trim();
+  }
+  return defaultPrompt;
+}
+const SYSTEM_PROMPT = loadSystemPrompt();
+
+const auth = require('./auth.js');
+const sessions = new Map();
+let lastUpdateId = 0;
+let isPolling = false;
+
+/** Telegram API from Optimus needs family: 4 (IPv4) or Node times out. */
+function telegramRequest(path, method, body) {
+  const opts = {
+    hostname: 'api.telegram.org',
+    path: `/bot${TELEGRAM_TOKEN}${path}`,
+    method,
+    family: 4,
+    headers: body ? { 'Content-Type': 'application/json' } : {}
+  };
+  return new Promise((resolve, reject) => {
+    const req = https.request(opts, (res) => {
+      let data = '';
+      res.on('data', (ch) => (data += ch));
+      res.on('end', () => resolve({ statusCode: res.statusCode, data }));
+    });
+    req.on('error', reject);
+    req.setTimeout(30000, () => { req.destroy(); reject(new Error('timeout')); });
+    if (body) req.write(body);
+    req.end();
+  });
+}
+
+function httpRequest(options, body) {
+  return new Promise((resolve, reject) => {
+    const req = http.request(options, (res) => {
+      let data = '';
+      res.on('data', (ch) => (data += ch));
+      res.on('end', () => resolve({ statusCode: res.statusCode, data }));
+    });
+    req.on('error', reject);
+    req.setTimeout(60000, () => { req.destroy(); reject(new Error('timeout')); });
+    if (body) req.write(body);
+    req.end();
+  });
+}
+
+async function sendMessage(chatId, text) {
+  const body = JSON.stringify({ chat_id: chatId, text: String(text).slice(0, 4096) });
+  await telegramRequest('/sendMessage', 'POST', body);
+}
+
+async function sendChatAction(chatId, action) {
+  const body = JSON.stringify({ chat_id: chatId, action });
+  await telegramRequest('/sendChatAction', 'POST', body);
+}
+
+async function getUpdates() {
+  if (isPolling) return;
+  isPolling = true;
+  const path = `/getUpdates?offset=${lastUpdateId + 1}&timeout=25`;
+  try {
+    const { statusCode, data } = await telegramRequest(path, 'GET');
+    const json = JSON.parse(data);
+    if (!json.ok) {
+      console.error('[ERROR] getUpdates API:', json.description || data);
+      return;
+    }
+    if (!Array.isArray(json.result)) return;
+    for (const u of json.result) {
+      lastUpdateId = u.update_id;
+      const msg = u.message;
+      if (msg && msg.text) {
+        const chatId = msg.chat.id;
+        const text = msg.text.trim();
+        (async () => {
+          try {
+            await processMessage(chatId, text);
+          } catch (e) {
+            console.error('[ERROR] processMessage:', e.message);
+            await sendMessage(chatId, 'Error: ' + e.message).catch(() => {});
+          }
+        })();
+      }
+    }
+  } catch (e) {
+    console.error('[ERROR] getUpdates:', e.message || e.code || String(e));
+  } finally {
+    isPolling = false;
+  }
+}
+
+/** Normalize /cursor command. In Telegram use single hyphen for flags: /cursor -version, /cursor -help (double hyphen may be stripped). */
+function parseCursorCommand(message) {
+  if (!message || typeof message !== 'string') return null;
+  const t = message.trim();
+  if (t === '/cursor') return { command: '--version' };
+  if (t.startsWith('/cursor ')) return { command: t.slice(8).trim() || '--version' };
+  if (t.startsWith('/cursor')) return { command: t.slice(7).trim() || '--version' };
+  return null;
+}
+
+/** Allowed project name: single path segment, no path traversal. */
+function isValidProjectName(name) {
+  return /^[a-zA-Z0-9_.-]+$/.test(name) && name.length > 0 && !name.includes('..');
+}
+
+/**
+ * Parse /task [project] "description".
+ * - /task "description" → default project, task = description
+ * - /task ProjectName "description" → run in CURSOR_WORKDIR/ProjectName
+ */
+function parseTaskCommand(message) {
+  if (!message || typeof message !== 'string') return null;
+  const t = message.trim();
+  if (!t.startsWith('/task ') || t === '/task') return null;
+  const rest = t.slice(6).trim();
+  if (!rest) return null;
+  const parts = rest.split(/\s+/);
+  let project = DEFAULT_PROJECT;
+  let task = rest;
+  if (parts.length >= 2 && isValidProjectName(parts[0])) {
+    project = parts[0];
+    task = parts.slice(1).join(' ').trim();
+  }
+  if (!task) return null;
+  return { task, project };
+}
+
+async function processMessage(chatId, message) {
+  // —— /task: autonomous task (agent -p --force) ——
+  const taskCmd = parseTaskCommand(message);
+  if (taskCmd && taskCmd.task) {
+    if (!auth.isTaskAllowed()) {
+      return await sendMessage(chatId, 'Task skipped: CURSOR_API_KEY not set on Optimus. Add it to the bot service (see PIKO_AUTONOMOUS_TASKS.md) and restart.');
+    }
+    const apiKey = process.env.CURSOR_API_KEY || process.env.CURSOR_API_KEY_BOT;
+    await sendChatAction(chatId, 'typing').catch(() => {});
+    const taskEsc = taskCmd.task.replace(/'/g, "'\"'\"'");
+    const keyEsc = apiKey.replace(/'/g, "'\"'\"'");
+    const workdir = `${CURSOR_WORKDIR}/${taskCmd.project}`;
+    await sendMessage(chatId, `Running in ${taskCmd.project} (up to ~10 min). I'll reply when done.`).catch(() => {});
+    const sshCmd = `ssh -i ${SSH_KEY} -o StrictHostKeyChecking=no ${MACBOOK_USER}@${MACBOOK_IP} "cd ${workdir} && ${AGENT_CLI} --api-key '${keyEsc}' --model auto -p --force '${taskEsc}'"`;
+    try {
+      const { stdout, stderr } = await execAsync(sshCmd, { timeout: TASK_TIMEOUT_MS });
+      const output = (stdout || stderr || 'Done.').trim();
+      const reply = output.length > 4000 ? output.slice(0, 4000) + '\n… (truncated)' : output;
+      return await sendMessage(chatId, 'Task finished:\n' + reply);
+    } catch (err) {
+      console.error('[ERROR] /task failed:', err.message);
+      const detail = (err.stderr || err.stdout || err.message || 'timeout or error').toString().trim().slice(0, 500);
+      return await sendMessage(chatId, 'Task failed: ' + detail);
+    }
+  }
+
+  // —— /cursor (before any Ollama call) ——
+  const cursor = parseCursorCommand(message);
+  if (cursor) {
+    await sendChatAction(chatId, 'typing').catch(() => {});
+    const cmdArg = cursor.command.replace(/"/g, '\\"').replace(/`/g, '\\`');
+    const sshCmd = `ssh -i ${SSH_KEY} -o StrictHostKeyChecking=no ${MACBOOK_USER}@${MACBOOK_IP} "cd ${CURSOR_WORKDIR} && ${CURSOR_CLI} ${cmdArg}"`;
+    try {
+      const { stdout, stderr } = await execAsync(sshCmd, { timeout: 120000 });
+      const output = (stdout || stderr || 'Done.').trim();
+      const reply = output.length > 4000 ? output.slice(0, 4000) + '\n… (truncated)' : output;
+      return await sendMessage(chatId, reply);
+    } catch (err) {
+      console.error('[ERROR] /cursor (Mac) failed:', err.message);
+      // Fallback: Mac off/unreachable → run Cursor on Optimus
+      try {
+        const localCmd = `${CURSOR_OPTIMUS_SCRIPT} ${PROJECTS_OPTIMUS} ${cmdArg}`;
+        const { stdout, stderr } = await execAsync(localCmd, { timeout: 95000 });
+        const output = (stdout || stderr || 'Done.').trim();
+        const reply = output.length > 3800 ? output.slice(0, 3800) + '\n… (truncated)' : output;
+        return await sendMessage(chatId, 'Mac unreachable; ran on Optimus:\n' + reply);
+      } catch (e2) {
+        return await sendMessage(chatId, 'Mac unreachable. Optimus fallback: ' + (e2.message || 'Cursor timed out or failed (Linux AppImage may need first run with display).'));
+      }
+    }
+  }
+
+  // Other commands
+  if (message === '/new') {
+    sessions.delete(chatId);
+    return await sendMessage(chatId, 'New session.');
+  }
+  if (message === '/status') {
+    return await sendMessage(chatId, 'Piko is up. /cursor -version or /cursor -help (single hyphen). /task "your task" runs in default project (Piko). /task OtherProject "your task" runs in that project. When Mac is off, Piko uses Optimus.');
+  }
+
+  // Ollama
+  await sendChatAction(chatId, 'typing').catch(() => {});
+  let history = sessions.get(chatId) || [];
+  history.push({ role: 'user', content: message });
+  const messages = [
+    { role: 'system', content: SYSTEM_PROMPT },
+    ...history.slice(-20).map(({ role, content }) => ({ role, content }))
+  ];
+  const body = JSON.stringify({ model: OLLAMA_MODEL, messages, stream: false });
+  const u = new URL(OLLAMA_URL);
+  const opts = { hostname: u.hostname, port: u.port || 80, path: u.pathname, method: 'POST', headers: { 'Content-Type': 'application/json' } };
+  try {
+    const { statusCode, data } = await httpRequest(opts, body);
+    const json = JSON.parse(data);
+    const reply = (json.choices && json.choices[0] && json.choices[0].message && json.choices[0].message.content) || 'No reply.';
+    history.push({ role: 'assistant', content: reply });
+    while (history.length > 30) history.shift();
+    sessions.set(chatId, history);
+    await sendMessage(chatId, reply);
+  } catch (e) {
+    console.error('[ERROR] Ollama:', e.message);
+    await sendMessage(chatId, 'Ollama error: ' + e.message);
+  }
+}
+
+// Poll every 2s
+if (!auth.isBotConfigured()) {
+  console.error('[ERROR] TELEGRAM_TOKEN (or TELEGRAM_BOT_TOKEN) not set or placeholder. Set it and restart.');
+  process.exitCode = 1;
+  process.exit(1);
+}
+setInterval(getUpdates, 2000);
+getUpdates();
+console.log('ClawFriend bot running. /cursor is handled first.');
+
+================================================================================
+2. telegram-bot/auth.js
+================================================================================
+
+/**
+ * Auth helpers for Piko: bot configuration and task eligibility.
+ * Used to decide if the bot can run (token) and if /task is allowed (Cursor API key).
+ */
+
+/**
+ * True if the bot has a non-placeholder Telegram token configured.
+ * @returns {boolean}
+ */
+function isBotConfigured() {
+  const token =
+    process.env.TELEGRAM_TOKEN ||
+    process.env.TELEGRAM_BOT_TOKEN ||
+    '';
+  const t = String(token).trim();
+  return t.length > 0 && t !== 'YOUR_BOT_TOKEN';
+}
+
+/**
+ * True if Cursor Agent /task is allowed (API key set).
+ * @returns {boolean}
+ */
+function isTaskAllowed() {
+  const key =
+    process.env.CURSOR_API_KEY ||
+    process.env.CURSOR_API_KEY_BOT ||
+    '';
+  return String(key).trim().length > 0;
+}
+
+module.exports = {
+  isBotConfigured,
+  isTaskAllowed,
+};
+
+================================================================================
+3. telegram-bot/auth.test.js
+================================================================================
+
+#!/usr/bin/env node
+/**
+ * Unit tests for the auth module.
+ * Run: node telegram-bot/auth.test.js
+ * Or:  node --test telegram-bot/auth.test.js
+ */
+const { describe, it } = require('node:test');
+const assert = require('node:assert');
+const auth = require('./auth.js');
+
+function withEnv(overrides, fn) {
+  const before = {};
+  for (const key of Object.keys(overrides)) {
+    if (key in process.env) before[key] = process.env[key];
+    if (overrides[key] !== undefined) process.env[key] = String(overrides[key]);
+    else delete process.env[key];
+  }
+  try {
+    return fn();
+  } finally {
+    for (const key of Object.keys(overrides)) {
+      if (before[key] !== undefined) process.env[key] = before[key];
+      else delete process.env[key];
+    }
+  }
+}
+
+describe('isBotConfigured', () => {
+  it('returns false when no token is set', () => {
+    withEnv(
+      { TELEGRAM_TOKEN: undefined, TELEGRAM_BOT_TOKEN: undefined },
+      () => assert.strictEqual(auth.isBotConfigured(), false)
+    );
+  });
+
+  it('returns false when token is placeholder YOUR_BOT_TOKEN', () => {
+    withEnv({ TELEGRAM_TOKEN: 'YOUR_BOT_TOKEN', TELEGRAM_BOT_TOKEN: undefined }, () =>
+      assert.strictEqual(auth.isBotConfigured(), false)
+    );
+  });
+
+  it('returns true when TELEGRAM_TOKEN is a real value', () => {
+    withEnv({ TELEGRAM_TOKEN: '123:abc', TELEGRAM_BOT_TOKEN: undefined }, () =>
+      assert.strictEqual(auth.isBotConfigured(), true)
+    );
+  });
+
+  it('returns true when TELEGRAM_BOT_TOKEN is set and TELEGRAM_TOKEN is not', () => {
+    withEnv({ TELEGRAM_TOKEN: undefined, TELEGRAM_BOT_TOKEN: '456:xyz' }, () =>
+      assert.strictEqual(auth.isBotConfigured(), true)
+    );
+  });
+
+  it('accepts trimmed non-empty token', () => {
+    withEnv({ TELEGRAM_TOKEN: '  789:def  ', TELEGRAM_BOT_TOKEN: undefined }, () =>
+      assert.strictEqual(auth.isBotConfigured(), true)
+    );
+  });
+});
+
+describe('isTaskAllowed', () => {
+  it('returns false when no Cursor API key is set', () => {
+    withEnv(
+      { CURSOR_API_KEY: undefined, CURSOR_API_KEY_BOT: undefined },
+      () => assert.strictEqual(auth.isTaskAllowed(), false)
+    );
+  });
+
+  it('returns true when CURSOR_API_KEY is set', () => {
+    withEnv({ CURSOR_API_KEY: 'key_abc', CURSOR_API_KEY_BOT: undefined }, () =>
+      assert.strictEqual(auth.isTaskAllowed(), true)
+    );
+  });
+
+  it('returns true when CURSOR_API_KEY_BOT is set', () => {
+    withEnv({ CURSOR_API_KEY: undefined, CURSOR_API_KEY_BOT: 'key_xyz' }, () =>
+      assert.strictEqual(auth.isTaskAllowed(), true)
+    );
+  });
+
+  it('returns false when key is only whitespace', () => {
+    withEnv({ CURSOR_API_KEY: '   ', CURSOR_API_KEY_BOT: undefined }, () =>
+      assert.strictEqual(auth.isTaskAllowed(), false)
+    );
+  });
+});
+
+================================================================================
+4. telegram-bot/IDENTITY.md
+================================================================================
+
+# Identity
+
+You are **ClawFriend** (or Piko)—a witty, empathetic AI assistant.
+
+- **Tone:** Friendly, concise, a bit playful. No corporate speak.
+- **Scope:** Conversation, coding help, and running tasks via /cursor and /task when asked.
+- **Name:** You can refer to yourself as ClawFriend or Piko. The human is your friend.
+
+Edit this file to change who the bot is (name, personality, tone). Restart the bot for changes to take effect.
+
+================================================================================
+5. telegram-bot/SOUL.md
+================================================================================
+
+# Soul (behavior)
+
+- Respond **directly** to the user. Do not analyze or describe the message—just reply.
+- No meta-commentary (e.g. "You asked me to…", "I notice you said…"). Answer as if in a normal chat.
+- Keep replies natural and concise unless the user asks for detail.
+- Commands like /cursor and /task are handled by the bot; you only see normal chat. Don't explain how they work unless asked.
+
+Edit this file to change how the bot behaves (conversational rules). Restart the bot for changes to take effect.
+
+================================================================================
+6. telegram-bot/DEPLOY_TO_OPTIMUS.md
+================================================================================
+
+# Deploy Bot to Optimus (fix /cursor)
+
+This `bot.js` handles **/cursor first** (before Ollama), so `/cursor --version` returns the real Cursor CLI output instead of an LLM reply.
+
+## One-time deploy from your MacBook
+
+1. **Copy the bot to Optimus** (from your MacBook, in the Piko project folder):
+
+   ```bash
+   scp -i ~/.ssh/id_optimus telegram-bot/bot.js root@192.168.0.121:/root/telegram-ollama-bot/bot.js
+   ```
+
+2. **Set the token on Optimus** (if not already set):
+
+   ```bash
+   ssh -i ~/.ssh/id_optimus root@192.168.0.121 "grep -q TELEGRAM_TOKEN /etc/systemd/system/clawfriend-bot.service || (sudo sed -i 's|ExecStart=.*|ExecStart=/usr/bin/node /root/telegram-ollama-bot/bot.js\\nEnvironment=TELEGRAM_TOKEN=YOUR_TOKEN_HERE|' /etc/systemd/system/clawfriend-bot.service)"
+   ```
+   Or manually: `sudo nano /etc/systemd/system/clawfriend-bot.service` and add under `[Service]`:
+   ```
+   Environment=TELEGRAM_TOKEN=8589008863:AAGT...
+   ```
+   (Use your real token; keep it only on Optimus.)
+
+   If the bot already has the token in the file (e.g. hardcoded), skip this.
+
+3. **Restart the bot**:
+
+   ```bash
+   ssh -i ~/.ssh/id_optimus root@192.168.0.121 "sudo systemctl restart clawfriend-bot.service && systemctl is-active clawfriend-bot.service"
+   ```
+
+4. **Test in Telegram:** Send `/cursor --version`. You should get the Cursor CLI version from your MacBook, not an Easter-egg reply.
+
+## If the current bot on Optimus has the token in the file
+
+If `/root/telegram-ollama-bot/bot.js` on Optimus already has `TELEGRAM_TOKEN = '...'` and no `process.env.TELEGRAM_TOKEN`, then after copying our `bot.js` the token will be `YOUR_BOT_TOKEN` and the bot will fail. Either:
+
+- **Option A:** On Optimus, after copying, run:  
+  `sudo sed -i "s/YOUR_BOT_TOKEN/$(grep -o "8589008863:AAG[^\']*" /root/telegram-ollama-bot/bot.js 2\/dev\/null || echo "PASTE_TOKEN_HERE")/" /root/telegram-ollama-bot/bot.js`  
+  (Replace PASTE_TOKEN_HERE with your real token if the grep finds nothing.)
+
+- **Option B:** Edit `telegram-bot/bot.js` locally and set `TELEGRAM_TOKEN = 'your_real_token'` (only if this repo stays private), then `scp` again.
+
+- **Option C:** Use `Environment=TELEGRAM_TOKEN=...` in the systemd service and keep the code as `process.env.TELEGRAM_TOKEN || 'YOUR_BOT_TOKEN'` so the env overrides.
+
+## Quick deploy (copy + restart)
+
+```bash
+cd /Users/starkers/Projects/Piko
+scp -i ~/.ssh/id_optimus telegram-bot/bot.js root@192.168.0.121:/root/telegram-ollama-bot/bot.js
+ssh -i ~/.ssh/id_optimus root@192.168.0.121 "sudo systemctl restart clawfriend-bot.service"
+```
+
+If the existing bot on Optimus uses a hardcoded token, either add `Environment=TELEGRAM_TOKEN=...` to the service or patch the copied file with the token once (see above).
+
+================================================================================
+7. scripts/optimus-openclaw-config.json
+================================================================================
+
+{
+  "gateway": {
+    "mode": "local",
+    "port": 18789,
+    "bind": "loopback",
+    "auth": { "mode": "token", "token": "openclaw-optimus-local" }
+  },
+  "agents": {
+    "defaults": {
+      "workspace": "/root/.openclaw/workspace",
+      "model": { "primary": "ollama/mistral:latest" }
+    }
+  },
+  "channels": {
+    "telegram": {
+      "enabled": true,
+      "botToken": "YOUR_TELEGRAM_BOT_TOKEN"
+    }
+  },
+  "models": {
+    "providers": {
+      "ollama": {
+        "baseUrl": "http://127.0.0.1:11434/v1",
+        "apiKey": "ollama-local",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "mistral:latest",
+            "name": "Mistral",
+            "reasoning": false,
+            "input": ["text"],
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+            "contextWindow": 16000,
+            "maxTokens": 4096
+          },
+          {
+            "id": "llama3.1:latest",
+            "name": "Llama 3.1",
+            "reasoning": false,
+            "input": ["text"],
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+            "contextWindow": 16000,
+            "maxTokens": 4096
+          }
+        ]
+      }
+    }
+  }
+}
+
+================================================================================
+8. scripts/optimus-openclaw-reset-and-install.sh
+================================================================================
+
+#!/usr/bin/env bash
+#
+# OpenClaw on Optimus: reset + install (non-interactive parts).
+# Run ON OPTIMUS (SSH to your server). Interactive steps (onboard, WhatsApp QR) you do after.
+#
+# Usage:
+#   scp scripts/optimus-openclaw-reset-and-install.sh root@192.168.0.121:/tmp/
+#   ssh root@192.168.0.121 'bash /tmp/optimus-openclaw-reset-and-install.sh'
+#
+set -e
+
+echo "=== Phase 0: Reset ==="
+
+# Stop Piko/ClawFriend bot if present
+if systemctl list-units --full -all 2>/dev/null | grep -q clawfriend-bot; then
+  echo "Stopping clawfriend-bot..."
+  systemctl stop clawfriend-bot 2>/dev/null || true
+  systemctl disable clawfriend-bot 2>/dev/null || true
+fi
+
+# Stop OpenClaw gateway if CLI is present
+if command -v openclaw &>/dev/null; then
+  echo "Stopping OpenClaw gateway..."
+  openclaw gateway stop 2>/dev/null || true
+  openclaw gateway uninstall 2>/dev/null || true
+fi
+
+# Remove systemd user unit if present (when running as root, user = root)
+if [ -f /root/.config/systemd/user/openclaw-gateway.service ]; then
+  echo "Removing OpenClaw user service..."
+  systemctl --user disable --now openclaw-gateway.service 2>/dev/null || true
+  rm -f /root/.config/systemd/user/openclaw-gateway.service
+  systemctl --user daemon-reload 2>/dev/null || true
+fi
+
+# Remove state (root or current user)
+STATE_DIR="${OPENCLAW_STATE_DIR:-$HOME/.openclaw}"
+if [ -d "$STATE_DIR" ]; then
+  echo "Removing OpenClaw state at $STATE_DIR..."
+  rm -rf "$STATE_DIR"
+fi
+
+# Optional: uninstall CLI to get a truly fresh install
+# Uncomment the next two lines if you want to remove the CLI as well:
+# npm rm -g openclaw 2>/dev/null || true
+# echo "OpenClaw CLI removed. Re-run this script to install again, or run Phase 2 manually."
+
+echo "=== Phase 1: Prerequisites ==="
+
+NODE_VER=$(node -v 2>/dev/null | sed 's/^v//' | cut -d. -f1)
+if [ -z "$NODE_VER" ] || [ "$NODE_VER" -lt 22 ]; then
+  echo "WARNING: Node >= 22 required. Current: $(node -v 2>/dev/null || echo 'not found')"
+  echo "Install Node 22+ and re-run. See OPENCLAW_OPTIMUS_WHATSAPP_FRESH_DEPLOY.md Phase 1."
+  exit 1
+fi
+echo "Node: $(node -v)"
+
+if ! curl -sf http://localhost:11434/api/tags >/dev/null 2>&1; then
+  echo "WARNING: Ollama not reachable at http://localhost:11434"
+  echo "Start Ollama (e.g. Docker container) and ensure it is on localhost:11434. See Phase 1."
+  exit 1
+fi
+echo "Ollama: reachable"
+
+echo "=== Phase 2: Install OpenClaw ==="
+
+if ! command -v openclaw &>/dev/null; then
+  echo "Installing OpenClaw CLI..."
+  npm install -g openclaw@latest
+else
+  echo "OpenClaw CLI already installed: $(openclaw --version 2>/dev/null || true)"
+  echo "To upgrade: npm install -g openclaw@latest"
+fi
+
+openclaw doctor 2>/dev/null || true
+
+echo ""
+echo "=== Next steps (do these interactively on Optimus) ==="
+echo "1. Run onboarding (Telegram, Skip auth, Node, daemon):"
+echo "   openclaw onboard --install-daemon"
+echo ""
+echo "2. Set Ollama for the gateway:"
+echo "   - Add OLLAMA_API_KEY=ollama-local to the gateway service environment (see Phase 4 in the guide)."
+echo "   - Remove any explicit models.providers.ollama from ~/.openclaw/openclaw.json."
+echo "   - Set agents.defaults.model.primary to e.g. ollama/llama3.1:latest."
+echo "   - Restart: openclaw gateway restart (or systemctl --user restart openclaw-gateway)."
+echo ""
+echo "3. Telegram: send a message to your bot; approve pairing with:"
+echo "   openclaw pairing approve telegram <CODE>"
+echo ""
+echo "4. Create workspace SOUL.md and IDENTITY.md in ~/.openclaw/workspace/ (see Phase 6)."
+echo ""
+echo "Full guide: OPENCLAW_OPTIMUS_TELEGRAM_FRESH_DEPLOY.md"
+
+================================================================================
+9. sync-projects-to-optimus.sh
+================================================================================
+
+#!/bin/bash
+# Sync all projects from Mac ~/Projects to Optimus.
+# Whatever you work on in Cursor (local) gets pushed to Optimus.
+# Uses GNU rsync from Homebrew to avoid macOS openrsync mmap timeouts (see RSYNC_MMAP_TIMEOUT_WHY.md).
+set -e
+SSH_KEY="${HOME}/.ssh/id_optimus"
+OPTIMUS="root@192.168.0.121"
+EXCLUDE="--exclude .git --exclude node_modules --exclude .cursor --exclude __pycache__ --exclude .venv --exclude venv --exclude LASKO --exclude Zeroa"
+# Dataless (offloaded) files in LASKO/Zeroa time out when read; exclude them (see RSYNC_MMAP_TIMEOUT_WHY.md).
+# Prefer GNU rsync from Homebrew for the rest
+if [ -x /opt/homebrew/bin/rsync ]; then
+  RSYNC=/opt/homebrew/bin/rsync
+elif [ -x /usr/local/bin/rsync ]; then
+  RSYNC=/usr/local/bin/rsync
+else
+  RSYNC=rsync
+fi
+
+"$RSYNC" -az $EXCLUDE -e "ssh -i $SSH_KEY -o ConnectTimeout=10" \
+  "${HOME}/Projects/" "$OPTIMUS:/root/projects/"
+
+================================================================================
+10. openclaw-setup.sh
+================================================================================
+
+#!/bin/bash
+# OpenClaw Setup Script for Optimus Server
+# This script configures OpenClaw on the Optimus server for remote control via WhatsApp/Telegram
+
+set -e
+
+echo "🦞 OpenClaw Setup for Optimus Server"
+echo "===================================="
+echo ""
+
+# Colors for output
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+NC='\033[0m' # No Color
+
+# Configuration variables (set these before running)
+USE_OLLAMA="${USE_OLLAMA:-true}"  # Use free local Ollama by default
+OLLAMA_URL="${OLLAMA_URL:-http://localhost:11434}"
+OLLAMA_MODEL="${OLLAMA_MODEL:-llama3.1:latest}"
+ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
+OPENAI_API_KEY="${OPENAI_API_KEY:-}"
+GATEWAY_PORT="${GATEWAY_PORT:-8080}"
+GATEWAY_TOKEN="${GATEWAY_TOKEN:-$(openssl rand -hex 32)}"
+AGENT_NAME="${AGENT_NAME:-Optimus}"
+
+# Check if we're on the server
+if [ ! -f "/usr/bin/openclaw" ]; then
+    echo -e "${RED}Error: OpenClaw is not installed. Run the installer first:${NC}"
+    echo "  curl -fsSL https://openclaw.ai/install.sh | bash"
+    exit 1
+fi
+
+echo -e "${GREEN}✓${NC} OpenClaw is installed"
+echo ""
+
+# Check for Ollama (free option)
+if [ "$USE_OLLAMA" = "true" ]; then
+    if curl -s "$OLLAMA_URL/api/tags" > /dev/null 2>&1; then
+        echo -e "${GREEN}✓${NC} Ollama is running at $OLLAMA_URL"
+        echo -e "${GREEN}→${NC} Using FREE local model: $OLLAMA_MODEL"
+        echo ""
+        echo -e "${YELLOW}Note:${NC} OpenClaw will be configured to use Ollama's OpenAI-compatible API."
+        echo "  This means $0 cost for API usage!"
+        echo ""
+        AUTH_CHOICE="openai-api-key"  # Ollama uses OpenAI-compatible API
+        API_KEY_FLAG="--openai-api-key"
+        API_KEY_VALUE="ollama"  # Placeholder, will configure endpoint in config file
+        USE_OLLAMA_SETUP=true
+    else
+        echo -e "${YELLOW}⚠${NC}  Ollama not accessible at $OLLAMA_URL"
+        echo "  Falling back to paid API options..."
+        USE_OLLAMA_SETUP=false
+    fi
+else
+    USE_OLLAMA_SETUP=false
+fi
+
+# Check for paid API key if not using Ollama
+if [ "$USE_OLLAMA_SETUP" != "true" ]; then
+    if [ -z "$ANTHROPIC_API_KEY" ] && [ -z "$OPENAI_API_KEY" ]; then
+        echo -e "${YELLOW}⚠${NC}  No API key provided. Please set one of:"
+        echo "  export ANTHROPIC_API_KEY='your-key-here'"
+        echo "  export OPENAI_API_KEY='your-key-here'"
+        echo "  OR use free Ollama: export USE_OLLAMA=true"
+        echo ""
+        read -p "Do you want to continue with manual API key setup later? (y/n) " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            exit 1
+        fi
+        AUTH_CHOICE="skip"
+        API_KEY_FLAG=""
+        API_KEY_VALUE=""
+    else
+        if [ -n "$ANTHROPIC_API_KEY" ]; then
+            AUTH_CHOICE="anthropic-api-key"
+            API_KEY_FLAG="--anthropic-api-key"
+            API_KEY_VALUE="$ANTHROPIC_API_KEY"
+        elif [ -n "$OPENAI_API_KEY" ]; then
+            AUTH_CHOICE="openai-api-key"
+            API_KEY_FLAG="--openai-api-key"
+            API_KEY_VALUE="$OPENAI_API_KEY"
+        fi
+    fi
+fi
+
+echo -e "${GREEN}→${NC} Running OpenClaw onboarding (non-interactive mode)..."
+echo ""
+
+if [ -n "$API_KEY_VALUE" ]; then
+    openclaw onboard \
+        --non-interactive \
+        --accept-risk \
+        --flow quickstart \
+        --mode local \
+        --auth-choice "$AUTH_CHOICE" \
+        $API_KEY_FLAG "$API_KEY_VALUE" \
+        --gateway-port "$GATEWAY_PORT" \
+        --gateway-bind lan \
+        --gateway-auth token \
+        --gateway-token "$GATEWAY_TOKEN" \
+        --install-daemon
+else
+    openclaw onboard \
+        --non-interactive \
+        --accept-risk \
+        --flow quickstart \
+        --mode local \
+        --auth-choice skip \
+        --gateway-port "$GATEWAY_PORT" \
+        --gateway-bind lan \
+        --gateway-auth token \
+        --gateway-token "$GATEWAY_TOKEN" \
+        --install-daemon
+fi
+
+echo ""
+echo -e "${GREEN}✓${NC} OpenClaw onboarding complete!"
+echo ""
+
+if [ "$USE_OLLAMA_SETUP" = "true" ]; then
+    echo -e "${GREEN}→${NC} Configuring Ollama integration..."
+    CONFIG_FILE="$HOME/.openclaw/config.yaml"
+    if [ -f "$CONFIG_FILE" ]; then
+        echo "  Ollama endpoint: $OLLAMA_URL"
+        echo "  Model: $OLLAMA_MODEL"
+        echo ""
+        echo -e "${YELLOW}Note:${NC} After onboarding, you may need to configure the OpenAI-compatible"
+        echo "  endpoint in OpenClaw config to point to Ollama at $OLLAMA_URL"
+        echo "  Check OpenClaw docs for 'custom OpenAI endpoint' configuration"
+    fi
+fi
+
+echo "📝 Configuration Summary:"
+echo "  Gateway Port: $GATEWAY_PORT"
+echo "  Gateway Token: $GATEWAY_TOKEN"
+echo "  Gateway URL: http://192.168.0.121:$GATEWAY_PORT"
+if [ "$USE_OLLAMA_SETUP" = "true" ]; then
+    echo "  AI Model: Ollama ($OLLAMA_MODEL) - FREE!"
+else
+    echo "  AI Model: $AUTH_CHOICE"
+fi
+echo ""
+echo "🔐 Save your gateway token securely!"
+echo ""
+echo "Next steps:"
+echo "  1. Set up WhatsApp channel: openclaw channels login --channel whatsapp"
+echo "  2. Set up Telegram channel: openclaw channels login --channel telegram"
+echo "  3. Install cursor-agent skill for Cursor integration"
+echo "  4. Configure SSH access to MacBook for Cursor CLI commands"
+if [ "$USE_OLLAMA_SETUP" = "true" ]; then
+    echo "  5. Verify Ollama integration in OpenClaw config"
+fi
+echo ""
+
+================================================================================
+11. complete-whatsapp-setup.sh
+================================================================================
+
+#!/bin/bash
+# Complete WhatsApp Setup - Run this in an interactive terminal
+# This script will maintain the connection while you scan the QR code
+
+echo "🦞 OpenClaw WhatsApp Setup"
+echo "========================"
+# ... prompts then:
+# ssh -i ~/.ssh/id_optimus -t root@192.168.0.121 "openclaw channels login --channel whatsapp"
+
+================================================================================
+12. setup-whatsapp.sh
+================================================================================
+
+#!/bin/bash
+# WhatsApp Channel Setup Script for OpenClaw
+# ssh -i ~/.ssh/id_optimus root@192.168.0.121 "openclaw channels login --channel whatsapp"
+
+================================================================================
+13. install-better-model.sh
+================================================================================
+
+#!/bin/bash
+# Install a Better Free Model for OpenClaw on Optimus
+# Prompts for mistral-large, llama3.1:70b-q4_K_M, or codellama:34b
+# Runs: docker exec legion-ollama ollama pull "$MODEL"
+
+================================================================================
+OTHER FILES IN REPO (documentation)
+================================================================================
+
+Root .md files (see repo for full content):
+
+API_PROVIDER_FIX.md
+BETTER_FREE_MODELS.md
+BOT_CURSOR_CONNECTED.md
+BOT_FIX_CURSOR_COMMAND.md
+BOT_READY_TO_TEST.md
+BOT_UPDATED_NEW_TOKEN.md
+BOT_WORKING.md
+CHANGE_BOT_NAME.md
+CLOUDFLARE_TUNNEL_NETWORK.md
+COMPLETE_DEBUG_LOGS.md
+CONFIG_FIXED.md
+CONNECT_BOT_TO_CURSOR.md
+CRITICAL_DIAGNOSIS.md
+CRITICAL_PROVIDER_BUG.md
+CURSOR_INTEGRATION_SETUP.md
+CURSOR_ON_OPTIMUS.md
+DEBUG_LOGGING_ENABLED.md
+DEBUG_LOGS_COMPLETE.md
+DEBUG_LOGS_SUMMARY.md
+DEEPSEEK_SECURITY_NOTE.md
+ENABLE_REMOTE_LOGIN_GUI.md
+ENABLE_REMOTE_LOGIN.md
+ENABLE_SSH_NOW.md
+ENABLE_SSH_PROPERLY.md
+FINAL_DEBUG_LOGS.md
+FINAL_DIAGNOSIS_AND_WORKAROUND.md
+FINAL_DIAGNOSIS.md
+FIXES_APPLIED.md
+FRESH_SETUP_COMPLETE.md
+GPU_DRIVER_FIX.md
+GPU_SETUP_COMPLETE.md
+IMPLEMENTATION_COMPLETE.md
+IMPLEMENTATION_PLAN.md
+LIGHTWEIGHT_BOT_DEPLOYED.md
+META_ANALYSIS_FIX.md
+OLLAMA_PROVIDER_FIX.md
+OLLAMA_SETUP.md
+OPENCLAW_AGENT_RESTORE.md
+OPENCLAW_CONFIGURATION_COMPLETE.md
+OPENCLAW_CONTEXT_WINDOW_FIX.md
+OPENCLAW_DEPLOYED_FINAL_STEPS.md
+OPENCLAW_IMPROVEMENTS.md
+OPENCLAW_ISSUES_SUMMARY.md
+OPENCLAW_LAYMAN_BREAKDOWN.md
+OPENCLAW_MEMORY.md
+OPENCLAW_META_ANALYSIS_ISSUE.md
+OPENCLAW_OPTIMUS_TELEGRAM_FRESH_DEPLOY.md
+OPENCLAW_OPTIMUS_WHATSAPP_FRESH_DEPLOY.md
+OPENCLAW_ROOT_CAUSE_ANALYSIS.md
+OPENCLAW_SETUP_STATUS.md
+OPENCLAW_TELEGRAM_META_RESPONSE_FIX.md
+OPTIMUS_OPENCLAW_SETUP.md
+PIKO_AUTONOMOUS_TASKS.md
+PIKO_CURSOR_READY.md
+PROJECT_BRIEF_AND_ISSUES.md
+PROJECT_WORKFLOW_SYNC.md
+PROVIDER_FIX_APPLIED.md
+QUICK_REFERENCE.md
+RECOMMENDED_PATH_FORWARD.md
+ROOT_CAUSE_FOUND.md
+RSYNC_MMAP_TIMEOUT_WHY.md
+SEEKING_GUIDANCE_SUMMARY.md
+TELEGRAM_CURSOR_TIP.md
+TELEGRAM_FIX.md
+TELEGRAM_PAIRING.md
+TELEGRAM_SETUP_INSTRUCTIONS.md
+TELEGRAM_SETUP_NEW.md
+TELEGRAM_SETUP.md
+TESTING_INSTRUCTIONS.md
+TOKEN_REVOCATION_INSTRUCTIONS.md
+TOP_10_MODELS_FRIEND_NUANCE.md
+WEBHOOK_MODE_DEPLOYED.md
+WHATSAPP_CONNECTED_NEXT_STEPS.md
+WHATSAPP_QR_SCAN.md
+WHATSAPP_SETUP_INSTRUCTIONS.md
+
+================================================================================
+END OF PIKO CODEBASE
+================================================================================

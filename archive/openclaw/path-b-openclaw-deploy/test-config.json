@@ -1,0 +1,55 @@
+{
+  "meta": {
+    "lastTouchedVersion": "2026.1.30"
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "ollama/qwen2.5:32b-instruct-q4_K_M"
+      },
+      "workspace": "/root/.openclaw/workspace",
+      "maxConcurrent": 4,
+      "bootstrapMaxChars": 4000
+    }
+  },
+  "channels": {
+    "telegram": {
+      "enabled": true
+    }
+  },
+  "gateway": {
+    "port": 18789
+  },
+  "models": {
+    "providers": {
+      "ollama": {
+        "apiKey": "ollama-local",
+        "baseUrl": "http://127.0.0.1:11434/v1",
+        "api": "openai-chat",
+        "models": [
+          {
+            "id": "mistral:latest",
+            "name": "Mistral 7B",
+            "contextWindow": 32000
+          },
+          {
+            "id": "qwen2.5:32b-instruct-q4_K_M",
+            "name": "Qwen 2.5 32B",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 32000,
+            "maxTokens": 4096
+          }
+        ]
+      }
+    }
+  }
+}

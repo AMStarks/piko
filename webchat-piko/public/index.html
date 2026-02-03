@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Piko — WebChat</title>
+  <style>
+    :root {
+      --bg: #1a1b1e;
+      --surface: #25262a;
+      --border: #3d3f44;
+      --text: #e4e4e7;
+      --text-dim: #a1a1aa;
+      --accent: #7c9cbf;
+      --user-bg: #2d2e33;
+      --assistant-bg: #25262a;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    header {
+      padding: 0.75rem 1rem;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: var(--surface);
+    }
+    header h1 { margin: 0; font-size: 1.1rem; font-weight: 600; }
+    header button {
+      background: var(--border);
+      color: var(--text);
+      border: none;
+      padding: 0.4rem 0.75rem;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.85rem;
+    }
+    header button:hover { background: var(--accent); color: var(--bg); }
+    #messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+    .msg {
+      max-width: 85%;
+      padding: 0.75rem 1rem;
+      border-radius: 10px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .msg.user {
+      align-self: flex-end;
+      background: var(--user-bg);
+      border: 1px solid var(--border);
+    }
+    .msg.assistant {
+      align-self: flex-start;
+      background: var(--assistant-bg);
+      border: 1px solid var(--border);
+    }
+    .msg .role { font-size: 0.7rem; color: var(--text-dim); margin-bottom: 0.25rem; }
+    #form {
+      padding: 1rem;
+      border-top: 1px solid var(--border);
+      background: var(--surface);
+    }
+    #form form {
+      display: flex;
+      gap: 0.5rem;
+      max-width: 800px;
+      margin: 0 auto;
+    }
+    #input {
+      flex: 1;
+      min-height: 44px;
+      padding: 0.6rem 0.9rem;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 1rem;
+      resize: none;
+    }
+    #input:focus { outline: none; border-color: var(--accent); }
+    #send {
+      padding: 0.6rem 1.2rem;
+      background: var(--accent);
+      color: var(--bg);
+      border: none;
+      border-radius: 8px;
+      font-weight: 600;
+      cursor: pointer;
+      font-size: 0.95rem;
+    }
+    #send:hover { filter: brightness(1.1); }
+    #send:disabled { opacity: 0.6; cursor: not-allowed; }
+    .status { color: var(--text-dim); font-size: 0.85rem; padding: 0.25rem 0; }
+    .error { color: #f87171; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Piko</h1>
+    <button type="button" id="newChat">New chat</button>
+  </header>
+  <div id="messages"></div>
+  <div id="form">
+    <form id="chatForm">
+      <textarea id="input" rows="1" placeholder="Message Piko…" required></textarea>
+      <button type="submit" id="send">Send</button>
+    </form>
+    <div id="status" class="status"></div>
+  </div>
+  <script>
+    const messagesEl = document.getElementById('messages');
+    const form = document.getElementById('chatForm');
+    const input = document.getElementById('input');
+    const sendBtn = document.getElementById('send');
+    const statusEl = document.getElementById('status');
+    const newChatBtn = document.getElementById('newChat');
+
+    let sessionId = crypto.randomUUID ? crypto.randomUUID() : 's-' + Date.now();
+    let loading = false;
+
+    function setStatus(text, isError) {
+      statusEl.textContent = text;
+      statusEl.className = 'status' + (isError ? ' error' : '');
+    }
+
+    function appendMessage(role, content) {
+      const div = document.createElement('div');
+      div.className = 'msg ' + role;
+      const roleLabel = document.createElement('div');
+      roleLabel.className = 'role';
+      roleLabel.textContent = role === 'user' ? 'You' : 'Piko';
+      div.appendChild(roleLabel);
+      const pre = document.createElement('div');
+      pre.textContent = content;
+      div.appendChild(pre);
+      messagesEl.appendChild(div);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    async function sendMessage(text) {
+      if (loading || !text.trim()) return;
+      appendMessage('user', text.trim());
+      input.value = '';
+      sendBtn.disabled = true;
+      loading = true;
+      setStatus('Piko is thinking…');
+
+      try {
+        const res = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: text.trim(), sessionId }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          setStatus(data.error || 'Request failed', true);
+          return;
+        }
+        appendMessage('assistant', data.reply || '');
+        setStatus('');
+      } catch (e) {
+        setStatus('Network error: ' + e.message, true);
+      } finally {
+        sendBtn.disabled = false;
+        loading = false;
+      }
+    }
+
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      sendMessage(input.value);
+    });
+
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && e.metaKey) {
+        e.preventDefault();
+        sendMessage(input.value);
+      }
+    });
+
+    newChatBtn.addEventListener('click', () => {
+      sessionId = crypto.randomUUID ? crypto.randomUUID() : 's-' + Date.now();
+      messagesEl.innerHTML = '';
+      setStatus('New chat started.');
+      setTimeout(() => setStatus(''), 2000);
+    });
+  </script>
+</body>
+</html>
