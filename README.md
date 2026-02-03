@@ -89,6 +89,7 @@ See **PIKO_PROJECT_AND_INTEGRATION.md** for the full API and integration options
 - **scripts/webchat-deploy/PHASE2_RUNBOOK.md** — Deploy WebChat on a Linux server.
 - **telegram-bot/DEPLOY_TO_OPTIMUS.md** — Deploy the Telegram bot.
 - **PIKO_TOOLS_OPENCLAW_LIST_REVIEW.md** — Mapping of “OpenClaw-style” skills to what Piko has or can add.
+- **PIKO_VS_OPENCLAW_POSITIONING.md** — How Piko compares to OpenClaw (scope, maturity, purpose).
 - **PIKO_ON_MOLTBOOK.md** — Registering Piko on Moltbook (agent social network).
 
 ---
@@ -101,3 +102,20 @@ See **PIKO_PROJECT_AND_INTEGRATION.md** for the full API and integration options
 - For **Telegram**: bot token; only one process per token (lock file used)
 
 Piko is “OpenClaw in spirit” (one agent, skills, channels, private LLM) but implemented as a thin stack (Node + Ollama + Cursor) so you keep full control and everything stays local.
+
+---
+
+## Piko vs OpenClaw
+
+Piko and [OpenClaw](https://github.com/openclaw/openclaw) are **different in scope, maturity, and purpose**.
+
+| | **Piko (this repo)** | **OpenClaw** |
+|---|----------------------|--------------|
+| **Purpose** | Minimal private LLM agent: WebChat + Telegram, Ollama, Cursor /task and /cursor. One backend, one brain, your infra. | Full **personal AI assistant platform**: multi-channel (WhatsApp, Telegram, Slack, Discord, iMessage, Teams, WebChat, etc.), voice, Canvas, browser tools, skills registry, native apps. |
+| **Scope** | Small: ~140 files, Node + Shell + HTML. Two channels (Web + Telegram), commands as "skills" in one server. | Large: mature monorepo, TypeScript/Swift/Kotlin, many contributors, 30+ releases, documented security, sandboxing, multi-agent routing. |
+| **Ecosystem** | Early-stage: single repo, runbooks and docs in-repo, no ClawHub, no native apps. | Full ecosystem: CLI (`openclaw onboard`, `openclaw agent`), gateway, plugins, Discord/community, extensive docs. |
+| **When to use** | You want a **thin, private** agent (chat + Cursor tasks) on your own server with minimal surface. | You want a **full platform** with many channels, skills from a registry, and a rich tooling story. |
+
+Piko is **not** OpenClaw. It's a minimal stack that keeps the "one agent, private LLM" idea but implements it in a small codebase (Node + Ollama + Cursor) so you own the pipeline and can extend it yourself. For a full platform with many channels and a skills ecosystem, use OpenClaw. For a tiny, private bot with WebChat + Telegram and Cursor, Piko fits.
+
+See **PIKO_VS_OPENCLAW_OPERATION.md** (how the two operate differently) and **PIKO_TOOLS_OPENCLAW_LIST_REVIEW.md** (mapping OpenClaw-style skills to what Piko has or can add).
