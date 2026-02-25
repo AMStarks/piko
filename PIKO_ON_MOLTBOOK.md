@@ -8,6 +8,21 @@
 
 ---
 
+## Moltbook setup checklist (API key)
+
+**Security:** Never commit your Moltbook API key to the repo. Always set it via environment or the deploy script.
+
+1. **Where Piko runs (e.g. Optimus):** Set `MOLTBOOK_API_KEY` so `/moltbook feed` and `/moltbook post` work.
+   - **Recommended:** From your Mac, run `./scripts/webchat-deploy/set-moltbook-key.sh` and paste the key when prompted. It updates the systemd override and restarts `piko-webchat`.
+   - **Manual:** Add `Environment="MOLTBOOK_API_KEY=your_key"` in `/etc/systemd/system/piko-webchat.service.d/override.conf`, then `systemctl daemon-reload` and `systemctl restart piko-webchat`.
+2. **Local/dev:** Export in the shell or use a `.env` in `webchat-piko/`: `MOLTBOOK_API_KEY=moltbook_xxx` (and add `webchat-piko/.env` to `.gitignore` if not already).
+3. **Verify:** In WebChat or Telegram send `/moltbook feed`. You should see feed lines or "Feed empty." If you see "Invalid or expired API key", the key is wrong or not set where the server runs.
+4. **Post:** Send `/moltbook post My title | Body text.` Rate limit: 1 post per 30 minutes.
+
+If you ever exposed the key (e.g. in a shared chat), consider registering a new agent and using that key instead; Moltbook does not document key rotation for existing agents.
+
+---
+
 ## Can I just send that message to Piko?
 
 **Short answer: sending it in normal chat is not enough** for Piko to actually *do* the registration.
@@ -48,9 +63,31 @@ The response includes `claim_url` and `api_key`. Open the **claim_url** in a bro
 
 ---
 
-### Option 3: Add a /moltbook command (future)
+### Option 3: Use /moltbook register (in chat)
 
-We could add a **/moltbook register** (or similar) command to the WebChat server that calls Moltbook’s registration API and replies with the claim_url. Then you’d literally send “/moltbook register” to Piko and get the link back. If you want this, we can implement it next.
+Piko has a **/moltbook register** command. No API key needed. From WebChat or Telegram:
+
+```text
+/moltbook register _Piko_servicedog_ Christian AI companion for coding and practical guidance.
+```
+
+- **Name:** 3–30 characters, alphanumeric with underscores or hyphens (e.g. `_Piko_servicedog_`, `Piko_ServiceDog`).
+- **Description:** Optional; everything after the name.
+
+Piko will POST to Moltbook’s register API and reply with the **claim_url** (and **api_key** when the API returns it). Save the api_key — you need it for posting. Open the claim_url in a browser and complete the X (Twitter) verification.
+
+**Rate limit:** Moltbook allows **1 agent registration per day per IP**. If you see “Too many registration attempts”:
+
+1. **Wait ~24 hours** and try `/moltbook register` again from the same place, or  
+2. **Run the request from your machine** (different IP may have a separate limit):
+
+   ```bash
+   curl -X POST https://www.moltbook.com/api/v1/agents/register \
+     -H "Content-Type: application/json" \
+     -d '{"name": "_Piko_servicedog_", "description": "Christian AI companion for coding and practical guidance."}'
+   ```
+
+   Use the `claim_url` from the JSON response to claim the agent.
 
 ---
 
@@ -74,8 +111,55 @@ Or shorter:
 
 ## After registration
 
-- **Claim:** Open the `claim_url`, tweet as instructed, and claim Piko.  
-- **Using Moltbook from Piko:** To let Piko *use* Moltbook (post, comment, feed), we’d need to add a Moltbook “skill” or tool that uses `MOLTBOOK_API_KEY` and the [Moltbook API](https://www.moltbook.com/skill.md) (posts, comments, feed, etc.). That’s a separate integration step.
+- **Claim:** Open the `claim_url`, tweet as instructed, and claim Piko.
+- **Save the API key:** If you got an `api_key` in the registration response (from curl or from `/moltbook register` — the command now returns it when the API provides it), save it. You need it for Piko to post and read the feed.
+
+---
+
+## How to get Piko to start posting
+
+Piko already has **feed** and **post** built in. You just need the API key on the server and then you (or Piko when you ask) use the commands.
+
+### 1. Set the API key on Optimus
+
+You need `MOLTBOOK_API_KEY` set where Piko runs (Optimus). If you have the key from registration:
+
+- **Option A — systemd service (or script):** Add to the Piko service environment on Optimus. From your Mac (with SSH to Optimus configured), you can run:
+  ```bash
+  ./scripts/webchat-deploy/set-moltbook-key.sh
+  ```
+  and paste the API key when prompted; it updates the systemd override and restarts Piko. Or add the line manually:
+  ```bash
+  Environment="MOLTBOOK_API_KEY=moltbook_xxxx"
+  ```
+  in `/etc/systemd/system/piko-webchat.service.d/override.conf`, then `sudo systemctl daemon-reload` and `sudo systemctl restart piko-webchat`.
+
+- **Option B — env file:** If your deploy uses an env file (e.g. `/opt/piko/webchat-piko/.env`), add:
+  ```
+  MOLTBOOK_API_KEY=moltbook_xxxx
+  ```
+  and ensure the service sources it.
+
+If you **don’t have** the API key (e.g. you only got the claim link from `/moltbook register` before we returned the key), either:
+- Run the registration **curl** yourself once (see Option 2 above); the JSON response includes `api_key`, or
+- Register a **new** agent with a different name via `/moltbook register` — the reply will now include the key. Save it and set it on Optimus.
+
+### 2. Use the commands in Telegram or WebChat
+
+Once the key is set and the service restarted:
+
+| What you send | What Piko does |
+|---------------|----------------|
+| `/moltbook feed` | Fetches and shows the latest feed (up to 10 items). |
+| `/moltbook post My title \| Here is the body of my first post.` | Posts to Moltbook (submolt `piko`). |
+
+So **you** trigger posting by sending those commands. Piko (the LLM) will also see the reply (“Posted to Moltbook.” or the feed lines) and can talk about it.
+
+**Moltbook rate limits:** 1 post per 30 minutes, so don’t spam posts.
+
+### 3. (Optional) Have Piko “decide” to post
+
+Right now only **slash commands** call the Moltbook API. If you say in natural language “post that on Moltbook”, the LLM might say it can’t or suggest you use `/moltbook post ...`. To have Piko autonomously post when you say “share this on Moltbook” would require adding a Moltbook tool to the chat flow (e.g. Ollama tool-calling) — a possible next step. For now, posting is **you send the command**, Piko executes it.
 
 ---
 

@@ -14,8 +14,7 @@ const ROOT_DIR = path.resolve(SCRIPT_DIR, '..');
 const PROMPTS_DIR = process.env.PIKO_PROMPTS_DIR || path.join(ROOT_DIR, 'prompts');
 const HISTORY_DIR = process.env.PIKO_HISTORY_DIR || path.join(ROOT_DIR, 'history');
 const SUGGESTIONS_DIR = process.env.PIKO_SUGGESTIONS_DIR || path.join(ROOT_DIR, 'memory', 'suggestions');
-const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
-const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'llama3.1:latest';
+const { ai } = require('../lib/llm');
 
 function yesterday() {
   const d = new Date();
@@ -37,26 +36,6 @@ function httpRequest(options, body) {
   });
 }
 
-async function ollamaChat(messages) {
-  const u = new URL(OLLAMA_URL);
-  const body = JSON.stringify({
-    model: OLLAMA_MODEL,
-    messages,
-    stream: false,
-  });
-  const opts = {
-    hostname: u.hostname,
-    port: u.port || 80,
-    path: (u.pathname || '') + '/api/chat',
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-  };
-  const { statusCode, data } = await httpRequest(opts, body);
-  const json = JSON.parse(data);
-  const reply = (json.message && json.message.content) || (json.choices && json.choices[0] && json.choices[0].message && json.choices[0].message.content) || '';
-  return String(reply).trim();
-}
-
 async function suggestMemoryLine(historyPath) {
   let raw = '';
   try {
@@ -67,7 +46,7 @@ async function suggestMemoryLine(historyPath) {
   if (!raw || raw.length < 50) return null;
   const prompt = `From this conversation log, suggest ONE short line the user could add to MEMORY.md (durable fact or preference only). One line only. If nothing durable, reply exactly: NONE\n\n---\n${raw.slice(0, 3000)}\n---`;
   try {
-    const reply = await ollamaChat([{ role: 'user', content: prompt }]);
+    const reply = (await ai(prompt)).trim();
     if (!reply || reply.toUpperCase() === 'NONE') return null;
     return reply;
   } catch (e) {
@@ -110,7 +89,7 @@ async function getProactiveNudge() {
   } catch (_) {}
   const prompt = `You are Piko, a concise assistant. Based on this context, write ONE short, friendly sentence as a nudge to the user for today (e.g. something to pick up, or a brief check-in). No meta-commentary. One sentence only.\n\nContext:\n${memory}`;
   try {
-    const reply = await ollamaChat([{ role: 'user', content: prompt }]);
+    const reply = await ai(prompt);
     return reply ? reply.split('\n')[0].trim().slice(0, 200) : null;
   } catch (e) {
     console.error('[heartbeat] Ollama nudge failed:', e.message);

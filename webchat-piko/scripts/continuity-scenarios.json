@@ -1,0 +1,146 @@
+{
+  "version": "1.1",
+  "description": "12 multi-turn continuity scenarios for conversational naturalness.",
+  "scenarios": [
+    {
+      "id": "01_greeting_to_invite",
+      "name": "Greeting → reciprocity → invitation to chat",
+      "tags": ["continuity", "social_chat"],
+      "expected_mode": "SOCIAL_CHAT",
+      "turns": [
+        "Hey Piko",
+        "How are things?",
+        "Good, good. I'm just doing some work. Want to chat for a while?"
+      ],
+      "criteria": { "continuity": 5, "naturalness": 5, "no_bleed": 5, "no_reset": 5, "mode_fit": 5 }
+    },
+    {
+      "id": "02_reciprocity_chain",
+      "name": "Reciprocity chain (3 turns)",
+      "tags": ["continuity", "reciprocity"],
+      "expected_mode": "RECIPROCITY",
+      "turns": [
+        "Not bad, how about you?",
+        "Pretty good — yourself?",
+        "Going well thanks. You?"
+      ],
+      "criteria": { "continuity": 5, "naturalness": 5, "no_bleed": 5, "no_reset": 5, "mode_fit": 5 }
+    },
+    {
+      "id": "03_emotional_disclosure",
+      "name": "Light emotional disclosure",
+      "tags": ["continuity", "empathy"],
+      "expected_mode": "SOCIAL_EMPATHY",
+      "turns": [
+        "I had a rough day today.",
+        "Feeling a bit flat.",
+        "Feels like I'm not making progress lately."
+      ],
+      "criteria": { "continuity": 5, "naturalness": 5, "no_bleed": 5, "no_reset": 5, "mode_fit": 5 }
+    },
+    {
+      "id": "04_light_opinion",
+      "name": "Light opinion turn",
+      "tags": ["continuity", "opinion"],
+      "expected_mode": "LIGHT_OPINION",
+      "turns": [
+        "What do you think about coffee?",
+        "Ever tried Vegemite?",
+        "What's your take on rainy days?"
+      ],
+      "criteria": { "continuity": 5, "naturalness": 5, "no_bleed": 5, "no_reset": 5, "mode_fit": 5 }
+    },
+    {
+      "id": "05_signoff_reengage",
+      "name": "Sign-off then re-engage",
+      "tags": ["continuity", "signoff", "reengage"],
+      "expected_mode": "SIGN_OFF_REENGAGE",
+      "turns": [
+        "Thanks, that's all for now.",
+        "Catch you later.",
+        "Hey, back again — what's new?"
+      ],
+      "criteria": { "continuity": 5, "naturalness": 5, "no_bleed": 5, "no_reset": 5, "mode_fit": 5 }
+    },
+    {
+      "id": "06_neutral_ongoing",
+      "name": "Neutral ongoing chat (what about you?)",
+      "tags": ["continuity", "social_chat"],
+      "expected_mode": "SOCIAL_CHAT",
+      "turns": [
+        "Not much, just chilling. You?",
+        "All good over here. How're things?",
+        "Same here — how's your day?"
+      ],
+      "criteria": { "continuity": 5, "naturalness": 5, "no_bleed": 5, "no_reset": 5, "mode_fit": 5 }
+    },
+    {
+      "id": "07_greeting_only",
+      "name": "Simple greeting micro-check",
+      "tags": ["micro", "greeting"],
+      "expected_mode": "GREETING",
+      "turns": ["G'day Piko.", "Morning mate.", "Hi Piko — what's new?"],
+      "criteria": { "continuity": 5, "naturalness": 5, "no_bleed": 5, "no_reset": 5, "mode_fit": 5 }
+    },
+    {
+      "id": "08_short_ack",
+      "name": "Short ack + follow-up",
+      "tags": ["micro", "ack"],
+      "expected_mode": "RECIPROCITY",
+      "turns": ["That's short.", "Cool.", "Nice."],
+      "criteria": { "continuity": 5, "naturalness": 5, "no_bleed": 5, "no_reset": 5, "mode_fit": 5 }
+    },
+    {
+      "id": "09_invite_after_work",
+      "name": "Work context → invite chat",
+      "tags": ["continuity", "social_chat"],
+      "expected_mode": "SOCIAL_CHAT",
+      "turns": [
+        "I'm just doing some work.",
+        "Good, good. Want to chat for a while?"
+      ],
+      "criteria": { "continuity": 5, "naturalness": 5, "no_bleed": 5, "no_reset": 5, "mode_fit": 5 }
+    },
+    {
+      "id": "10_signoff_chain",
+      "name": "Sign-off chain",
+      "tags": ["micro", "signoff"],
+      "expected_mode": "SIGN_OFF",
+      "turns": ["Thanks, that's all for now.", "Catch you later.", "Talk soon.", "Cheers mate."],
+      "criteria": { "continuity": 5, "naturalness": 5, "no_bleed": 5, "no_reset": 5, "mode_fit": 5 }
+    },
+    {
+      "id": "11_empathy_to_opinion",
+      "name": "Emotional → light opinion",
+      "tags": ["continuity", "empathy", "opinion"],
+      "expected_mode": "SOCIAL_CHAT",
+      "turns": [
+        "I had a rough day today.",
+        "What do you think about coffee?"
+      ],
+      "criteria": { "continuity": 5, "naturalness": 5, "no_bleed": 5, "no_reset": 5, "mode_fit": 5 }
+    },
+    {
+      "id": "12_reengage_after_signoff",
+      "name": "Re-engage after sign-off",
+      "tags": ["continuity", "reengage"],
+      "expected_mode": "SOCIAL_CHAT",
+      "turns": [
+        "Catch you later.",
+        "Hey, back again — what's new?"
+      ],
+      "criteria": { "continuity": 5, "naturalness": 5, "no_bleed": 5, "no_reset": 5, "mode_fit": 5 }
+    }
+  ],
+  "scoring_schema": {
+    "criteria": [
+      { "name": "continuity", "weight": 1.0, "desc": "Reply clearly connects to previous turn" },
+      { "name": "naturalness", "weight": 1.0, "desc": "No robotic stock phrasing" },
+      { "name": "no_bleed", "weight": 1.0, "desc": "No worldview/theology motifs unless invited" },
+      { "name": "no_reset", "weight": 1.0, "desc": "Does not restart conversation" },
+      { "name": "mode_fit", "weight": 0.8, "desc": "Tone matches mode (greeting/reciprocity etc.)" }
+    ],
+    "scenario_pass_threshold": 4.0,
+    "overall_pass_threshold": 0.8
+  }
+}

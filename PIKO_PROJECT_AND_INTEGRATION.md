@@ -51,7 +51,34 @@ User (browser or Telegram)
 - **Single backend for “brain”:** WebChat server holds sessions, loads prompts from `webchat-piko/prompts/`, and talks to Ollama. Telegram is a **client** of that backend when `PIKO_WEBCHAT_URL` is set.
 - **Unified history (optional):** If both services set the same `PIKO_UNIFIED_SESSION_ID`, WebChat and Telegram share one conversation history; `/new` clears it for both.
 
-### 2.3 Repo layout (relevant to Piko)
+### 2.3 System overview (diagram)
+
+```
+  CHANNELS                    SERVER (server.js)                 BACKENDS & DATA
+  ─────────                   ─────────────────                 ───────────────
+
+  WebChat UI ────┐
+  Telegram ──────┤
+  Discord ───────┼──► POST /api/chat ──► allowlist check (data/allowlist.json)
+  Slack ────────┤         │            session config (data/sessions.json)
+  WhatsApp ─────┤         │            intents load/save (data/intents.json)
+  BlueBubbles ──┘         │
+                          ├──► /allow, /block, /profile, /new, /status
+                          ├──► built-in commands: /calc, /time, /read, /ls, /search,
+                          │    /queue, /remind, /schedule, /chart, /doctor, /task, /cursor
+                          ├──► skills/ (notes, todo, summarize, custom)
+                          │
+                          └──► Ollama (chat, discernment)   ◄── per-session model
+                               Cursor Agent (/task)          ◄── optional Docker sandbox
+                               Grok (optional follow-up)
+                               │
+                               ▼
+  OBSERVABILITY:  log() → data/piko.log   GET /api/metrics   GET /api/control   /control UI
+```
+
+One gateway (`POST /api/chat`), one policy layer (allowlist + sessions), one brain (Ollama + skills + optional Cursor/Grok).
+
+### 2.4 Repo layout (relevant to Piko)
 
 ```
 Piko/
@@ -257,20 +284,61 @@ Current codebase does not expose a shared “core” package; integration is des
 
 ## 7. Security & Operational Notes
 
+### 7.1 Security model (summary)
+
+| Layer | Mechanism | Purpose |
+|-------|-----------|---------|
+| **Channel access** | `data/allowlist.json` + `/allow`, `/block` (WebChat only) | Only listed source+id can talk to the agent; no channel can use Piko until you allow it. |
+| **Per-session policy** | `data/sessions.json` (`profile`, `toolsAllowed`, `sandbox`) | Restrict which commands a session can run; force /task into Docker per session. |
+| **/task isolation** | Optional `PIKO_TASK_DOCKER` + per-session `sandbox: true` | Run Cursor Agent inside a container; limit blast radius of agent runs. |
+| **File access** | `SANDBOX_DIR` for `/read`, `/ls` | Only paths under the sandbox dir are readable/listable; no escape to arbitrary fs. |
+
+Secrets (tokens, API keys) stay out of the repo and are supplied via env or systemd overrides.
+
+### 7.2 Operational notes
+
 - **Secrets:** Keep `TELEGRAM_TOKEN`, `CURSOR_API_KEY`, and `GROK_API_KEY` out of the repo. Use systemd overrides or env files on the server; use `set-cursor-key.sh` / `set-grok-key.sh` as documented.
 - **Network:** WebChat listens on `0.0.0.0:3000`; expose only via LAN or a tunnel (e.g. Cloudflare Tunnel, Tailscale) if you need external access.
 - **Telegram:** Only one active getUpdates consumer per token; lock file on Optimus prevents duplicate bot processes on the same host.
-- **/task:** Runs arbitrary Cursor Agent commands in project dirs; restrict who can send /task (e.g. private Telegram, or add auth in front of `/api/chat` for other clients).
+- **/task:** Runs arbitrary Cursor Agent commands in project dirs; restrict who can send /task (e.g. private Telegram, allowlist, or add auth in front of `/api/chat` for other clients).
 
 ---
 
 ## 8. Extension Points (future)
 
+### 8.1 Wider roadmap: OpenClaw gap list and intent orders
+
+A **comprehensive list of everything OpenClaw does that Piko does not yet** is in **PIKO_OPENCLAW_GAP_AND_INTENT_ORDERS.md**. It covers:
+
+- **Channels** — WhatsApp, Slack, Discord, Signal, iMessage, Teams, etc.; we have WebChat + Telegram; Phase 2 adds one of Slack/Discord.
+- **CLI** — onboard, configure, doctor, status, sessions, channels, skills, cron, pairing; Phase 2: doctor script, health endpoint, optional pairing.
+- **Core concepts** — command queue, multi-agent routing, session pruning, streaming, typing indicators, retry/model failover; Phase 2: optional queue/debounce, streaming; Phase 3: multi-agent.
+- **Tools** — exec, web, browser, apply_patch, slash commands, memory search; Phase 1: /calc, /time, /read, /ls, /search, optional /run; Phase 2: fetch URL, optional memory search.
+- **Nodes/media** — camera, image/audio, voice, location; Phase 3+.
+- **Automation** — cron, heartbeat (we have both), Gmail PubSub, webhooks, hooks; Phase 2: Gmail, webhooks, **intent orders**.
+- **Gateway/ops** — health, doctor, sandbox, lock; Phase 2: health, doctor.
+- **Web/platforms** — Control UI, Dashboard, native apps; Phase 3+ or PWA.
+- **Approvals/security** — confirm before run, pairing/allowlist; Phase 2: optional.
+
+**Intent orders (to build in)** — capturing user intents that are fulfilled **later** (not immediately), stored and executed when the trigger fires:
+
+| Type | Example | What we add |
+|------|---------|-------------|
+| **Reminders** | “Remind me to call John at 5pm” | Store (at, tz, text); cron every 5 min checks and sends via Telegram or WebChat. |
+| **Task queue** | “Add ‘refactor auth’ to my list” / “Do this when you can” | `/queue add`, `/queue list`, `/queue next`; run next via /task, report. |
+| **Scheduled /task** | “Every day at 9am run a task for Piko” | Cron at 09:00 runs script that invokes /task and sends summary. |
+| **Conditional** | “When you get an email from X, tell me” | After Gmail integration; event-driven notify. |
+| **Intent routing** (optional) | “This is a work task” vs “just chat” | Route by keyword or Ollama to /task vs chat. |
+
+Implementation order: **Phase 1** — commands + intent queue (done). **Phase 2** — intent orders, Gmail, Discord, health/doctor (done). **Phase 3** — Control UI, /chart, Slack, streaming (done). **Phase 4 to come** — closeness **7.8/10 (78%)**; path to ~90%: Priority 1 (~2 days) WhatsApp + multi-session, Priority 2 (~1 week) global CLI + Docker sandbox, Priority 3 voice/iMessage/local skills; full backlog in **PIKO_PHASE4_TO_COME.md**. One-page view: **PIKO_OPENCLAW_ROADMAP.md**. Gap list and intent-order spec: **PIKO_OPENCLAW_GAP_AND_INTENT_ORDERS.md**; tools: **PIKO_OPENCLAW_TOOLS_INTEGRATION_PLAN.md**.
+
+---
+
 - **Proactive / heartbeat:** Optional cron + script (e.g. `webchat-piko/scripts/heartbeat.js`) to summarize history, suggest MEMORY updates, or send a Telegram nudge. See PIKO_MEMORY_HEARTBEAT_AND_GROWTH.md.
 - **RULES.md / GOALS.md:** Load more prompt files for safety and goals; same `loadSystemPrompt()` pattern.
 - **GET /api/pending-prompts:** If you add proactive messages, a simple endpoint could return them for the WebChat UI or other clients.
 - **PWA + tunnel:** Turn WebChat into an installable app and expose via HTTPS tunnel for mobile (MOBILE_AND_OTHER_APPS_OPTIONS.md).
-- **More tools:** Add more commands or tool-calling (e.g. web search, read_file) in the server and optionally in the prompt; see PIKO_TOOLS_AND_SKILLS.md for ideas.
+- **More tools:** Add more commands or tool-calling (e.g. web search, read_file) in the server and optionally in the prompt; see PIKO_OPENCLAW_TOOLS_INTEGRATION_PLAN.md and PIKO_OPENCLAW_GAP_AND_INTENT_ORDERS.md.
 
 ---
 
@@ -278,12 +346,17 @@ Current codebase does not expose a shared “core” package; integration is des
 
 | Aspect | Current state |
 |--------|----------------|
-| **Entry points** | WebChat (browser), Telegram bot |
-| **Backend** | Single WebChat server (Node), one API: POST /api/chat |
-| **LLM** | Ollama (Llama 3.1 8B); optional Grok for /task follow-up |
-| **/task, /cursor** | Optimus-only; Cursor Agent + CLI on Linux |
-| **Prompts** | webchat-piko/prompts/ (IDENTITY, SOUL, MEMORY, INTERESTS) |
+| **Entry points** | WebChat (browser), Telegram bot, Discord adapter, Slack adapter, WhatsApp adapter, BlueBubbles/iMessage adapter |
+| **Backend** | Single WebChat server (Node), one API: POST /api/chat; GET /api/health, /api/control, /api/intents, /api/chart, /api/metrics, /api/logs |
+| **LLM** | Ollama (Llama 3.1 8B); optional Grok for /task follow-up; per-session model override in sessions.json |
+| **/task, /cursor** | Optimus-only; Cursor Agent + CLI on Linux; optional Docker sandbox (PIKO_TASK_DOCKER); per-session sandbox in sessions.json |
+| **Prompts** | webchat-piko/prompts/ (IDENTITY, SOUL, MEMORY, INTERESTS); local skills/ (Phase 4) |
+| **Multi-session** | /profile work\|main; data/sessions.json (profile, model, toolsAllowed, sandbox); per-session tools restriction |
+| **Allowlist** | data/allowlist.json; /allow, /block (WebChat only); sessionId convention: source-id (e.g. discord-123) |
+| **Logging** | JSON lines to data/piko.log; GET /api/metrics (requests, errors, uptime); GET /api/logs?tail=N |
+| **CLI** | node scripts/piko-cli.js chat\|doctor\|intents (Phase 4); doctor includes local checks + cron suggestion |
+| **Showcase skills** | /notes add\|list, /todo add\|list\|done, /summarize &lt;url&gt; (see webchat-piko/skills/README.md) |
 | **Integration** | Any client → POST /api/chat with message (+ sessionId) → use reply |
-| **Deploy** | Optimus: piko-webchat.service + clawfriend-bot.service; see PHASE2_RUNBOOK.md, DEPLOY_TO_OPTIMUS.md |
+| **Deploy** | Optimus: piko-webchat.service + clawfriend-bot.service; QUICKSTART.md, RECOVERY.md; see PHASE2_RUNBOOK.md |
 
 Integrating Piko into another project is primarily **calling POST /api/chat**; for new channels, add a thin adapter that forwards messages to that endpoint and returns the reply.

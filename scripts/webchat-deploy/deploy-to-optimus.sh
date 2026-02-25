@@ -15,8 +15,11 @@ fi
 
 echo "Deploying webchat-piko to $OPTIMUS:$DEST"
 rsync -az --delete \
+  --exclude='.env' --exclude='.env.moltbook' --exclude='data/' --exclude='logs/' --exclude='node_modules/' \
   -e "ssh -i $SSH_KEY -o StrictHostKeyChecking=no" \
   webchat-piko/ "$OPTIMUS:$DEST/"
 
-echo "Done. On Optimus: cd $DEST && node server.js"
-echo "Or install systemd and restart: see scripts/webchat-deploy/PHASE2_RUNBOOK.md"
+ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no "$OPTIMUS" "mkdir -p $DEST/logs $DEST/data"
+echo "Done. On Optimus: cd $DEST && npm install && node server.js"
+echo "Moltbook cron: use ./scripts/run-moltbook-poster.sh (sources .env); ensure $DEST/.env has MOLTBOOK_API_KEY on Optimus."
+echo "Checklist: webchat-piko/docs/DEPLOYMENT_CHECKLIST.md  |  Runbook: scripts/webchat-deploy/PHASE2_RUNBOOK.md"

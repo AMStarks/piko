@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Piko — Accounts</title>
+  <style>
+    :root { --bg: #1a1b1e; --surface: #25262a; --border: #3d3f44; --text: #e4e4e7; --dim: #a1a1aa; --accent: #7c9cbf; --ok: #6b9b6b; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: system-ui, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding: 1rem; }
+    h1 { font-size: 1.25rem; margin: 0 0 1rem 0; }
+    a { color: var(--accent); }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; margin-bottom: 1rem; }
+    .card h2 { font-size: 0.9rem; margin: 0 0 0.5rem 0; color: var(--dim); }
+    .control-layout { display: flex; min-height: 100vh; }
+    .control-sidebar { width: 200px; flex-shrink: 0; background: var(--surface); border-right: 1px solid var(--border); padding: 1rem; }
+    .control-sidebar .nav-title { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--dim); margin-bottom: 0.5rem; }
+    .control-sidebar a { display: block; padding: 0.4rem 0.5rem; color: var(--dim); text-decoration: none; border-radius: 6px; font-size: 0.9rem; }
+    .control-sidebar a:hover { color: var(--text); background: rgba(255,255,255,0.05); }
+    .control-sidebar a.active { color: var(--accent); font-weight: 600; }
+    .control-main { flex: 1; padding: 1rem; overflow: auto; max-width: 900px; }
+    .account-item { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; padding: 0.5rem 0; border-bottom: 1px solid var(--border); }
+    .account-item:last-child { border-bottom: none; }
+    .account-email { color: var(--ok); font-weight: 500; }
+    .email-row { padding: 0.75rem 0; border-bottom: 1px solid var(--border); }
+    .email-row:last-child { border-bottom: none; }
+    .email-subject { font-weight: 500; margin-bottom: 0.25rem; }
+    .email-from { font-size: 0.85rem; color: var(--dim); margin-bottom: 0.2rem; }
+    .email-snippet { font-size: 0.85rem; color: var(--dim); line-height: 1.35; }
+    button { padding: 0.4rem 0.8rem; border-radius: 6px; border: 1px solid var(--accent); background: var(--accent); color: var(--bg); font-size: 0.9rem; cursor: pointer; }
+    button:hover { opacity: 0.9; }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+  </style>
+</head>
+<body>
+  <div class="control-layout">
+    <nav class="control-sidebar">
+      <div class="nav-title">Control</div>
+      <a href="/control">Dashboard</a>
+      <a href="/control-prompts">Prompts</a>
+      <a href="/control-learning">Learning</a>
+      <a href="/control-moltbook">Moltbook</a>
+      <a href="/control-mind">Mind</a>
+      <a href="/control-wisdom">Wisdom core</a>
+      <a href="/control-wisdom-metrics">Wisdom metrics</a>
+      <a href="/control-channels">Channels</a>
+      <a href="/control-integrations">Integrations</a>
+      <a href="/control-accounts" class="active">Accounts</a>
+    </nav>
+    <main class="control-main">
+      <a href="/control" style="display:inline-block;margin-bottom:0.5rem;font-size:0.9rem;">← Control</a>
+      <h1>Accounts</h1>
+      <p style="color:var(--dim);font-size:0.9rem;">Connected email accounts and unread messages.</p>
+      <div class="card">
+        <h2>Connected accounts</h2>
+        <div id="linked-accounts-wrap">
+          <p style="color:var(--dim);">Loading…</p>
+        </div>
+        <p style="margin-top:0.75rem;font-size:0.85rem;color:var(--dim);">Add or manage accounts in <a href="/control-integrations">Integrations</a>.</p>
+      </div>
+      <div class="card">
+        <h2>Unread emails</h2>
+        <div id="unread-wrap">
+          <p style="color:var(--dim);">Loading…</p>
+        </div>
+        <button type="button" id="refresh-btn" style="margin-top:0.75rem;">Refresh</button>
+      </div>
+    </main>
+  </div>
+  <script>
+    (async function loadAccounts() {
+      const linkedWrap = document.getElementById('linked-accounts-wrap');
+      const unreadWrap = document.getElementById('unread-wrap');
+      const refreshBtn = document.getElementById('refresh-btn');
+      function esc(s) { return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;'); }
+      async function fetchLinked() {
+        try {
+          const r = await fetch('/api/integrations/linked');
+          const d = await r.json();
+          const linked = d.linkedAccounts || {};
+          const configured = d.configured || {};
+          var html = '';
+          if (configured.gmail && linked.gmail && linked.gmail.email) {
+            html += '<div class="account-item"><span class="account-email">' + esc(linked.gmail.email) + '</span> <span style="color:var(--dim);font-size:0.85rem;">Gmail</span></div>';
+          } else if (configured.gmail) {
+            html += '<div class="account-item"><span style="color:var(--dim);">Gmail: no account linked</span></div>';
+          } else {
+            html += '<p style="color:var(--dim);">No Gmail configured. Set up OAuth in Integrations.</p>';
+          }
+          linkedWrap.innerHTML = html;
+        } catch (e) {
+          linkedWrap.innerHTML = '<p style="color:var(--dim);">Could not load: ' + esc(e.message) + '</p>';
+        }
+      }
+      async function fetchUnread() {
+        try {
+          refreshBtn.disabled = true;
+          const r = await fetch('/api/gmail/unread');
+          const d = await r.json();
+          if (d.ok && d.emails && d.emails.length > 0) {
+            unreadWrap.innerHTML = d.emails.map(function(e) {
+              return '<div class="email-row">' +
+                '<div class="email-subject">' + esc(e.subject || '(no subject)') + '</div>' +
+                '<div class="email-from">' + esc(e.from || '') + (e.date ? ' · ' + esc(e.date) : '') + '</div>' +
+                (e.snippet ? '<div class="email-snippet">' + esc(e.snippet) + '</div>' : '') +
+                '</div>';
+            }).join('');
+          } else if (d.error) {
+            unreadWrap.innerHTML = '<p style="color:var(--dim);">' + esc(d.error) + '</p>';
+          } else {
+            unreadWrap.innerHTML = '<p style="color:var(--dim);">No unread messages.</p>';
+          }
+        } catch (e) {
+          unreadWrap.innerHTML = '<p style="color:var(--dim);">Could not load: ' + esc(e.message) + '</p>';
+        } finally {
+          refreshBtn.disabled = false;
+        }
+      }
+      await fetchLinked();
+      await fetchUnread();
+      refreshBtn.addEventListener('click', function() { fetchLinked(); fetchUnread(); });
+    })();
+  </script>
+</body>
+</html>

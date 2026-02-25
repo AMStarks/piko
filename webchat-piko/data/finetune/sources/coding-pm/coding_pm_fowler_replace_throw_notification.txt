@@ -1,0 +1,21 @@
+# Source: Replacing Throwing Exceptions with Notification in Validations
+# Author: Martin Fowler
+# URL: https://martinfowler.com/articles/replaceThrowWithNotification.html
+# Accessed: Feb 2026
+# Attribution: Martin Fowler, fair use excerpt.
+
+Replacing Throwing Exceptions with Notification in Validations
+
+If you're validating some data, you usually shouldn't be using exceptions to signal validation failures. Use the Notification pattern instead.
+
+I have a couple of problems with using exceptions for validation. Firstly, exceptions signal something outside the expected bounds of behavior. But if you're running checks on outside input, you expect some messages to fail—and if a failure is expected behavior, then you shouldn't be using exceptions.
+
+The second problem: code that throws fails with the first error it detects. Usually it's better to report all errors with the incoming data, not just the first. That way a client can display all errors for the user to fix in a single interaction.
+
+My preferred approach is the Notification pattern. A notification is an object that collects errors; each validation failure adds an error to the notification. A validation method returns a notification, which you can then interrogate.
+
+When to use this refactoring: I'm not advocating getting rid of exceptions throughout your codebase. Exceptions are useful for handling exceptional behavior. Use this refactoring only when the outcome signaled by the exception isn't really exceptional.
+
+A useful rule of thumb from the Pragmatic Programmers: Exceptions should rarely be used as part of a program's normal flow. Exceptions should be reserved for unexpected events. Assume that an uncaught exception will terminate your program and ask yourself, "Will this code still run if I remove all the exception handlers?" If the answer is "no", then maybe exceptions are being used in nonexceptional circumstances.
+
+Context matters. Reading from a file that isn't there: if it's a well-known location like /etc/hosts, throwing is reasonable. If it's a path the user typed on the command-line, you should expect the file might not be there—use another mechanism.

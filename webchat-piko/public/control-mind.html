@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Piko — Mind</title>
+  <style>
+    :root { --bg: #1a1b1e; --surface: #25262a; --border: #3d3f44; --text: #e4e4e7; --dim: #a1a1aa; --accent: #7c9cbf; --ok: #6b9b6b; --warn: #c9a227; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: system-ui, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding: 1rem; }
+    h1 { font-size: 1.25rem; margin: 0 0 1rem 0; }
+    a { color: var(--accent); }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; margin-bottom: 1rem; }
+    .card h2 { font-size: 0.9rem; margin: 0 0 0.5rem 0; color: var(--dim); }
+    .control-layout { display: flex; min-height: 100vh; }
+    .control-sidebar { width: 200px; flex-shrink: 0; background: var(--surface); border-right: 1px solid var(--border); padding: 1rem; }
+    .control-sidebar .nav-title { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--dim); margin-bottom: 0.5rem; }
+    .control-sidebar a { display: block; padding: 0.4rem 0.5rem; color: var(--dim); text-decoration: none; border-radius: 6px; font-size: 0.9rem; }
+    .control-sidebar a:hover { color: var(--text); background: rgba(255,255,255,0.05); }
+    .control-sidebar a.active { color: var(--accent); font-weight: 600; }
+    .control-main { flex: 1; padding: 1rem; overflow: auto; max-width: 900px; }
+    label { display: block; margin-bottom: 0.25rem; color: var(--dim); font-size: 0.85rem; }
+    input[type="text"], textarea { width: 100%; padding: 0.5rem 0.75rem; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 0.9rem; font-family: inherit; margin-bottom: 0.75rem; }
+    textarea { min-height: 80px; resize: vertical; }
+    .list-edit { margin-bottom: 0.5rem; }
+    .list-edit textarea { min-height: 100px; font-size: 0.85rem; }
+    .list-edit .hint { font-size: 0.8rem; color: var(--dim); margin-top: -0.5rem; margin-bottom: 0.75rem; }
+    .btn { padding: 0.5rem 1rem; border-radius: 6px; border: 1px solid var(--accent); background: var(--accent); color: var(--bg); cursor: pointer; font-size: 0.9rem; }
+    .btn:hover { opacity: 0.9; }
+    .btn-secondary { background: transparent; color: var(--dim); border-color: var(--border); }
+    .btn-secondary:hover { color: var(--text); }
+    #error { color: #e07070; margin-bottom: 0.5rem; }
+    #status { color: var(--ok); font-size: 0.9rem; margin-left: 0.5rem; }
+    .beliefs-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+    .beliefs-table th, .beliefs-table td { text-align: left; padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+    .beliefs-table th { color: var(--dim); font-weight: 600; }
+    .beliefs-table .text-cell { max-width: 400px; }
+    .beliefs-table .actions button { padding: 0.25rem 0.5rem; border-radius: 4px; border: 1px solid var(--border); background: transparent; color: var(--dim); cursor: pointer; font-size: 0.8rem; margin-right: 0.25rem; }
+    .beliefs-table .actions button:hover { color: var(--text); }
+    .beliefs-table .actions button.delete:hover { color: #e07070; }
+    .loading { color: var(--dim); padding: 1rem; }
+  </style>
+</head>
+<body>
+  <div class="control-layout">
+    <nav class="control-sidebar">
+      <div class="nav-title">Control</div>
+      <a href="/control">Dashboard</a>
+      <a href="/control-prompts">Prompts</a>
+      <a href="/control-learning">Learning</a>
+      <a href="/control-moltbook">Moltbook</a>
+      <a href="/control-mind" class="active">Mind</a>
+      <a href="/control-wisdom">Wisdom core</a>
+      <a href="/control-wisdom-metrics">Wisdom metrics</a>
+      <a href="/control-channels">Channels</a>
+      <a href="/control-integrations">Integrations</a>
+      <a href="/control-accounts">Accounts</a>
+    </nav>
+    <main class="control-main">
+      <a href="/control" style="display:inline-block;margin-bottom:0.5rem;font-size:0.9rem;">← Control</a>
+      <h1>Piko's mind</h1>
+      <p style="color:var(--dim);font-size:0.9rem;margin:0 0 1rem 0;">Structured identity and values used by the mind-update pipeline. For the main worldview corpus (who Piko is, soul, memory, interests), edit <a href="/control-prompts">Prompts</a> (IDENTITY, SOUL, MEMORY, INTERESTS).</p>
+      <p id="error"></p>
+      <span id="status"></span>
+      <div id="loading" class="loading">Loading…</div>
+      <div id="form" style="display: none;">
+        <div class="card">
+          <h2>Primary human</h2>
+          <label for="primary-human">The person Piko is bound to (loyalty and relationship context)</label>
+          <input type="text" id="primary-human" placeholder="Your name" />
+        </div>
+        <div class="card">
+          <h2>Values (worldview)</h2>
+          <label>Core values that influence Piko's tone and decisions (one per line)</label>
+          <div class="list-edit">
+            <textarea id="values" placeholder="e.g. Epistemic humility&#10;User authority over decisions&#10;Long-term flourishing"></textarea>
+            <div class="hint">One value per line. These are included when Piko updates its mind from observations.</div>
+          </div>
+        </div>
+        <div class="card">
+          <h2>Constraints</h2>
+          <label>What Piko refuses to do (one per line)</label>
+          <div class="list-edit">
+            <textarea id="constraints" placeholder="e.g. Do not claim sentience&#10;Do not store requests that conflict with loyalty"></textarea>
+          </div>
+        </div>
+        <div class="card">
+          <h2>Beliefs</h2>
+          <p style="color:var(--dim);font-size:0.9rem;margin:0 0 0.75rem 0;">Stable or recent beliefs (often updated automatically from conversation; you can add or edit here).</p>
+          <table class="beliefs-table" id="beliefs-table">
+            <thead><tr><th>Id</th><th>Text</th><th>Confidence</th><th></th></tr></thead>
+            <tbody id="beliefs-tbody"></tbody>
+          </table>
+          <div style="margin-top:0.75rem;">
+            <button type="button" class="btn" id="add-belief">Add belief</button>
+          </div>
+        </div>
+        <div style="margin-top: 1rem;">
+          <button type="button" class="btn" id="save-mind">Save mind</button>
+        </div>
+      </div>
+    </main>
+  </div>
+  <script>
+    const el = (id) => document.getElementById(id);
+    let state = { primary_human: '', values: [], constraints: [], beliefs: [] };
+
+    function setError(msg) {
+      el('error').textContent = msg || '';
+    }
+    function setStatus(msg) {
+      el('status').textContent = msg || '';
+      if (msg) setTimeout(() => setStatus(''), 3000);
+    }
+
+    function render() {
+      el('primary-human').value = state.primary_human || '';
+      el('values').value = (state.values || []).join('\n');
+      el('constraints').value = (state.constraints || []).join('\n');
+      const tbody = el('beliefs-tbody');
+      tbody.innerHTML = '';
+      (state.beliefs || []).forEach((b, i) => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td style="width:60px;">${escapeHtml(b.id || '')}</td>
+          <td class="text-cell"><input type="text" data-index="${i}" data-field="text" value="${escapeHtml(b.text || '')}" style="width:100%;padding:0.35rem 0.5rem;border-radius:4px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:0.9rem;" /></td>
+          <td style="width:80px;"><input type="text" data-index="${i}" data-field="confidence" value="${escapeHtml(String(b.confidence != null ? b.confidence : ''))}" style="width:100%;padding:0.35rem 0.5rem;border-radius:4px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:0.9rem;" /></td>
+          <td class="actions"><button type="button" class="delete" data-index="${i}">Delete</button></td>
+        `;
+        tr.querySelector('input[data-field="text"]').addEventListener('change', (e) => { state.beliefs[i].text = e.target.value; });
+        tr.querySelector('input[data-field="confidence"]').addEventListener('change', (e) => { const v = parseFloat(e.target.value); state.beliefs[i].confidence = isNaN(v) ? 0.8 : v; });
+        tr.querySelector('button.delete').addEventListener('click', () => { state.beliefs.splice(i, 1); render(); });
+        tbody.appendChild(tr);
+      });
+    }
+    function escapeHtml(s) {
+      return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
+    function loadMind() {
+      setError('');
+      fetch('/api/mind')
+        .then((r) => r.ok ? r.json() : Promise.reject(new Error(r.statusText)))
+        .then((data) => {
+          state = {
+            primary_human: data.primary_human || '',
+            values: Array.isArray(data.values) ? data.values : [],
+            constraints: Array.isArray(data.constraints) ? data.constraints : [],
+            beliefs: Array.isArray(data.beliefs) ? data.beliefs.map((b) => ({ id: b.id, text: b.text, confidence: b.confidence })) : [],
+          };
+          el('loading').style.display = 'none';
+          el('form').style.display = 'block';
+          render();
+        })
+        .catch((e) => {
+          el('loading').style.display = 'none';
+          setError('Failed to load mind: ' + e.message);
+        });
+    }
+
+    function saveMind() {
+      const primary_human = el('primary-human').value.trim();
+      const values = el('values').value.split('\n').map((s) => s.trim()).filter(Boolean);
+      const constraints = el('constraints').value.split('\n').map((s) => s.trim()).filter(Boolean);
+      state.primary_human = primary_human;
+      state.values = values;
+      state.constraints = constraints;
+      state.beliefs = state.beliefs.map((b) => ({ id: b.id, text: b.text || '', confidence: b.confidence != null ? b.confidence : 0.8 }));
+
+      setError('');
+      fetch('/api/mind', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          primary_human: state.primary_human,
+          values: state.values,
+          constraints: state.constraints,
+          beliefs: state.beliefs,
+        }),
+      })
+        .then((r) => r.ok ? r.json() : Promise.reject(new Error(r.statusText)))
+        .then(() => setStatus('Saved.'))
+        .catch((e) => setError('Save failed: ' + e.message));
+    }
+
+    el('add-belief').addEventListener('click', () => {
+      const id = 'b' + String((state.beliefs.length + 1)).padStart(3, '0');
+      state.beliefs.push({ id, text: '', confidence: 0.8 });
+      render();
+    });
+    el('save-mind').addEventListener('click', saveMind);
+
+    loadMind();
+  </script>
+</body>
+</html>

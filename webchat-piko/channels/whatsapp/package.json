@@ -1,0 +1,8 @@
+{
+  "name": "piko-channels-whatsapp",
+  "version": "1.0.0",
+  "description": "WhatsApp channel for Piko — Baileys multi-device, forwards to POST /api/chat",
+  "main": "bot.js",
+  "scripts": { "start": "node bot.js" },
+  "dependencies": { "@whiskeysockets/baileys": "^6.7.9" }
+}

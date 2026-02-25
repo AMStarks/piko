@@ -1,0 +1,10 @@
+{
+  "milestones": [],
+  "quality_metrics": {
+    "advice_followed": 0,
+    "conversations_per_week": 0,
+    "tensions_resolved": 0,
+    "trust_score": null
+  },
+  "companion_since": null
+}

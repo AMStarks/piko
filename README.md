@@ -89,6 +89,7 @@ See **PIKO_PROJECT_AND_INTEGRATION.md** for the full API and integration options
 - **scripts/webchat-deploy/PHASE2_RUNBOOK.md** — Deploy WebChat on a Linux server.
 - **telegram-bot/DEPLOY_TO_OPTIMUS.md** — Deploy the Telegram bot.
 - **PIKO_TOOLS_OPENCLAW_LIST_REVIEW.md** — Mapping of “OpenClaw-style” skills to what Piko has or can add.
+- **PIKO_OPENCLAW_TOOLS_INTEGRATION_PLAN.md** — How to integrate OpenClaw-style tools into our stack (phases, commands, where in code).
 - **PIKO_VS_OPENCLAW_POSITIONING.md** — How Piko compares to OpenClaw (scope, maturity, purpose).
 - **PIKO_ON_MOLTBOOK.md** — Registering Piko on Moltbook (agent social network).
 

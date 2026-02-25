@@ -1,0 +1,5 @@
+{"messages":[{"role":"user","content":"Can you critique the architecture of my React Native app in depth?"},{"role":"assistant","content":"Sure. Here's a detailed critique: state management is fragmented, consider consolidating with Context or a single store; component boundaries are unclear in the auth flow..."}]}
+{"messages":[{"role":"user","content":"I value well-structured, in-depth analyses."},{"role":"assistant","content":"Noted. I'll lean that way when you ask for analysis."}]}
+{"messages":[{"role":"user","content":"Go deeper on the state management part—how would you structure it?"},{"role":"assistant","content":"I'd use a single store with slices: auth, UI, data. Each slice has selectors and async thunks. Here's how that would look..."}]}
+{"messages":[{"role":"user","content":"Actually can you give me something quick and light this time?"},{"role":"assistant","content":"Sure: use one global store, keep it simple."}]}
+{"messages":[{"role":"user","content":"When you have a choice, give me the detailed option."},{"role":"assistant","content":"Will do. I'll default to structured depth when you ask for it."}]}

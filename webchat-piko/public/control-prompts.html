@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Piko — Edit prompts</title>
+  <style>
+    :root { --bg: #1a1b1e; --surface: #25262a; --border: #3d3f44; --text: #e4e4e7; --dim: #a1a1aa; --accent: #7c9cbf; --ok: #6b9b6b; --warn: #c9a227; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: system-ui, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding: 1rem; }
+    h1 { font-size: 1.25rem; margin: 0 0 1rem 0; }
+    a { color: var(--accent); }
+    .back { display: inline-block; margin-bottom: 0.5rem; font-size: 0.9rem; }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; margin-bottom: 1rem; }
+    .card h2 { font-size: 0.9rem; margin: 0 0 0.5rem 0; color: var(--dim); }
+    .db-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+    .db-table th, .db-table td { text-align: left; padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--border); }
+    .db-table th { color: var(--dim); font-weight: 600; }
+    .db-table tr:hover td { background: rgba(255,255,255,0.03); }
+    .db-table .open-btn { background: transparent; border: none; color: var(--accent); cursor: pointer; font-size: 0.9rem; padding: 0; text-align: left; }
+    .db-table .open-btn:hover { text-decoration: underline; }
+    textarea { width: 100%; min-height: 200px; font-family: ui-monospace, monospace; font-size: 0.9rem; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 0.75rem; resize: vertical; }
+    .save-row { margin-top: 0.75rem; display: flex; align-items: center; gap: 0.75rem; }
+    .save-btn { background: var(--ok); color: var(--bg); border: none; padding: 0.5rem 1rem; border-radius: 6px; cursor: pointer; font-size: 0.9rem; }
+    .save-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+    #error { color: #e07070; margin-top: 0.5rem; }
+    #status { color: var(--dim); font-size: 0.9rem; }
+    .control-layout { display: flex; min-height: 100vh; }
+    .control-sidebar { width: 200px; flex-shrink: 0; background: var(--surface); border-right: 1px solid var(--border); padding: 1rem; }
+    .control-sidebar .nav-title { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--dim); margin-bottom: 0.5rem; }
+    .control-sidebar a { display: block; padding: 0.4rem 0.5rem; color: var(--dim); text-decoration: none; border-radius: 6px; font-size: 0.9rem; }
+    .control-sidebar a:hover { color: var(--text); background: rgba(255,255,255,0.05); }
+    .control-sidebar a.active { color: var(--accent); font-weight: 600; }
+    .control-main { flex: 1; padding: 1rem; overflow: auto; max-width: 1200px; }
+    .global-search-wrap { margin-bottom: 1rem; position: relative; }
+    .global-search-wrap input { width: 100%; max-width: 360px; padding: 0.5rem 0.75rem; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); color: var(--text); font-size: 0.9rem; }
+    .global-search-results { position: absolute; left: 0; right: 0; max-width: 480px; max-height: 320px; overflow-y: auto; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; margin-top: 2px; z-index: 50; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
+    .global-search-results section { padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--border); }
+    .global-search-results .section-title { font-size: 0.75rem; color: var(--dim); text-transform: uppercase; margin-bottom: 0.25rem; }
+    .global-search-results a, .global-search-results .item { display: block; padding: 0.25rem 0; font-size: 0.85rem; color: var(--text); text-decoration: none; }
+    @media (max-width: 640px) { .control-sidebar { width: auto; border-right: none; border-bottom: 1px solid var(--border); display: flex; flex-wrap: wrap; gap: 0.25rem; } .control-sidebar .nav-title { width: 100%; } }
+  </style>
+</head>
+<body>
+  <div class="control-layout">
+    <nav class="control-sidebar">
+      <div class="nav-title">Control</div>
+      <a href="/control">Dashboard</a>
+      <a href="/control-prompts" class="active">Prompts</a>
+      <a href="/control-learning">Learning</a>
+      <a href="/control-moltbook">Moltbook</a>
+      <a href="/control-mind">Mind</a>
+      <a href="/control-wisdom">Wisdom core</a>
+      <a href="/control-wisdom-metrics">Wisdom metrics</a>
+      <a href="/control-channels">Channels</a>
+      <a href="/control-integrations">Integrations</a>
+      <a href="/control-accounts">Accounts</a>
+    </nav>
+    <main class="control-main">
+  <div class="global-search-wrap"><input type="text" id="global-search-input" placeholder="🔍 Search learning, prompts, posts…" autocomplete="off" /><div id="global-search-results" class="global-search-results" style="display: none;"></div></div>
+  <a class="back" href="/control">← Control</a>
+  <h1>Edit prompts & config</h1>
+  <p id="error"></p>
+  <div class="card">
+    <h2>Choose a file</h2>
+    <table class="db-table" id="list-table">
+      <thead><tr><th>File</th><th>Description</th><th>Action</th></tr></thead>
+      <tbody id="list"></tbody>
+    </table>
+  </div>
+  <div class="card" id="editor-card" style="display: none;">
+    <h2 id="editor-title">—</h2>
+    <p id="editor-desc" class="desc"></p>
+    <textarea id="editor" spellcheck="false"></textarea>
+    <div class="save-row">
+      <button type="button" class="save-btn" id="save-btn">Save</button>
+      <span id="status"></span>
+    </div>
+  </div>
+  <script>
+    const el = (id) => document.getElementById(id);
+    let currentId = null;
+
+    async function loadList() {
+      try {
+        const r = await fetch('/api/control/prompts');
+        if (!r.ok) throw new Error(r.statusText);
+        const d = await r.json();
+        const prompts = d.prompts || [];
+        el('list').innerHTML = prompts.map((p) =>
+          `<tr><td>${p.file}</td><td style="color:var(--dim);font-size:0.85rem">${(p.description || '').replace(/</g,'&lt;')}</td><td><button type="button" class="open-btn" data-id="${p.id}">Open</button></td></tr>`
+        ).join('');
+        el('list').querySelectorAll('.open-btn').forEach((btn) => {
+          btn.addEventListener('click', () => openPrompt(btn.dataset.id));
+        });
+      } catch (e) {
+        el('error').textContent = 'Failed to load list: ' + e.message;
+      }
+    }
+
+    async function openPrompt(id) {
+      currentId = id;
+      el('error').textContent = '';
+      el('status').textContent = '';
+      try {
+        const r = await fetch('/api/control/prompts/' + id);
+        if (!r.ok) throw new Error(r.statusText);
+        const d = await r.json();
+        el('editor-title').textContent = d.file || id;
+        el('editor-desc').textContent = d.description || '';
+        el('editor').value = d.content != null ? d.content : '';
+        el('editor-card').style.display = 'block';
+      } catch (e) {
+        el('error').textContent = 'Failed to load: ' + e.message;
+      }
+    }
+
+    async function save() {
+      if (!currentId) return;
+      const btn = el('save-btn');
+      btn.disabled = true;
+      el('status').textContent = 'Saving…';
+      el('error').textContent = '';
+      try {
+        const r = await fetch('/api/control/prompts/' + currentId, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: el('editor').value }),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.error || r.statusText);
+        el('status').textContent = 'Saved.';
+        setTimeout(() => { el('status').textContent = ''; }, 2000);
+      } catch (e) {
+        el('error').textContent = 'Save failed: ' + e.message;
+      }
+      btn.disabled = false;
+    }
+
+    el('save-btn').addEventListener('click', save);
+    loadList();
+  </script>
+  <script>
+    (function initGlobalSearch() {
+      const input = document.getElementById('global-search-input');
+      const resultsEl = document.getElementById('global-search-results');
+      let debounceTimer;
+      function esc(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;'); }
+      function showResults(data) {
+        var parts = [];
+        if (data.learning && data.learning.length) { parts.push('<section><div class="section-title">Learning (' + data.learning.length + ')</div>' + data.learning.slice(0, 5).map(function(x) { return '<a href="/control-learning">' + esc(x.text) + (x.label ? ' (' + x.label + ')' : '') + '</a>'; }).join('') + '</section>'); }
+        if (data.moltbook && data.moltbook.length) { parts.push('<section><div class="section-title">Moltbook (' + data.moltbook.length + ')</div>' + data.moltbook.slice(0, 5).map(function(x) { return '<a href="' + (x.url || '#') + '" target="_blank" rel="noopener">' + esc(x.text) + (x.date ? ' (' + new Date(x.date).toLocaleDateString() + ')' : '') + '</a>'; }).join('') + '</section>'); }
+        if (data.journal && data.journal.length) { parts.push('<section><div class="section-title">Journal (' + data.journal.length + ')</div>' + data.journal.slice(0, 5).map(function(x) { return '<span class="item">' + esc(x.text) + '</span>'; }).join('') + '</section>'); }
+        if (parts.length === 0) { resultsEl.innerHTML = '<section><span class="item" style="color:var(--dim)">No results</span></section>'; } else { resultsEl.innerHTML = parts.join(''); }
+        resultsEl.style.display = 'block';
+      }
+      function doSearch() {
+        var q = (input && input.value || '').trim();
+        if (q.length < 2) { resultsEl.style.display = 'none'; return; }
+        fetch('/api/control/search?q=' + encodeURIComponent(q)).then(function(r) { return r.json(); }).then(showResults).catch(function() { resultsEl.innerHTML = '<section><span class="item" style="color:var(--dim)">Search failed</span></section>'; resultsEl.style.display = 'block'; });
+      }
+      if (input) { input.addEventListener('input', function() { clearTimeout(debounceTimer); debounceTimer = setTimeout(doSearch, 300); }); input.addEventListener('keydown', function(e) { if (e.key === 'Enter') { clearTimeout(debounceTimer); doSearch(); } }); }
+      document.addEventListener('click', function(e) { if (resultsEl && input && !resultsEl.contains(e.target) && e.target !== input) resultsEl.style.display = 'none'; });
+    })();
+  </script>
+    </main>
+  </div>
+</body>
+</html>

@@ -52,7 +52,7 @@ else
   cd "$ROOT"
 fi
 
-echo "[5/5] Creating Ollama model..."
+echo "[5/5] Placing into Ollama container and creating model..."
 MODELFILE="$OUTPUTS/Modelfile"
 cat > "$MODELFILE" << 'MODELFILE'
 FROM ./piko-Q4_K_M.gguf
@@ -68,7 +68,10 @@ PARAMETER temperature 0.7
 PARAMETER num_ctx 4096
 MODELFILE
 
-cd "$OUTPUTS"
-ollama create piko:finetune -f Modelfile
+OLLAMA_CONTAINER="${OLLAMA_CONTAINER:-ollama}"
+docker start "$OLLAMA_CONTAINER" 2>/dev/null || true
+sleep 2
+docker cp "$OUTPUTS" "$OLLAMA_CONTAINER:/tmp/piko-outputs"
+docker exec -w /tmp/piko-outputs "$OLLAMA_CONTAINER" ollama create piko:finetune -f Modelfile
 
-echo "[done] Model piko:finetune is ready. Run: ollama run piko:finetune"
+echo "[done] Model piko:finetune is ready. Run: docker exec $OLLAMA_CONTAINER ollama run piko:finetune"

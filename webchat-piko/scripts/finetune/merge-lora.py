@@ -19,27 +19,20 @@ def main():
         print(f"[merge-lora] Adapter not found: {ADAPTER_DIR}")
         return 1
 
-    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+    from transformers import AutoModelForCausalLM, AutoTokenizer
     from peft import PeftModel
     import torch
 
-    # 4-bit to minimize VRAM (7B ~3.5GB); cap per-GPU to force balanced split + CPU offload
-    max_memory = {0: "6GiB", 1: "6GiB", "cpu": "24GiB"}
-    bnb = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_compute_dtype=torch.float16,
-        bnb_4bit_quant_type="nf4",
-    )
-    print("[merge-lora] Loading base model (4-bit)...")
+    # Load base in fp16 on CPU to produce fp16 merged output (llama.cpp GGUF converter
+    # does not support bitsandbytes). 7B fp16 ~14GB RAM; needs 32GB+ system RAM.
+    print("[merge-lora] Loading base model (fp16 on CPU)...")
     tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL, trust_remote_code=True)
     model = AutoModelForCausalLM.from_pretrained(
         BASE_MODEL,
-        quantization_config=bnb,
-        device_map="balanced",
-        max_memory=max_memory,
-        trust_remote_code=True,
         torch_dtype=torch.float16,
+        device_map="cpu",
         low_cpu_mem_usage=True,
+        trust_remote_code=True,
     )
 
     print("[merge-lora] Loading LoRA adapter...")
@@ -49,7 +42,7 @@ def main():
     model = model.merge_and_unload()
 
     MERGED_DIR.mkdir(parents=True, exist_ok=True)
-    print(f"[merge-lora] Saving merged model to {MERGED_DIR}...")
+    print(f"[merge-lora] Saving merged model (fp16) to {MERGED_DIR}...")
     model.save_pretrained(str(MERGED_DIR), safe_serialization=True)
     tokenizer.save_pretrained(str(MERGED_DIR))
 

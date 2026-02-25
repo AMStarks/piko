@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Piko — Moltbook posts</title>
+  <style>
+    :root { --bg: #1a1b1e; --surface: #25262a; --border: #3d3f44; --text: #e4e4e7; --dim: #a1a1aa; --accent: #7c9cbf; --warn: #c9a227; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: system-ui, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding: 1rem; }
+    h1 { font-size: 1.25rem; margin: 0 0 0.5rem 0; }
+    a { color: var(--accent); }
+    .back { display: inline-block; margin-bottom: 1rem; font-size: 0.9rem; }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; margin-bottom: 1rem; }
+    .card h2 { font-size: 0.9rem; margin: 0 0 0.75rem 0; color: var(--dim); }
+    .posts-count { font-size: 0.85rem; color: var(--dim); margin: 0 0 0.5rem 0; }
+    .posts-hint { font-size: 0.8rem; color: var(--dim); margin: 0 0 0.5rem 0; }
+    .posts-hint code { background: var(--surface); padding: 0.1rem 0.3rem; border-radius: 4px; }
+    .db-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+    .db-table th, .db-table td { text-align: left; padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--border); }
+    .db-table th { color: var(--dim); font-weight: 600; }
+    .db-table tr:hover td { background: rgba(255,255,255,0.03); }
+    .db-table .date { color: var(--dim); font-size: 0.85rem; }
+    .prune-btn { background: var(--surface); border: 1px solid var(--border); color: var(--warn); padding: 0.5rem 1rem; border-radius: 6px; cursor: pointer; font-size: 0.9rem; margin-top: 0.75rem; }
+    .prune-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    #error { color: #e07070; margin-top: 0.5rem; }
+    #empty { color: var(--dim); padding: 1rem 0; }
+    .control-layout { display: flex; min-height: 100vh; }
+    .control-sidebar { width: 200px; flex-shrink: 0; background: var(--surface); border-right: 1px solid var(--border); padding: 1rem; }
+    .control-sidebar .nav-title { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--dim); margin-bottom: 0.5rem; }
+    .control-sidebar a { display: block; padding: 0.4rem 0.5rem; color: var(--dim); text-decoration: none; border-radius: 6px; font-size: 0.9rem; }
+    .control-sidebar a:hover { color: var(--text); background: rgba(255,255,255,0.05); }
+    .control-sidebar a.active { color: var(--accent); font-weight: 600; }
+    .control-main { flex: 1; padding: 1rem; overflow: auto; max-width: 1200px; }
+    .global-search-wrap { margin-bottom: 1rem; position: relative; }
+    .global-search-wrap input { width: 100%; max-width: 360px; padding: 0.5rem 0.75rem; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); color: var(--text); font-size: 0.9rem; }
+    .global-search-results { position: absolute; left: 0; right: 0; max-width: 480px; max-height: 320px; overflow-y: auto; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; margin-top: 2px; z-index: 50; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
+    .global-search-results section { padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--border); }
+    .global-search-results .section-title { font-size: 0.75rem; color: var(--dim); text-transform: uppercase; margin-bottom: 0.25rem; }
+    .global-search-results a, .global-search-results .item { display: block; padding: 0.25rem 0; font-size: 0.85rem; color: var(--text); text-decoration: none; }
+    @media (max-width: 640px) { .control-sidebar { width: auto; border-right: none; border-bottom: 1px solid var(--border); display: flex; flex-wrap: wrap; gap: 0.25rem; } .control-sidebar .nav-title { width: 100%; } }
+  </style>
+</head>
+<body>
+  <div class="control-layout">
+    <nav class="control-sidebar">
+      <div class="nav-title">Control</div>
+      <a href="/control">Dashboard</a>
+      <a href="/control-prompts">Prompts</a>
+      <a href="/control-learning">Learning</a>
+      <a href="/control-moltbook" class="active">Moltbook</a>
+      <a href="/control-mind">Mind</a>
+      <a href="/control-wisdom">Wisdom core</a>
+      <a href="/control-wisdom-metrics">Wisdom metrics</a>
+      <a href="/control-channels">Channels</a>
+      <a href="/control-integrations">Integrations</a>
+      <a href="/control-accounts">Accounts</a>
+    </nav>
+    <main class="control-main">
+  <div class="global-search-wrap"><input type="text" id="global-search-input" placeholder="🔍 Search learning, prompts, posts…" autocomplete="off" /><div id="global-search-results" class="global-search-results" style="display: none;"></div></div>
+  <a class="back" href="/control">← Control</a>
+  <h1>Moltbook posts</h1>
+  <p id="error"></p>
+  <div id="content"></div>
+  <script>
+    const el = (id) => document.getElementById(id);
+    function esc(s) {
+      return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+    }
+    async function render() {
+      try {
+        const r = await fetch('/api/control');
+        if (!r.ok) throw new Error(r.statusText);
+        const d = await r.json();
+        el('error').textContent = '';
+        const m = d.moltbook || {};
+        const posts = m.posts || [];
+        const profile = m.profile;
+        let html = '<div class="card"><h2>Profile</h2>';
+        if (profile) {
+          html += `<p><strong>${esc(profile.name)}</strong> · Karma: ${profile.karma != null ? profile.karma : '—'} · Followers: ${profile.follower_count != null ? profile.follower_count : '—'}</p>`;
+        }
+        html += `<p><a href="${m.lastPostUrl || '#'}" target="_blank" rel="noopener">Last post</a> · Next eligible: ${m.nextPostEligibleAt ? new Date(m.nextPostEligibleAt).toLocaleString() : '—'}</p></div>`;
+        html += '<div class="card"><h2>All posts</h2>';
+        if (posts.length === 0) {
+          html += '<p id="empty">No posts in list. The Moltbook API may not be returning them here.</p></div>';
+        } else {
+          const fromLocal = (m.postsFromLocal != null && m.postsFromLocal > 0);
+          html += `<p class="posts-count">Showing ${posts.length} post${posts.length === 1 ? '' : 's'}${fromLocal ? ' (including ' + m.postsFromLocal + ' from local history)' : ''}</p>`;
+          if (!fromLocal && posts.length <= 1) html += '<p class="posts-hint">Only the API list is available here. To see more posts, ensure <code>data/moltbook-state.json</code> exists (run the Moltbook poster on this server).</p>';
+          html += `<table class="db-table" aria-label="Moltbook posts"><thead><tr><th>Select</th><th>Title</th><th>Date</th></tr></thead><tbody>${posts.map(p => {
+            const t = esc((p.title || 'Post').replace(/\*\*/g,''));
+            const dateStr = p.createdAt ? new Date(p.createdAt).toLocaleString() : '';
+            return `<tr><td><input type="checkbox" class="moltbook-prune-cb" value="${esc(p.id)}" aria-label="Select to prune" /></td><td><a href="${esc(p.url)}" target="_blank" rel="noopener">${t}</a></td><td class="date">${dateStr}</td></tr>`;
+          }).join('')}</tbody></table>`;
+          html += '<button type="button" class="prune-btn" id="prune-btn">Prune selected</button></div>';
+        }
+        el('content').innerHTML = html;
+        const pruneBtn = el('content').querySelector('.prune-btn');
+        const updatePruneLabel = () => {
+          if (!pruneBtn) return;
+          const n = (el('content').querySelectorAll('.moltbook-prune-cb:checked') || []).length;
+          pruneBtn.textContent = n > 0 ? `Delete ${n} post(s) from Moltbook` : 'Prune selected';
+          pruneBtn.disabled = n === 0;
+        };
+        el('content').querySelectorAll('.moltbook-prune-cb').forEach((cb) => cb.addEventListener('change', updatePruneLabel));
+        updatePruneLabel();
+        if (pruneBtn) {
+          pruneBtn.addEventListener('click', async () => {
+            const checked = Array.from(el('content').querySelectorAll('.moltbook-prune-cb:checked')).map(cb => cb.value).filter(Boolean);
+            if (checked.length === 0) return;
+            if (!confirm(`Delete ${checked.length} post(s) from Moltbook? This cannot be undone.`)) return;
+            pruneBtn.disabled = true;
+            try {
+              const pr = await fetch('/api/control/moltbook-prune', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ postIds: checked }) });
+              const result = await pr.json();
+              if (result.pruned) el('error').textContent = `Pruned ${result.pruned} post(s).` + (result.failed ? ` ${result.failed} failed.` : '');
+              if (result.failed && !result.pruned) el('error').textContent = 'Prune failed.';
+              await render();
+            } catch (e) {
+              el('error').textContent = 'Prune request failed: ' + e.message;
+            }
+            pruneBtn.disabled = false;
+          });
+        }
+      } catch (e) {
+        el('error').textContent = 'Failed to load: ' + e.message;
+      }
+    }
+    render();
+  </script>
+  <script>
+    (function initGlobalSearch() {
+      var input = document.getElementById('global-search-input');
+      var resultsEl = document.getElementById('global-search-results');
+      var debounceTimer;
+      function esc(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;'); }
+      function showResults(data) {
+        var parts = [];
+        if (data.learning && data.learning.length) parts.push('<section><div class="section-title">Learning (' + data.learning.length + ')</div>' + data.learning.slice(0, 5).map(function(x) { return '<a href="/control-learning">' + esc(x.text) + (x.label ? ' (' + x.label + ')' : '') + '</a>'; }).join('') + '</section>');
+        if (data.moltbook && data.moltbook.length) parts.push('<section><div class="section-title">Moltbook (' + data.moltbook.length + ')</div>' + data.moltbook.slice(0, 5).map(function(x) { return '<a href="' + (x.url || '#') + '" target="_blank" rel="noopener">' + esc(x.text) + (x.date ? ' (' + new Date(x.date).toLocaleDateString() + ')' : '') + '</a>'; }).join('') + '</section>');
+        if (data.journal && data.journal.length) parts.push('<section><div class="section-title">Journal (' + data.journal.length + ')</div>' + data.journal.slice(0, 5).map(function(x) { return '<span class="item">' + esc(x.text) + '</span>'; }).join('') + '</section>');
+        if (parts.length === 0) resultsEl.innerHTML = '<section><span class="item" style="color:var(--dim)">No results</span></section>'; else resultsEl.innerHTML = parts.join('');
+        resultsEl.style.display = 'block';
+      }
+      function doSearch() {
+        var q = (input && input.value || '').trim();
+        if (q.length < 2) { resultsEl.style.display = 'none'; return; }
+        fetch('/api/control/search?q=' + encodeURIComponent(q)).then(function(r) { return r.json(); }).then(showResults).catch(function() { resultsEl.innerHTML = '<section><span class="item" style="color:var(--dim)">Search failed</span></section>'; resultsEl.style.display = 'block'; });
+      }
+      if (input) { input.addEventListener('input', function() { clearTimeout(debounceTimer); debounceTimer = setTimeout(doSearch, 300); }); input.addEventListener('keydown', function(e) { if (e.key === 'Enter') { clearTimeout(debounceTimer); doSearch(); } }); }
+      document.addEventListener('click', function(e) { if (resultsEl && input && !resultsEl.contains(e.target) && e.target !== input) resultsEl.style.display = 'none'; });
+    })();
+  </script>
+    </main>
+  </div>
+</body>
+</html>

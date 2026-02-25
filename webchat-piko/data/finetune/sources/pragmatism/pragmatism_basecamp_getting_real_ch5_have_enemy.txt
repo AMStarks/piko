@@ -1,0 +1,19 @@
+# Source: Getting Real – Chapter: Have an Enemy
+# Authors: Jason Fried, David Heinemeier Hansson, 37signals
+# URL: https://basecamp.com/gettingreal/02.5-have-an-enemy
+# Accessed: Feb 2026
+# Attribution: Basecamp/37signals, fair use excerpt.
+
+Have an Enemy
+
+Sometimes the best way to know what your app should be is to know what it shouldn't be. Figure out your app's enemy and you'll shine a light on where you need to go. When we created Basecamp, we knew Microsoft Project was the gorilla. We used it as a motivator: Basecamp would be the anti-Project.
+
+We realized project management isn't about charts, graphs, reports—it's about communication. It isn't about a manager broadcasting a plan; it's about everyone taking responsibility. Our enemy was the Project Management Dictators. We wanted to democratize it. Projects turn out better when everyone takes collective ownership.
+
+When we built Writeboard, competitors had lots of whizbang features. We emphasized "no fuss"—share and collaborate simply, without non-essential features. If it wasn't essential, we left it out. Three months after launch, over 100,000 Writeboards had been created.
+
+One bonus: a clear marketing message. People are stoked by conflict. They understand a product by comparing it to others. With a chosen enemy, you're feeding people a story they want to hear. They'll take sides—a sure-fire way to get attention. Don't get too obsessed with the competition. Overanalyze and you'll limit the way you think. Take a look, then move on to your own vision.
+
+Don't follow the leader. Marketers are trained to follow the leader—outdo the competition on price or speed. The problem: once a consumer has bought someone else's story, persuading them to switch is persuading them to admit they were wrong. People hate that. Instead, tell a different story. If your competition is faster, you must be cheaper. If they sell health, you sell convenience. A real story completely different from the one already being told. —Seth Godin
+
+Stay focused on the big picture: What is the key problem we are trying to solve, and how can we solve it?

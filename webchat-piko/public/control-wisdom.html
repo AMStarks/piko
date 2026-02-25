@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Piko — Wisdom core</title>
+  <style>
+    :root { --bg: #1a1b1e; --surface: #25262a; --border: #3d3f44; --text: #e4e4e7; --dim: #a1a1aa; --accent: #7c9cbf; --ok: #6b9b6b; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: system-ui, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding: 1rem; }
+    h1 { font-size: 1.25rem; margin: 0 0 1rem 0; }
+    a { color: var(--accent); }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; margin-bottom: 1rem; }
+    .card h2 { font-size: 0.9rem; margin: 0 0 0.5rem 0; color: var(--dim); }
+    .control-layout { display: flex; min-height: 100vh; }
+    .control-sidebar { width: 200px; flex-shrink: 0; background: var(--surface); border-right: 1px solid var(--border); padding: 1rem; }
+    .control-sidebar .nav-title { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--dim); margin-bottom: 0.5rem; }
+    .control-sidebar a { display: block; padding: 0.4rem 0.5rem; color: var(--dim); text-decoration: none; border-radius: 6px; font-size: 0.9rem; }
+    .control-sidebar a:hover { color: var(--text); background: rgba(255,255,255,0.05); }
+    .control-sidebar a.active { color: var(--accent); font-weight: 600; }
+    .control-main { flex: 1; padding: 1rem; overflow: auto; max-width: 900px; }
+    .btn { padding: 0.5rem 1rem; border-radius: 6px; border: 1px solid var(--accent); background: var(--accent); color: var(--bg); cursor: pointer; font-size: 0.9rem; }
+    .btn:hover { opacity: 0.9; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    #error { color: #e07070; margin-bottom: 0.5rem; }
+    #status { color: var(--ok); font-size: 0.9rem; }
+    pre { white-space: pre-wrap; font-size: 0.85rem; color: var(--dim); margin: 0.5rem 0; }
+    ul { margin: 0.25rem 0; padding-left: 1.25rem; }
+  </style>
+</head>
+<body>
+  <div class="control-layout">
+    <nav class="control-sidebar">
+      <div class="nav-title">Control</div>
+      <a href="/control">Dashboard</a>
+      <a href="/control-prompts">Prompts</a>
+      <a href="/control-learning">Learning</a>
+      <a href="/control-moltbook">Moltbook</a>
+      <a href="/control-mind">Mind</a>
+      <a href="/control-wisdom" class="active">Wisdom core</a>
+      <a href="/control-wisdom-metrics">Wisdom metrics</a>
+      <a href="/control-channels">Channels</a>
+      <a href="/control-integrations">Integrations</a>
+      <a href="/control-accounts">Accounts</a>
+    </nav>
+    <main class="control-main">
+      <a href="/control" style="display:inline-block;margin-bottom:0.5rem;font-size:0.9rem;">← Control</a>
+      <h1>Wisdom core (corpus)</h1>
+      <p style="color:var(--dim);font-size:0.9rem;">Fixed corpus of inalienable truths. Summary is regenerated only when you save a doc or click below (Option C — corpus stays static).</p>
+      <p id="error"></p>
+      <span id="status"></span>
+      <div id="loading" style="color:var(--dim);padding:0.5rem 0;">Loading…</div>
+      <div id="content" style="display:none;">
+        <div class="card">
+          <h2>Fixed corpus (4 docs)</h2>
+          <ul id="doc-list"></ul>
+          <p id="last-summarized" style="font-size:0.85rem;color:var(--dim);margin:0.5rem 0;"></p>
+          <button type="button" class="btn" id="regenerate-summary">Regenerate summary</button>
+        </div>
+        <div class="card">
+          <h2>Core truths (from index)</h2>
+          <ul id="core-truths"></ul>
+        </div>
+        <div class="card" id="summary-card" style="display:none;">
+          <h2>Cached summary (used in chat)</h2>
+          <pre id="summary-text"></pre>
+        </div>
+        <div class="card">
+          <h2>Daily truth engine</h2>
+          <p id="truth-stats" style="font-size:0.9rem;margin:0.5rem 0;"></p>
+          <button type="button" class="btn" id="run-nightly">Run nightly now</button>
+        </div>
+      </div>
+    </main>
+  </div>
+  <script>
+    const el = (id) => document.getElementById(id);
+    function setError(msg) { el('error').textContent = msg || ''; }
+    function setStatus(msg) {
+      el('status').textContent = msg || '';
+      if (msg) setTimeout(() => el('status').textContent = '', 4000);
+    }
+
+    function render(data) {
+      const { index, documents } = data;
+      el('doc-list').innerHTML = Object.keys(documents || {}).map((name) =>
+        `<li>${name}</li>`
+      ).join('');
+      el('last-summarized').textContent = index.last_summarized
+        ? `Last summarized: ${index.last_summarized}`
+        : 'No summary yet. Click "Regenerate summary" to build one (used in chat).';
+      el('core-truths').innerHTML = (index.core_truths || []).map((t) => `<li>${escapeHtml(t)}</li>`).join('');
+      if (index.summary) {
+        el('summary-card').style.display = 'block';
+        el('summary-text').textContent = index.summary;
+      } else {
+        el('summary-card').style.display = 'none';
+      }
+    }
+    function escapeHtml(s) {
+      return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    function loadTruthStats() {
+      return fetch('/api/wisdom/truth-stats').then((r) => r.ok ? r.json() : {}).then((s) => {
+        const t = el('truth-stats');
+        if (!s.claims_count && !s.corrections_count && !s.wisdom_count) {
+          t.textContent = 'No claims, corrections, or wisdom yet. Corrections are logged when the user says "Actually X" or "That\'s wrong" in chat. Run nightly to distill wisdom.';
+          return;
+        }
+        t.textContent = `${s.claims_count || 0} claims, ${s.corrections_count || 0} corrections, ${s.wisdom_count || 0} wisdom statements. Last distilled: ${s.last_distilled || 'never'}.`;
+      }).catch(() => {});
+    }
+
+    fetch('/api/corpus')
+      .then((r) => r.ok ? r.json() : Promise.reject(new Error(r.statusText)))
+      .then((data) => {
+        el('loading').style.display = 'none';
+        el('content').style.display = 'block';
+        render(data);
+        loadTruthStats();
+      })
+      .catch((e) => {
+        el('loading').textContent = 'Failed: ' + e.message;
+        setError(e.message);
+      });
+
+    el('run-nightly').addEventListener('click', () => {
+      el('run-nightly').disabled = true;
+      setError('');
+      fetch('/api/wisdom/run-nightly', { method: 'POST' })
+        .then((r) => r.json())
+        .then((result) => {
+          if (result.ok) {
+            setStatus('Nightly wisdom run complete. ' + (result.newWisdom && result.newWisdom.length ? result.newWisdom.length + ' new.' : ''));
+            loadTruthStats();
+          } else throw new Error(result.error || 'Failed');
+        })
+        .catch((e) => setError(e.message))
+        .finally(() => { el('run-nightly').disabled = false; });
+    });
+
+    el('regenerate-summary').addEventListener('click', () => {
+      el('regenerate-summary').disabled = true;
+      setError('');
+      fetch('/api/corpus/regenerate-summary', { method: 'POST' })
+        .then((r) => r.json())
+        .then((result) => {
+          if (result.ok) {
+            setStatus('Summary regenerated.');
+            return fetch('/api/corpus');
+          }
+          throw new Error(result.error || 'Failed');
+        })
+        .then((r) => r.json())
+        .then(render)
+        .catch((e) => setError(e.message))
+        .finally(() => { el('regenerate-summary').disabled = false; });
+    });
+  </script>
+</body>
+</html>

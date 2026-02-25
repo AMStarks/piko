@@ -1,0 +1,15 @@
+# Source: Getting Real – Chapter: Fund Yourself
+# Authors: Jason Fried, David Heinemeier Hansson, 37signals
+# URL: https://basecamp.com/gettingreal/02.3-fund-yourself
+# Accessed: Feb 2026
+# Attribution: Basecamp/37signals, fair use excerpt.
+
+Fund Yourself
+
+Outside money is plan B. The first priority of many startups is acquiring funding from investors. But if you turn to outsiders for funding, you'll have to answer to them too. Expectations are raised. Investors want their money back—and quickly. Cashing in often begins to trump building a quality product.
+
+These days it doesn't take much to get rolling. Hardware is cheap and plenty of great infrastructure software is open source and free. Passion doesn't come with a price tag. Do what you can with the cash on hand. Think hard: What's really essential? What can you do with three people instead of ten? What can you do with $20k instead of $100k? What can you do in three months instead of six? What if you keep your day job and build your app on the side?
+
+Constraints force creativity. Run on limited resources and you'll be forced to reckon with constraints earlier and more intensely. Constraints drive innovation. They also force you to get your idea out in the wild sooner. A month or two out of the gates you should have a pretty good idea of whether you're onto something. If you are, you'll be self-sustainable shortly. If your idea's a lemon, you'll know now—and you can back out easily. Exit plans get trickier once investors are involved.
+
+If you're creating software just to make a quick buck, it will show. Focus on building a quality tool that you and your customers can live with for a long time. Deliver a better product with less cost, only with more time. Gamble that people will wait for quality over speed.

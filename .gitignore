@@ -1,6 +1,7 @@
 # Secrets and env (never commit tokens)
 .env
 .env.*
+!.env.example
 *.key
 
 # Dependencies
@@ -10,3 +11,15 @@ node_modules/
 history/
 memory/
 logs/
+
+# Export artifacts
+PIKO_CODEBASE_EXPORT*.txt
+PIKO_CODEBASE_EXPORT*.tar.gz
+PIKO_CODEBASE_EXPORT*.zip
+CODEBASE_FULL.pdf
+CODEBASE_FULL.txt
+CONVERSATION_CODE.txt
+PIKO_FULL_CODE_EXPORT.txt
+
+# OS
+.DS_Store

@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Piko — Control</title>
+  <style>
+    :root { --bg: #1a1b1e; --surface: #25262a; --border: #3d3f44; --text: #e4e4e7; --dim: #a1a1aa; --accent: #7c9cbf; --ok: #6b9b6b; --warn: #c9a227; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: system-ui, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding: 1rem; }
+    h1 { font-size: 1.25rem; margin: 0 0 1rem 0; }
+    a { color: var(--accent); }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; margin-bottom: 1rem; }
+    .card h2 { font-size: 0.9rem; margin: 0 0 0.5rem 0; color: var(--dim); }
+    .row { display: flex; flex-wrap: wrap; gap: 1rem; }
+    .stat { padding: 0.5rem 0; }
+    .stat span { color: var(--dim); }
+    .stat strong { color: var(--ok); }
+    .stat.warn strong { color: var(--warn); }
+    #error { color: #e07070; }
+    .journal-box { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 0.75rem; font-size: 0.85rem; white-space: pre-wrap; max-height: 14rem; overflow-y: auto; margin-top: 0.5rem; }
+    .proposal-box { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 0.75rem; font-size: 0.85rem; white-space: pre-wrap; margin-top: 0.5rem; }
+    .aim-btns { margin-top: 0.5rem; display: flex; gap: 0.5rem; }
+    .aim-btns button { padding: 0.4rem 0.8rem; border-radius: 6px; cursor: pointer; font-size: 0.85rem; border: 1px solid var(--border); }
+    .aim-approve { background: var(--ok); color: var(--bg); border-color: var(--ok); }
+    .aim-reject { background: transparent; color: var(--dim); }
+    .control-layout { display: flex; min-height: 100vh; }
+    .control-sidebar { width: 200px; flex-shrink: 0; background: var(--surface); border-right: 1px solid var(--border); padding: 1rem; }
+    .control-sidebar .nav-title { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--dim); margin-bottom: 0.5rem; }
+    .control-sidebar a { display: block; padding: 0.4rem 0.5rem; color: var(--dim); text-decoration: none; border-radius: 6px; font-size: 0.9rem; }
+    .control-sidebar a:hover { color: var(--text); background: rgba(255,255,255,0.05); }
+    .control-sidebar a.active { color: var(--accent); font-weight: 600; }
+    .control-main { flex: 1; padding: 1rem; overflow: auto; max-width: 1200px; }
+    .global-search-wrap { margin-bottom: 1rem; position: relative; }
+    .global-search-wrap input { width: 100%; max-width: 360px; padding: 0.5rem 0.75rem; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); color: var(--text); font-size: 0.9rem; }
+    .global-search-results { position: absolute; left: 0; right: 0; max-width: 480px; max-height: 320px; overflow-y: auto; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; margin-top: 2px; z-index: 50; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
+    .global-search-results section { padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--border); }
+    .global-search-results section:last-child { border-bottom: none; }
+    .global-search-results .section-title { font-size: 0.75rem; color: var(--dim); text-transform: uppercase; margin-bottom: 0.25rem; }
+    .global-search-results a, .global-search-results .item { display: block; padding: 0.25rem 0; font-size: 0.85rem; color: var(--text); text-decoration: none; }
+    .global-search-results a:hover { color: var(--accent); }
+    .gpu-temps-card { width: 140px; min-height: 100px; display: flex; flex-direction: column; justify-content: center; }
+    .gpu-temps-card .gpu-row { display: flex; justify-content: space-between; align-items: center; font-size: 0.9rem; padding: 0.2rem 0; }
+    .gpu-temps-card .gpu-temp { font-weight: 600; font-variant-numeric: tabular-nums; }
+    .gpu-temps-card .gpu-temp.cool { color: var(--dim); }
+    .gpu-temps-card .gpu-temp.warm { color: var(--warn); }
+    .gpu-temps-card .gpu-temp.hot { color: #e07070; }
+    @media (max-width: 640px) { .control-sidebar { width: auto; border-right: none; border-bottom: 1px solid var(--border); display: flex; flex-wrap: wrap; gap: 0.25rem; } .control-sidebar .nav-title { width: 100%; } }
+  </style>
+</head>
+<body>
+  <div class="control-layout">
+    <nav class="control-sidebar">
+      <div class="nav-title">Control</div>
+      <a href="/control" class="active">Dashboard</a>
+      <a href="/control-prompts">Prompts</a>
+      <a href="/control-learning">Learning</a>
+      <a href="/control-moltbook">Moltbook</a>
+      <a href="/control-mind">Mind</a>
+      <a href="/control-wisdom">Wisdom core</a>
+      <a href="/control-wisdom-metrics">Wisdom metrics</a>
+      <a href="/control-channels">Channels</a>
+      <a href="/control-integrations">Integrations</a>
+      <a href="/control-accounts">Accounts</a>
+    </nav>
+    <main class="control-main">
+  <div class="global-search-wrap">
+    <input type="text" id="global-search-input" placeholder="🔍 Search learning, prompts, posts…" autocomplete="off" />
+    <div id="global-search-results" class="global-search-results" style="display: none;"></div>
+  </div>
+  <h1>Piko Control</h1>
+  <p class="status" style="color:var(--dim);font-size:0.9rem;margin:-0.5rem 0 1rem 0;">EA look-in runs 24/7 on the server (every 30 min). Calendar and data are pushed from your apps; alerts go to Telegram/iMessage regardless of app state.</p>
+  <p id="error"></p>
+  <div id="dashboard" class="row"></div>
+  <script>
+    const el = (id) => document.getElementById(id);
+    function esc(s) {
+      return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+    }
+    function stripMarkdown(s) {
+      return (s||'').replace(/\*\*(.+?)\*\*/g,'$1').replace(/\*\*/g,'').trim();
+    }
+    function buildMoltbookCard(d) {
+      if (!d.moltbook) return '';
+      const m = d.moltbook;
+      const profile = m.profile;
+      let profileHtml = '';
+      if (profile) {
+        profileHtml = `<div class="stat"><span>Profile:</span> <strong>${esc(profile.name)}</strong></div>
+            <div class="stat"><span>Karma:</span> <strong>${profile.karma != null ? profile.karma : '—'}</strong></div>
+            <div class="stat"><span>Followers:</span> <strong>${profile.follower_count != null ? profile.follower_count : '—'}</strong></div>
+            ${profile.stats ? `<div class="stat"><span>Stats:</span> ${[profile.stats.posts != null && (profile.stats.posts + ' posts'), profile.stats.comments != null && (profile.stats.comments + ' comments')].filter(Boolean).join(', ') || '—'}</div>` : ''}`;
+      }
+      const posts = m.posts || [];
+      const showInCard = 8;
+      const postsToShow = posts.slice(0, showInCard);
+      let postsHtml = '';
+      if (posts.length) {
+        postsHtml = `<div class="stat"><span>Posts (Piko’s, from Moltbook):</span> <strong>${posts.length}</strong>${posts.length > showInCard ? ` — <a href="/control-moltbook">View all</a>` : ''}</div>
+            <ul class="moltbook-posts" style="margin:0.25rem 0 0 1rem;padding:0;list-style:none;color:var(--dim);font-size:0.9em;max-height:12rem;overflow-y:auto">${postsToShow.map(p => {
+              const t = esc(stripMarkdown(p.title || ''));
+              const dateStr = p.createdAt ? ' · ' + new Date(p.createdAt).toLocaleDateString() : '';
+              return `<li><label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer"><input type="checkbox" class="moltbook-prune-cb" value="${esc(p.id)}" /> <a href="${esc(p.url)}" target="_blank" rel="noopener">${t}</a>${dateStr}</label></li>`;
+            }).join('')}</ul>
+            ${posts.length > showInCard ? `<div class="stat" style="margin-top:0.25rem"><a href="/control-moltbook">View all ${posts.length} posts →</a></div>` : ''}
+            <div style="margin-top:0.5rem"><button type="button" class="prune-btn" style="background:var(--surface);border:1px solid var(--border);color:var(--warn);padding:0.35rem 0.75rem;border-radius:6px;cursor:pointer;font-size:0.85rem">Prune selected</button></div>`;
+      } else {
+        postsHtml = `<div class="stat"><span>Posts:</span> <span style="color:var(--dim)">None in list</span>. <a href="/control-moltbook">Moltbook posts page</a></div>`;
+      }
+      const lastRun = m.lastRun ? `<div class="stat"><span>Last run:</span> <code style="font-size:0.85rem">${esc(m.lastRun)}</code></div>` : '';
+      const feedback = (m.feedbackSignals && m.feedbackSignals.signals && Object.keys(m.feedbackSignals.signals).length) ? `<div class="stat"><span>Feedback signals:</span> ${Object.entries(m.feedbackSignals.signals).map(([k, n]) => k + ': ' + n).join(', ')}${m.feedbackSignals.lastUpdated ? ' (updated ' + new Date(m.feedbackSignals.lastUpdated).toLocaleString() + ')' : ''}</div><div class="stat" style="color:var(--dim);font-size:0.85rem">Chat: <code>/++ clarity</code> <code>/-- tooLong</code> etc.</div>` : '';
+      return `<div class="card">
+            <h2>Moltbook</h2>
+            ${profileHtml}
+            ${lastRun}
+            <div class="stat"><span>Last post:</span> ${m.lastPostAt ? new Date(m.lastPostAt).toLocaleString() : '—'}${m.lastPostUrl ? ` <a href="${m.lastPostUrl}" target="_blank" rel="noopener">View post</a>` : ''}</div>
+            <div class="stat"><span>Next post eligible:</span> ${m.nextPostEligibleAt ? new Date(m.nextPostEligibleAt).toLocaleString() : '—'}</div>
+            ${postsHtml}
+            ${feedback}
+            <div class="stat"><span>Schedule:</span> <span style="color:var(--dim)">${m.note || 'Cron every 30 min at :00 and :30'}</span></div>
+          </div>`;
+    }
+    function buildJournalCard(d) {
+      if (!d.moltbook) return '';
+      const journal = (d.moltbook.journal || '').trim();
+      const content = journal
+        ? `<div class="journal-box">${esc(journal)}</div>`
+        : '<p style="color:var(--dim);font-size:0.9rem;margin:0">No journal yet. The poster writes entries when the signal guard passes (engagement or new-posts context changed).</p>';
+      return `<div class="card">
+        <h2>Moltbook journal</h2>
+        <div class="stat"><span>Last entries (from data/moltbook-journal.md):</span></div>
+        ${content}
+      </div>`;
+    }
+    function buildGoalsCard(d) {
+      if (!d.moltbook || !d.moltbook.memory) return '';
+      const mem = d.moltbook.memory;
+      const goals = mem.goals || {};
+      const metrics = mem.metrics || {};
+      const immediate = Array.isArray(goals.immediate) ? goals.immediate[0] : goals.immediate;
+      const week = Array.isArray(goals.week) ? goals.week[0] : goals.week;
+      const month = Array.isArray(goals.month) ? goals.month[0] : goals.month;
+      const aim = goals.aim || '—';
+      return `<div class="card">
+        <h2>Goals & metrics (v2)</h2>
+        <div class="stat"><span>Immediate:</span> ${esc(immediate || '—')}</div>
+        <div class="stat"><span>Week:</span> ${esc(week || '—')}</div>
+        <div class="stat"><span>Month:</span> ${esc(month || '—')}</div>
+        <div class="stat"><span>Aim:</span> ${esc(aim)}</div>
+        <div class="stat"><span>Posts in state:</span> <strong>${metrics.totalPosts ?? '—'}</strong></div>
+        <div class="stat"><span>Avg upvotes:</span> <strong>${(metrics.avgUpvotes ?? 0).toFixed(1)}</strong></div>
+        <div class="stat"><span>Last 10 avg:</span> <strong>${(metrics.last10Avg ?? 0).toFixed(1)}</strong></div>
+        <div class="stat"><span>Last cycle:</span> ${mem.lastCycle ? new Date(mem.lastCycle).toLocaleString() : '—'}</div>
+        ${(mem.selfAssessment && mem.selfAssessment.nextExperiments && mem.selfAssessment.nextExperiments.length) ? `<div class="stat"><span>Next experiments:</span> ${esc((mem.selfAssessment.nextExperiments.slice(0, 3).join('; ')))}</div>` : ''}
+        ${(mem.cycleHistory && mem.cycleHistory.length) ? `<div class="stat"><span>Last cycles:</span> ${mem.cycleHistory.slice(0, 3).map(h => '#' + h.cycle + ' ' + (h.title || '').slice(0, 30)).join(' · ')}</div>` : ''}
+        <div class="stat" style="margin-top:0.5rem;color:var(--dim);font-size:0.85rem">Chat: <code>/goals</code> <code>/memory</code> <code>/experiments</code> <code>/cycle</code></div>
+      </div>`;
+    }
+    function buildLearningVelocityCard(d) {
+      const v = d.learningVelocity;
+      if (!v) return '';
+      const causalityStr = v.causalityTotal != null && v.causalityTotal > 0
+        ? `${v.causalityPct}% (${v.causalityFollowed}/${v.causalityTotal} cycles followed intention)`
+        : '—';
+      const refinementCount = (v.refinementLinesCount != null && v.refinementLinesCount > 0) ? v.refinementLinesCount : (v.consolidationCount ?? 0);
+      const tensionStr = (v.tensionsCount ?? 0) + ' open' + (v.tensionsFileUpdatedDaysAgo != null ? ' (file updated ' + v.tensionsFileUpdatedDaysAgo + ' day' + (v.tensionsFileUpdatedDaysAgo === 1 ? '' : 's') + ' ago)' : '');
+      const phaseBEntries = v.phaseBBreakdown && typeof v.phaseBBreakdown === 'object' ? Object.entries(v.phaseBBreakdown).filter(([, n]) => typeof n === 'number' && n > 0).map(([k, n]) => n + ' ' + k) : [];
+      const phaseBStr = (v.phaseBTotal ?? 0) > 0 ? (v.phaseBTotal + ' signal' + (v.phaseBTotal === 1 ? '' : 's') + (phaseBEntries.length ? ' (' + phaseBEntries.join(', ') + ')' : '')) : '—';
+      return `<div class="card">
+        <h2>Learning velocity (Week ${v.weekNumber ?? '—'})</h2>
+        <div class="stat"><span>Causality:</span> <strong>${causalityStr}</strong></div>
+        <div class="stat"><span>Consolidation:</span> <strong>${refinementCount}</strong> refinements active</div>
+        <div class="stat"><span>Sticky ideas:</span> <strong>${v.stickyCount ?? 0}</strong> total${v.stickyNewThisWeek ? ' (updated this week)' : ''}</div>
+        <div class="stat"><span>Tensions:</span> <strong>${tensionStr}</strong></div>
+        <div class="stat"><span>Phase B:</span> <strong>${phaseBStr}</strong></div>
+        <div class="stat" style="margin-top:0.5rem;color:var(--dim);font-size:0.85rem"><a href="/control-learning">Edit learning →</a></div>
+      </div>`;
+    }
+    function buildWeeklySummaryCard(d) {
+      const w = d.weeklySummary;
+      if (!w) return '';
+      const trendStr = w.causalityTrend ? (w.causalityLastWeek != null && w.causalityThisWeek != null ? ' (' + w.causalityLastWeek + '→' + w.causalityThisWeek + '%)' : '') : '';
+      return `<div class="card">
+        <h2>📊 This week in learning</h2>
+        <div class="stat"><span>•</span> <strong>${w.rabbitHoleNewThisWeek ?? 0}</strong> new rabbit-hole note${(w.rabbitHoleNewThisWeek ?? 0) === 1 ? '' : 's'}</div>
+        <div class="stat"><span>•</span> Causality: <strong>${w.causalityTrend || '—'}${trendStr}</strong></div>
+        <div class="stat"><span>•</span> You used Phase B: <strong>${w.phaseBSignalsUsed ?? 0}</strong> signal${(w.phaseBSignalsUsed ?? 0) === 1 ? '' : 's'}</div>
+        <div class="stat" style="margin-top:0.5rem;color:var(--dim);font-size:0.85rem"><a href="/control-learning">View details →</a></div>
+      </div>`;
+    }
+    function buildGpuTempsCard(d) {
+      const gpus = d.gpuTemps;
+      if (!gpus || !gpus.length) return '';
+      const tempClass = (t) => (t == null ? 'cool' : t >= 85 ? 'hot' : t >= 70 ? 'warm' : 'cool');
+      const rows = gpus.map((g) => {
+        const t = g.temp;
+        const label = gpus.length > 1 ? 'GPU ' + (g.index ?? '') : 'GPU';
+        const tempStr = t != null ? t + '°C' : '—';
+        return `<div class="gpu-row"><span>${esc(label)}</span><span class="gpu-temp ${tempClass(t)}">${tempStr}</span></div>`;
+      }).join('');
+      return `<div class="card gpu-temps-card">
+        <h2>GPUs</h2>
+        ${rows}
+      </div>`;
+    }
+    function buildPendingProposalCard(d) {
+      if (!d.moltbook) return '';
+      const proposal = d.moltbook.pendingProposal;
+      let body = '';
+      if (proposal && proposal.trim()) {
+        body = `<div class="proposal-box">${esc(proposal.trim())}</div>
+          <div class="aim-btns">
+            <button type="button" class="aim-approve" data-action="approve">Approve</button>
+            <button type="button" class="aim-reject" data-action="reject">Reject</button>
+          </div>`;
+      } else {
+        body = '<p style="color:var(--dim);font-size:0.9rem;margin:0">No pending proposal. Run the nightly script (e.g. <code>0 2 * * *</code> cron for <code>moltbook-aim-proposal.js</code>) to get refinement proposals.</p>';
+      }
+      return `<div class="card" id="pending-proposal-card">
+        <h2>Pending aim proposal</h2>
+        ${body}
+      </div>`;
+    }
+    async function render() {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 20000);
+        const r = await fetch('/api/control', { signal: controller.signal });
+        clearTimeout(timeoutId);
+        if (!r.ok) throw new Error(r.status === 403 ? 'Control access not allowed (check PIKO_CONTROL_* on server)' : (r.status + ' ' + r.statusText));
+        const d = await r.json();
+        el('error').textContent = '';
+        const dash = el('dashboard');
+        let metricsHtml = '';
+        try {
+          const m = await (await fetch('/api/metrics')).json();
+          metricsHtml = `<div class="card">
+            <h2>Metrics</h2>
+            <div class="stat"><span>Requests:</span> <strong>${m.requests ?? 0}</strong></div>
+            <div class="stat"><span>Errors:</span> <strong>${m.errors ?? 0}</strong></div>
+            <div class="stat"><span>Chat:</span> <strong>${m.chat ?? 0}</strong></div>
+            <div class="stat"><span>Commands:</span> <strong>${m.commands ?? 0}</strong></div>
+            <div class="stat"><span>Uptime:</span> ${m.uptime || '-'}</div>
+          </div>`;
+        } catch (_) {}
+        dash.innerHTML = `
+          <div class="card">
+            <h2>Health</h2>
+            <div class="stat ${d.health.ollama ? '' : 'warn'}"><span>Ollama:</span> <strong>${d.health.ollama ? 'OK' : 'Unreachable'}</strong></div>
+            <div class="stat"><span>Model:</span> ${d.health.model || '-'}</div>
+          </div>
+          ${buildGpuTempsCard(d)}
+          <div class="card prompts-card">
+            <h2>Prompts & config</h2>
+            <div class="stat"><span>Edit identity, soul, Moltbook aim, post length.</span></div>
+            <div class="stat" style="margin-top:0.5rem"><a href="/control-prompts" style="font-weight:600">Edit prompts →</a></div>
+          </div>
+          ${buildLearningVelocityCard(d)}
+          <div class="card">
+            <h2>Learning repo</h2>
+            <div class="stat"><span>Sticky ideas, tensions, rabbit-hole notes. Same data as Notion sync.</span></div>
+            <div class="stat" style="margin-top:0.5rem"><a href="/control-learning" style="font-weight:600">Edit learning →</a></div>
+          </div>
+          ${metricsHtml}
+          <div class="card">
+            <h2>Intent orders</h2>
+            <div class="stat"><span>Total intents:</span> <strong>${d.intentsCount}</strong></div>
+            <div class="stat"><span>Queue:</span> <strong>${d.queueLength}</strong></div>
+            <div class="stat"><span>Reminders:</span> <strong>${d.remindersCount}</strong></div>
+            <div class="stat"><span>Scheduled:</span> <strong>${d.scheduledCount}</strong></div>
+            <div class="stat"><span>Pending notifications:</span> <strong>${d.pendingCount}</strong></div>
+            ${d.nextReminderAt ? `<div class="stat"><span>Next reminder:</span> ${new Date(d.nextReminderAt).toLocaleString()} ${d.nextReminderText ? '— ' + d.nextReminderText : ''}</div>` : ''}
+            ${d.nextScheduledRun ? `<div class="stat"><span>Next scheduled:</span> ${new Date(d.nextScheduledRun).toLocaleString()} ${d.nextScheduledCommand ? '— ' + d.nextScheduledCommand : ''}</div>` : ''}
+          </div>
+          <div class="card">
+            <h2>Sessions</h2>
+            <div class="stat"><span>Active:</span> <strong>${d.sessionsCount}</strong></div>
+          </div>
+          <div class="card">
+            <h2>Access (channels)</h2>
+            <div class="stat"><span>WebChat:</span> always allowed</div>
+            ${(d.allowlist && typeof d.allowlist === 'object' && Object.keys(d.allowlist).length > 0) ? Object.entries(d.allowlist).map(([src, ids]) => `<div class="stat"><span>${src}:</span> ${Array.isArray(ids) ? (ids.includes('*') ? '*' : ids.slice(0, 5).join(', ') + (ids.length > 5 ? '…' : '')) : '-'}</div>`).join('') : '<div class="stat" style="color:var(--dim)">No other channels in allowlist</div>'}
+            <div class="stat" style="margin-top:0.5rem"><a href="/control-channels" style="font-weight:600">Channels & allowlist →</a></div>
+          </div>
+          <div class="card">
+            <h2>Integrations & EA</h2>
+            ${(d.integrations) ? `
+            <div class="stat"><span>Daily memory:</span> <strong>${d.integrations.dailyMemoryEnabled ? 'On' : 'Off'}</strong>${d.integrations.dailyMemoryEnabled ? ' (' + d.integrations.dailyMemoryDays + ' days)' : ''}</div>
+            <div class="stat"><span>Telegram (alerts):</span> <strong>${d.integrations.telegramConfigured ? 'Configured' : 'Not set'}</strong></div>
+            <div class="stat"><span>Gmail (EA look-in):</span> <strong>${d.integrations.gmailConfigured ? 'Configured' : 'Not set'}</strong>${d.integrations.gmailConfigured ? ' (alert if unread ≥ ' + d.integrations.eaGmailMinUnread + ')' : ''}</div>
+            <div class="stat"><span>EA synthesis (LLM):</span> <strong>${d.integrations.eaUseLlmSynthesis ? 'On' : 'Off'}</strong></div>
+            ${d.integrations.eaImessageConfigured ? '<div class="stat"><span>iMessage (EA):</span> <strong>Configured</strong></div>' : ''}
+            ${d.integrations.eaPrepMeeting ? '<div class="stat"><span>Meeting prep:</span> <strong>On</strong></div>' : ''}
+            ${d.integrations.eaGmailReadBody ? '<div class="stat"><span>Gmail read body:</span> <strong>On</strong></div>' : ''}
+            ${d.eaAlertsCount != null ? `<div class="stat"><span>EA alerts (24h):</span> <strong>${d.eaAlertsCount}</strong> <a href="/control-integrations">→ Integrations</a></div>` : ''}
+            <div class="stat" style="margin-top:0.5rem"><a href="/control-integrations" style="font-weight:600">All variables →</a></div>
+            ` : '<div class="stat" style="color:var(--dim)">Integrations not available</div>'}
+          </div>
+          ${buildMoltbookCard(d)}
+          ${buildGoalsCard(d)}
+          ${buildWeeklySummaryCard(d)}
+          ${buildJournalCard(d)}
+          ${buildPendingProposalCard(d)}
+        `;
+        dash.querySelectorAll('.aim-approve, .aim-reject').forEach((btn) => {
+          btn.addEventListener('click', async () => {
+            const action = btn.dataset.action;
+            const endpoint = action === 'approve' ? '/api/control/aim-approve' : '/api/control/aim-reject';
+            btn.disabled = true;
+            try {
+              const r = await fetch(endpoint, { method: 'POST' });
+              const j = await r.json();
+              if (j.ok) {
+                el('error').textContent = action === 'approve' ? 'Refinements added.' : 'Proposal rejected.';
+                setTimeout(() => { el('error').textContent = ''; }, 3000);
+                await render();
+              } else {
+                el('error').textContent = j.error || 'Request failed';
+              }
+            } catch (e) {
+              el('error').textContent = e.message;
+            }
+            btn.disabled = false;
+          });
+        });
+        const pruneBtn = dash.querySelector('.prune-btn');
+        if (pruneBtn) {
+          pruneBtn.addEventListener('click', async () => {
+            const checked = Array.from(dash.querySelectorAll('.moltbook-prune-cb:checked')).map(cb => cb.value).filter(Boolean);
+            if (checked.length === 0) return;
+            if (!confirm(`Prune ${checked.length} post(s) from Moltbook? This cannot be undone.`)) return;
+            pruneBtn.disabled = true;
+            try {
+              const pr = await fetch('/api/control/moltbook-prune', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ postIds: checked }) });
+              const result = await pr.json();
+              if (result.pruned) el('error').textContent = `Pruned ${result.pruned} post(s).` + (result.failed ? ` ${result.failed} failed.` : '');
+              if (result.failed && !result.pruned) el('error').textContent = 'Prune failed: ' + (result.errors && result.errors[0] ? result.errors[0].error || result.errors[0].status : 'unknown');
+              await render();
+            } catch (e) {
+              el('error').textContent = 'Prune request failed: ' + e.message;
+            }
+            pruneBtn.disabled = false;
+          });
+        }
+      } catch (e) {
+        const msg = e.name === 'AbortError' ? 'Request timed out. Check server and network, then retry.' : e.message;
+        el('error').textContent = 'Failed to load: ' + msg + ' ';
+        const retry = document.createElement('button');
+        retry.textContent = 'Retry';
+        retry.style.cssText = 'margin-left:0.5rem;padding:0.25rem 0.5rem;cursor:pointer';
+        retry.onclick = () => { el('error').textContent = 'Loading…'; render(); };
+        el('error').appendChild(retry);
+      }
+    }
+    render();
+    (function initGlobalSearch() {
+      const input = document.getElementById('global-search-input');
+      const resultsEl = document.getElementById('global-search-results');
+      let debounceTimer;
+      function esc(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;'); }
+      function showResults(data) {
+        const parts = [];
+        if (data.learning && data.learning.length) {
+          parts.push('<section><div class="section-title">Learning (' + data.learning.length + ')</div>' + data.learning.slice(0, 5).map((x) => '<a href="/control-learning">' + esc(x.text) + (x.label ? ' (' + x.label + ')' : '') + '</a>').join('') + '</section>');
+        }
+        if (data.moltbook && data.moltbook.length) {
+          parts.push('<section><div class="section-title">Moltbook (' + data.moltbook.length + ')</div>' + data.moltbook.slice(0, 5).map((x) => '<a href="' + (x.url || '#') + '" target="_blank" rel="noopener">' + esc(x.text) + (x.date ? ' (' + new Date(x.date).toLocaleDateString() + ')' : '') + '</a>').join('') + '</section>');
+        }
+        if (data.journal && data.journal.length) {
+          parts.push('<section><div class="section-title">Journal (' + data.journal.length + ')</div>' + data.journal.slice(0, 5).map((x) => '<span class="item">' + esc(x.text) + '</span>').join('') + '</section>');
+        }
+        if (parts.length === 0) { resultsEl.innerHTML = '<section><span class="item" style="color:var(--dim)">No results</span></section>'; } else { resultsEl.innerHTML = parts.join(''); }
+        resultsEl.style.display = 'block';
+      }
+      function doSearch() {
+        const q = (input && input.value || '').trim();
+        if (q.length < 2) { resultsEl.style.display = 'none'; return; }
+        fetch('/api/control/search?q=' + encodeURIComponent(q)).then((r) => r.json()).then(showResults).catch(() => { resultsEl.innerHTML = '<section><span class="item" style="color:var(--dim)">Search failed</span></section>'; resultsEl.style.display = 'block'; });
+      }
+      if (input) {
+        input.addEventListener('input', function() { clearTimeout(debounceTimer); debounceTimer = setTimeout(doSearch, 300); });
+        input.addEventListener('keydown', function(e) { if (e.key === 'Enter') { clearTimeout(debounceTimer); doSearch(); } });
+      }
+      document.addEventListener('click', function(e) { if (resultsEl && input && !resultsEl.contains(e.target) && e.target !== input) resultsEl.style.display = 'none'; });
+    })();
+  </script>
+    </main>
+  </div>
+</body>
+</html>

@@ -1,0 +1,28 @@
+# Source: Getting Real – Chapter 1: What is Getting Real
+# Authors: Jason Fried, David Heinemeier Hansson, 37signals
+# URL: https://basecamp.com/gettingreal/01.1-what-is-getting-real
+# Accessed: Feb 2026
+# Attribution: Basecamp/37signals, fair use excerpt.
+
+What is Getting Real
+
+Getting Real is a smaller, faster, better way to build software.
+
+- Getting Real delivers just what customers need and eliminates anything they don't.
+- Getting Real is about iterations and lowering the cost of change. Launch, tweak, and constantly improve — perfect for web-based software.
+- Getting Real starts with the interface, the real screens people will use. Begin with what the customer actually experiences and build backwards. Get the interface right before you get the software wrong.
+- Getting Real is staying small and being agile.
+- Getting real is less. Less mass, less software, less features, less paperwork, less of everything that's not essential (and most of what you think is essential actually isn't).
+- Getting Real is about skipping the stuff that represents real (charts, graphs, boxes, arrows, wireframes) and actually building the real thing.
+
+The benefits of Getting Real
+
+Getting Real delivers better results because it forces you to deal with actual problems instead of your ideas about those problems. It forces you to deal with reality.
+
+Getting Real foregoes functional specs and transitory documentation in favor of building real screens. A functional spec is make-believe, an illusion of agreement; an actual web page is reality. Getting Real gets you there faster. You make software decisions based on the real thing instead of abstract notions.
+
+William Strunk Jr.: "Vigorous writing is concise. A sentence should contain no unnecessary words, a paragraph no unnecessary sentences... every word tell." Same for software.
+
+Getting Real gets rid of: top-down hierarchy, useless paperwork, unrealistic user testing, endless preference options, pristine roadmaps that predict the perfect future, meaningless version numbers, the "need" to hire dozens of employees, interminable staff meetings, scalability debates, pie-in-the-sky functional specs, timelines that take months or years.
+
+You don't need tons of money or a huge team or a lengthy development cycle to build great software. Getting real takes the opposite approach.

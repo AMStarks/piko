@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Piko — Integrations</title>
+  <style>
+    :root { --bg: #1a1b1e; --surface: #25262a; --border: #3d3f44; --text: #e4e4e7; --dim: #a1a1aa; --accent: #7c9cbf; --ok: #6b9b6b; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: system-ui, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding: 1rem; }
+    h1 { font-size: 1.25rem; margin: 0 0 1rem 0; }
+    a { color: var(--accent); }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; margin-bottom: 1rem; }
+    .card h2 { font-size: 0.9rem; margin: 0 0 0.5rem 0; color: var(--dim); }
+    .control-layout { display: flex; min-height: 100vh; }
+    .control-sidebar { width: 200px; flex-shrink: 0; background: var(--surface); border-right: 1px solid var(--border); padding: 1rem; }
+    .control-sidebar .nav-title { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--dim); margin-bottom: 0.5rem; }
+    .control-sidebar a { display: block; padding: 0.4rem 0.5rem; color: var(--dim); text-decoration: none; border-radius: 6px; font-size: 0.9rem; }
+    .control-sidebar a:hover { color: var(--text); background: rgba(255,255,255,0.05); }
+    .control-sidebar a.active { color: var(--accent); font-weight: 600; }
+    .control-main { flex: 1; padding: 1rem; overflow: auto; max-width: 900px; }
+    pre, code { font-size: 0.85rem; color: var(--dim); background: var(--bg); padding: 0.25rem 0.5rem; border-radius: 4px; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+    th, td { text-align: left; padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--border); }
+    th { color: var(--dim); font-weight: 600; }
+    .status-ok { color: var(--ok); }
+    .status-off { color: var(--dim); }
+    .ea-alert-item { margin-bottom: 0.5rem; font-size: 0.9rem; }
+    .ea-alert-time { color: var(--dim); font-size: 0.8rem; margin-right: 0.5rem; }
+    input[type="text"], button { padding: 0.4rem 0.6rem; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 0.9rem; }
+    button { cursor: pointer; background: var(--accent); border-color: var(--accent); color: var(--bg); }
+    button:hover { opacity: 0.9; }
+    .form-row { margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+    .form-row label { min-width: 6rem; font-size: 0.9rem; }
+    .connect-account-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem 1rem; margin-bottom: 0.75rem; }
+    .connect-account-row .connect-account-status { min-width: 6rem; font-size: 0.9rem; font-weight: 600; }
+    .connect-account-row .connect-account-status.connected { color: var(--ok); }
+    .connect-account-row .connect-account-status.not-connected { color: var(--dim); }
+    .btn-oauth { display: inline-block; padding: 0.5rem 1rem; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 0.9rem; border: none; cursor: pointer; }
+    .btn-oauth:hover { opacity: 0.92; }
+    .btn-google { background: #4285f4; color: #fff; }
+    .btn-slack { background: #4a154b; color: #fff; }
+    .btn-notion { background: var(--text); color: var(--bg); }
+    .integration-block { margin-bottom: 1.25rem; }
+    .integration-block h3 { font-size: 0.95rem; margin: 0 0 0.35rem 0; color: var(--text); }
+    .linked-account-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1rem; margin-bottom: 0.5rem; }
+    .linked-account-row .account-label { font-size: 0.9rem; color: var(--ok); }
+    .linked-account-row .account-label.none { color: var(--dim); }
+    .btn-disable { padding: 0.35rem 0.65rem; font-size: 0.85rem; background: transparent; border: 1px solid var(--border); color: var(--dim); cursor: pointer; border-radius: 6px; }
+    .btn-disable:hover { color: var(--text); border-color: var(--dim); }
+    .add-account-row { margin-top: 0.35rem; }
+  </style>
+</head>
+<body>
+  <div class="control-layout">
+    <nav class="control-sidebar">
+      <div class="nav-title">Control</div>
+      <a href="/control">Dashboard</a>
+      <a href="/control-prompts">Prompts</a>
+      <a href="/control-learning">Learning</a>
+      <a href="/control-moltbook">Moltbook</a>
+      <a href="/control-mind">Mind</a>
+      <a href="/control-wisdom">Wisdom core</a>
+      <a href="/control-wisdom-metrics">Wisdom metrics</a>
+      <a href="/control-channels">Channels</a>
+      <a href="/control-integrations" class="active">Integrations</a>
+      <a href="/control-accounts">Accounts</a>
+    </nav>
+    <main class="control-main">
+      <a href="/control" style="display:inline-block;margin-bottom:0.5rem;font-size:0.9rem;">← Control</a>
+      <h1>Integrations & environment</h1>
+      <p style="color:var(--dim);font-size:0.9rem;">Variables are set in <code>.env</code> or systemd on the server. Values are not shown here. This page reflects status only.</p>
+      <div id="connect-message" class="card" style="display:none;margin-bottom:1rem;"></div>
+      <div id="integrations-card" class="card">
+        <h2>Status (from server)</h2>
+        <div id="integrations-table-wrap"></div>
+        <div id="connect-actions" style="margin-top:1rem;"></div>
+      </div>
+      <div class="card" style="margin-top:1rem;">
+        <h2>Linked accounts</h2>
+        <p style="color:var(--dim);font-size:0.85rem;margin-bottom:1rem;">See which accounts are connected to Piko. Use Disable to revoke access, or Add account to connect via Google / Slack / Notion sign-in.</p>
+        <div id="linked-gmail" class="integration-block" style="display:none;">
+          <h3>Gmail</h3>
+          <div class="linked-account-row">
+            <span id="gmail-account-label" class="account-label none">No account linked</span>
+            <button type="button" id="gmail-disable" class="btn-disable" style="display:none;">Disable</button>
+          </div>
+          <div class="add-account-row">
+            <button type="button" class="btn-oauth btn-google" id="gmail-add-btn">Add account</button>
+            <span style="color:var(--dim);font-size:0.85rem;margin-left:0.5rem;">— Continue with Google (opens popup)</span>
+          </div>
+        </div>
+        <div id="linked-gmail-no-oauth" style="display:none;margin-bottom:0.75rem;"><span style="color:var(--dim);font-size:0.85rem;">Gmail: set <code>GMAIL_CLIENT_ID</code> and <code>GMAIL_CLIENT_SECRET</code> in .env to enable “Add account” (Continue with Google).</span></div>
+        <div id="linked-slack" class="integration-block" style="display:none;">
+          <h3>Slack</h3>
+          <div class="linked-account-row">
+            <span id="slack-account-label" class="account-label none">No workspace linked</span>
+            <button type="button" id="slack-disable" class="btn-disable" style="display:none;">Disable</button>
+          </div>
+          <div class="add-account-row">
+            <button type="button" class="btn-oauth btn-slack" id="slack-add-btn">Add account</button>
+            <span style="color:var(--dim);font-size:0.85rem;margin-left:0.5rem;">— Add to Slack workspace (opens popup)</span>
+          </div>
+        </div>
+        <div id="linked-slack-no-oauth" style="display:none;margin-bottom:0.75rem;"><span style="color:var(--dim);font-size:0.85rem;">Slack: set <code>SLACK_CLIENT_ID</code> and <code>SLACK_CLIENT_SECRET</code> in .env to enable “Add account”.</span></div>
+        <div id="linked-notion" class="integration-block" style="display:none;">
+          <h3>Notion</h3>
+          <div class="linked-account-row">
+            <span id="notion-account-label" class="account-label none">No workspace linked</span>
+            <button type="button" id="notion-disable" class="btn-disable" style="display:none;">Disable</button>
+          </div>
+          <div class="add-account-row">
+            <button type="button" class="btn-oauth btn-notion" id="notion-add-btn">Add account</button>
+            <span style="color:var(--dim);font-size:0.85rem;margin-left:0.5rem;">— Connect with Notion (opens popup)</span>
+          </div>
+        </div>
+        <div id="linked-notion-no-oauth" style="display:none;margin-bottom:0.75rem;"><span style="color:var(--dim);font-size:0.85rem;">Notion: set <code>NOTION_CLIENT_ID</code> and <code>NOTION_CLIENT_SECRET</code> in .env to enable “Add account”.</span></div>
+        <div id="connect-telegram-wrap" style="margin-bottom:0.75rem;display:none;">
+          <p style="font-size:0.9rem;margin-bottom:0.35rem;">Connect Telegram</p>
+          <div class="form-row"><label>Bot token</label><input type="text" id="telegram-token" placeholder="from @BotFather" style="flex:1;max-width:280px;" /></div>
+          <div class="form-row"><label>Chat ID</label><input type="text" id="telegram-chat-id" placeholder="from @userinfobot" style="flex:1;max-width:180px;" /></div>
+          <button type="button" id="telegram-submit">Save Telegram</button>
+          <span id="telegram-status" style="margin-left:0.5rem;font-size:0.85rem;color:var(--dim);"></span>
+        </div>
+        <div id="connect-imessage-wrap" style="display:none;">
+          <p style="font-size:0.9rem;margin-bottom:0.35rem;">Connect iMessage (EA)</p>
+          <div class="form-row"><label>BlueBubbles URL</label><input type="text" id="imessage-url" placeholder="http://192.168.0.48:1234" style="flex:1;max-width:280px;" /></div>
+          <div class="form-row"><label>API key</label><input type="text" id="imessage-api-key" placeholder="from BlueBubbles Settings" style="flex:1;max-width:280px;" /></div>
+          <div class="form-row"><label>Chat GUID</label><input type="text" id="imessage-chat-guid" placeholder="iMessage chat GUID" style="flex:1;max-width:280px;" /></div>
+          <button type="button" id="imessage-submit">Save iMessage</button>
+          <span id="imessage-status" style="margin-left:0.5rem;font-size:0.85rem;color:var(--dim);"></span>
+        </div>
+        <div id="connect-discord-wrap" style="display:none;">
+          <p style="font-size:0.9rem;margin-bottom:0.35rem;">Connect Discord</p>
+          <div class="form-row"><label>Bot token</label><input type="text" id="discord-token" placeholder="from Discord Developer Portal → Bot" style="flex:1;max-width:280px;" /></div>
+          <button type="button" id="discord-submit">Save Discord</button>
+          <span id="discord-status" style="margin-left:0.5rem;font-size:0.85rem;color:var(--dim);"></span>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Variable reference</h2>
+        <table>
+          <thead>
+            <tr><th>Variable</th><th>Purpose</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>PIKO_DAILY_MEMORY_ENABLED</code></td><td>1 or true to enable daily memory (interaction + day summaries).</td></tr>
+            <tr><td><code>PIKO_DAILY_MEMORY_DAYS</code></td><td>Days of history to include in context (default 7, max 30).</td></tr>
+            <tr><td><code>TELEGRAM_BOT_TOKEN</code> / <code>TELEGRAM_TOKEN</code></td><td>Bot token for sending EA alerts and briefings to Telegram. Set via Connect Telegram.</td></tr>
+            <tr><td><code>TELEGRAM_CHAT_ID</code></td><td>Chat ID to receive alerts. Get from @userinfobot. Set via Connect Telegram.</td></tr>
+            <tr><td><code>GMAIL_CLIENT_ID</code> / <code>GMAIL_CLIENT_SECRET</code></td><td>Google OAuth (one-time). Then add account with “Sign in with Google” above.</td></tr>
+            <tr><td><code>GMAIL_REFRESH_TOKEN</code></td><td>Set automatically when you add Gmail. EA look-in and /gmail use it.</td></tr>
+            <tr><td><code>SLACK_CLIENT_ID</code> / <code>SLACK_CLIENT_SECRET</code></td><td>Slack app OAuth (one-time). Then add workspace with “Add to Slack” above.</td></tr>
+            <tr><td><code>SLACK_BOT_TOKEN</code></td><td>Set automatically when you add Slack. Adapter uses it.</td></tr>
+            <tr><td><code>NOTION_CLIENT_ID</code> / <code>NOTION_CLIENT_SECRET</code></td><td>Notion OAuth (one-time). Then add account with “Connect with Notion” above.</td></tr>
+            <tr><td><code>NOTION_TOKEN</code></td><td>Set automatically when you add Notion. notion-sync uses it.</td></tr>
+            <tr><td><code>PIKO_EA_GMAIL_MIN_UNREAD</code></td><td>Minimum unread count to include Gmail in EA bullets (default 1).</td></tr>
+            <tr><td><code>PIKO_EA_GMAIL_READ_BODY</code></td><td>1 or true: fetch email body snippets and pass to LLM so Piko can surface what is important or needs reply.</td></tr>
+            <tr><td><code>PIKO_EA_USE_LLM_SYNTHESIS</code></td><td>1 or true to use LLM to synthesize “what needs attention?” (Phase 3); otherwise rule-based bullets.</td></tr>
+            <tr><td><code>OLLAMA_URL</code></td><td>Ollama API URL (used by EA Phase 3 and chat).</td></tr>
+            <tr><td><code>BLUEBUBBLES_URL</code> / <code>BLUEBUBBLES_API_KEY</code> / <code>PIKO_EA_IMESSAGE_CHAT_GUID</code></td><td>iMessage (EA). Set via Connect iMessage or .env.</td></tr>
+            <tr><td><code>DISCORD_TOKEN</code></td><td>Discord bot token from Developer Portal. Set via Connect Discord.</td></tr>
+            <tr><td><code>PIKO_EA_PREP_MEETING</code></td><td>Phase 5: 1 or true to add LLM “prep” talking points for next meeting in window.</td></tr>
+            <tr><td><code>PIKO_EA_EOD_SESSION</code></td><td>Phase 5: session ID for daily memory in EOD digest (default main). Cron: <code>scripts/ea-digest-eod.js</code> e.g. 0 18 * * *.</td></tr>
+            <tr><td><code>data/ea-preferences.json</code></td><td>Phase 4: quiet hours (quietStart, quietEnd). Set via Control → Integrations or edit file.</td></tr>
+          </tbody>
+        </table>
+        <p style="margin-top:0.75rem;font-size:0.85rem;color:var(--dim);">Cron on the server runs <code>ea-lookin.js</code> (e.g. every 30 min), <code>intent-poller.js</code> (e.g. every 5 min), and <code>daily-memory-summarize.js</code> (daily). See <code>docs/PIKO_EA_ASSISTANT_PLAN.md</code>.</p>
+      </div>
+      <div class="card">
+        <h2>EA alerts (last 24h)</h2>
+        <p style="font-size:0.85rem;color:var(--dim);margin-bottom:0.5rem;">Look-in messages sent to Telegram. App/widget can poll <code>GET /api/ea-alerts</code>.</p>
+        <div id="ea-alerts-wrap"></div>
+      </div>
+      <div class="card">
+        <h2>Quiet hours (Phase 4)</h2>
+        <p style="font-size:0.85rem;color:var(--dim);margin-bottom:0.5rem;">No Telegram alerts sent during this window (e.g. 22:00–07:00). Server local time. Leave blank to disable.</p>
+        <div class="form-row">
+          <label for="quiet-start">From</label>
+          <input type="text" id="quiet-start" placeholder="22:00" maxlength="5" />
+          <label for="quiet-end">To</label>
+          <input type="text" id="quiet-end" placeholder="07:00" maxlength="5" />
+          <button type="button" id="quiet-save">Save</button>
+        </div>
+        <div id="quiet-status" style="font-size:0.85rem;color:var(--dim);margin-top:0.25rem;"></div>
+      </div>
+    </main>
+  </div>
+  <script>
+    (function oauthPopupHandling() {
+      var params = new URLSearchParams(window.location.search);
+      if (!window.opener) return;
+      var matched = false;
+      ['gmail', 'slack', 'notion'].forEach(function(k) {
+        var v = params.get(k);
+        if (v === 'connected' || v === 'error') {
+          matched = true;
+          try {
+            window.opener.postMessage({ type: 'piko-oauth-done', service: k, status: v }, window.location.origin);
+          } catch (_) {}
+          window.close();
+        }
+      });
+    })();
+    (function oauthAddAccountButtons() {
+      function openOAuthPopup(url, btnId) {
+        var btn = document.getElementById(btnId);
+        if (btn) btn.disabled = true;
+        var w = window.open(url, 'piko-oauth', 'width=520,height=640,scrollbars=yes');
+        var interval = setInterval(function() {
+          if (!w || w.closed) {
+            clearInterval(interval);
+            if (btn) btn.disabled = false;
+          }
+        }, 500);
+        window.addEventListener('message', function handler(ev) {
+          if (ev.origin !== window.location.origin) return;
+          if (ev.data && ev.data.type === 'piko-oauth-done') {
+            window.removeEventListener('message', handler);
+            if (w && !w.closed) w.close();
+            clearInterval(interval);
+            if (btn) btn.disabled = false;
+            window.location.reload();
+          }
+        });
+      }
+      document.getElementById('gmail-add-btn') && document.getElementById('gmail-add-btn').addEventListener('click', function() {
+        openOAuthPopup('/api/oauth/gmail/start', 'gmail-add-btn');
+      });
+      document.getElementById('slack-add-btn') && document.getElementById('slack-add-btn').addEventListener('click', function() {
+        openOAuthPopup('/api/oauth/slack/start', 'slack-add-btn');
+      });
+      document.getElementById('notion-add-btn') && document.getElementById('notion-add-btn').addEventListener('click', function() {
+        openOAuthPopup('/api/oauth/notion/start', 'notion-add-btn');
+      });
+    })();
+    (function connectQueryMessages() {
+      const params = new URLSearchParams(window.location.search);
+      const msgEl = document.getElementById('connect-message');
+      const kinds = ['gmail', 'slack', 'notion', 'telegram', 'imessage', 'discord'];
+      for (const k of kinds) {
+        const status = params.get(k);
+        if (status === 'connected') {
+          msgEl.style.display = 'block';
+          const labels = { gmail: 'Gmail', slack: 'Slack', notion: 'Notion', telegram: 'Telegram', imessage: 'iMessage (EA)', discord: 'Discord' };
+          msgEl.innerHTML = '<h2 style="color:var(--ok);">' + labels[k] + ' connected</h2><p>Credentials saved. Restart the server if needed for scripts to pick up changes.</p>';
+          window.history.replaceState({}, '', window.location.pathname);
+          break;
+        } else if (status === 'error') {
+          const message = params.get('message') || 'Unknown error';
+          msgEl.style.display = 'block';
+          const labels = { gmail: 'Gmail', slack: 'Slack', notion: 'Notion', telegram: 'Telegram', imessage: 'iMessage', discord: 'Discord' };
+          msgEl.innerHTML = '<h2 style="color:#e07070;">' + labels[k] + ' connection failed</h2><p>' + (message.replace(/</g, '&lt;')) + '</p>';
+          window.history.replaceState({}, '', window.location.pathname);
+          break;
+        }
+      }
+    })();
+    (async function loadIntegrations() {
+      const wrap = document.getElementById('integrations-table-wrap');
+      const telegramWrap = document.getElementById('connect-telegram-wrap');
+      const imessageWrap = document.getElementById('connect-imessage-wrap');
+      const discordWrap = document.getElementById('connect-discord-wrap');
+      try {
+        const r = await fetch('/api/control');
+        const d = await r.json();
+        const i = d.integrations;
+        if (!i) {
+          wrap.innerHTML = '<p style="color:var(--dim);">Integrations data not available.</p>';
+          return;
+        }
+        var linked = i.linkedAccounts || {};
+        if (i.gmailOAuthAvailable) {
+          document.getElementById('linked-gmail').style.display = 'block';
+          var gmailLabel = document.getElementById('gmail-account-label');
+          var gmailDisable = document.getElementById('gmail-disable');
+          if (i.gmailConfigured) {
+            gmailLabel.textContent = (linked.gmail && linked.gmail.email) ? linked.gmail.email : 'Connected';
+            gmailLabel.classList.remove('none');
+            gmailDisable.style.display = 'inline-block';
+          } else {
+            gmailLabel.textContent = 'No account linked';
+            gmailLabel.classList.add('none');
+            gmailDisable.style.display = 'none';
+          }
+        } else {
+          document.getElementById('linked-gmail-no-oauth').style.display = 'block';
+        }
+        if (i.slackOAuthAvailable) {
+          document.getElementById('linked-slack').style.display = 'block';
+          var slackLabel = document.getElementById('slack-account-label');
+          var slackDisable = document.getElementById('slack-disable');
+          if (i.slackConfigured) {
+            slackLabel.textContent = (linked.slack && linked.slack.team) ? linked.slack.team : 'Connected';
+            slackLabel.classList.remove('none');
+            slackDisable.style.display = 'inline-block';
+          } else {
+            slackLabel.textContent = 'No workspace linked';
+            slackLabel.classList.add('none');
+            slackDisable.style.display = 'none';
+          }
+        } else {
+          document.getElementById('linked-slack-no-oauth').style.display = 'block';
+        }
+        if (i.notionOAuthAvailable) {
+          document.getElementById('linked-notion').style.display = 'block';
+          var notionLabel = document.getElementById('notion-account-label');
+          var notionDisable = document.getElementById('notion-disable');
+          if (i.notionConfigured) {
+            notionLabel.textContent = (linked.notion && linked.notion.workspace) ? linked.notion.workspace : 'Connected';
+            notionLabel.classList.remove('none');
+            notionDisable.style.display = 'inline-block';
+          } else {
+            notionLabel.textContent = 'No workspace linked';
+            notionLabel.classList.add('none');
+            notionDisable.style.display = 'none';
+          }
+        } else {
+          document.getElementById('linked-notion-no-oauth').style.display = 'block';
+        }
+        if (!i.telegramConfigured) telegramWrap.style.display = 'block';
+        if (!i.eaImessageConfigured) imessageWrap.style.display = 'block';
+        if (!i.discordConfigured) discordWrap.style.display = 'block';
+        const rows = [
+          ['Daily memory', i.dailyMemoryEnabled ? 'On (' + i.dailyMemoryDays + ' days)' : 'Off', i.dailyMemoryEnabled],
+          ['Telegram (alerts)', i.telegramConfigured ? 'Configured' : 'Not set', i.telegramConfigured],
+          ['Gmail (EA look-in)', i.gmailConfigured ? 'Configured (alert if unread ≥ ' + i.eaGmailMinUnread + ')' : 'Not set', i.gmailConfigured],
+          ['Slack', i.slackConfigured ? 'Configured' : 'Not set', i.slackConfigured],
+          ['Notion', i.notionConfigured ? 'Configured' : 'Not set', i.notionConfigured],
+          ['Discord', i.discordConfigured ? 'Configured' : 'Not set', i.discordConfigured],
+          ['EA synthesis (LLM)', i.eaUseLlmSynthesis ? 'On' : 'Off', i.eaUseLlmSynthesis],
+          ['iMessage (EA)', (i.eaImessageConfigured ? 'Configured' : 'Not set'), !!i.eaImessageConfigured],
+          ['Meeting prep (Phase 5)', i.eaPrepMeeting ? 'On' : 'Off', i.eaPrepMeeting],
+          ['Gmail read body (Phase 2)', (i.eaGmailReadBody ? 'On' : 'Off'), !!i.eaGmailReadBody],
+        ];
+        wrap.innerHTML = '<table><thead><tr><th>Integration</th><th>Status</th></tr></thead><tbody>' +
+          rows.map(([name, status, ok]) => '<tr><td>' + name + '</td><td class="' + (ok ? 'status-ok' : 'status-off') + '">' + status + '</td></tr>').join('') +
+          '</tbody></table>';
+      } catch (e) {
+        wrap.innerHTML = '<p style="color:var(--dim);">Failed to load: ' + (e.message || 'unknown') + '</p>';
+      }
+    })();
+    (function disableHandlers() {
+      function makeDisable(kind, btnId) {
+        var btn = document.getElementById(btnId);
+        if (!btn) return;
+        btn.addEventListener('click', async function() {
+          if (!confirm('Disconnect this account from Piko? You can add it again later.')) return;
+          btn.disabled = true;
+          btn.textContent = 'Disabling…';
+          try {
+            var res = await fetch('/api/control/integrations/' + kind + '/disable', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+            var data = await res.json();
+            if (data.ok) window.location.reload();
+            else { btn.disabled = false; btn.textContent = 'Disable'; alert(data.error || 'Failed'); }
+          } catch (e) {
+            btn.disabled = false;
+            btn.textContent = 'Disable';
+            alert(e.message || 'Request failed');
+          }
+        });
+      }
+      makeDisable('gmail', 'gmail-disable');
+      makeDisable('slack', 'slack-disable');
+      makeDisable('notion', 'notion-disable');
+    })();
+    document.getElementById('telegram-submit').addEventListener('click', async function() {
+      const token = document.getElementById('telegram-token').value.trim();
+      const chatId = document.getElementById('telegram-chat-id').value.trim();
+      const status = document.getElementById('telegram-status');
+      if (!token || !chatId) { status.textContent = 'Enter token and chat ID'; return; }
+      status.textContent = 'Saving…';
+      try {
+        const r = await fetch('/api/control/integrations/telegram', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token, chatId }) });
+        const d = await r.json();
+        status.textContent = d.ok ? 'Saved.' : (d.error || 'Failed');
+        if (d.ok) setTimeout(function() { window.location.reload(); }, 800);
+      } catch (e) {
+        status.textContent = e.message || 'Error';
+      }
+    });
+    document.getElementById('imessage-submit').addEventListener('click', async function() {
+      const blueBubblesUrl = document.getElementById('imessage-url').value.trim();
+      const apiKey = document.getElementById('imessage-api-key').value.trim();
+      const chatGuid = document.getElementById('imessage-chat-guid').value.trim();
+      const status = document.getElementById('imessage-status');
+      if (!blueBubblesUrl || !apiKey || !chatGuid) { status.textContent = 'Fill all fields'; return; }
+      status.textContent = 'Saving…';
+      try {
+        const r = await fetch('/api/control/integrations/imessage', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ blueBubblesUrl, apiKey, chatGuid }) });
+        const d = await r.json();
+        status.textContent = d.ok ? 'Saved.' : (d.error || 'Failed');
+        if (d.ok) setTimeout(function() { window.location.reload(); }, 800);
+      } catch (e) {
+        status.textContent = e.message || 'Error';
+      }
+    });
+    document.getElementById('discord-submit').addEventListener('click', async function() {
+      const token = document.getElementById('discord-token').value.trim();
+      const status = document.getElementById('discord-status');
+      if (!token) { status.textContent = 'Enter bot token'; return; }
+      status.textContent = 'Saving…';
+      try {
+        const r = await fetch('/api/control/integrations/discord', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }) });
+        const d = await r.json();
+        status.textContent = d.ok ? 'Saved.' : (d.error || 'Failed');
+        if (d.ok) setTimeout(function() { window.location.reload(); }, 800);
+      } catch (e) {
+        status.textContent = e.message || 'Error';
+      }
+    });
+
+    (async function eaAlerts() {
+      const wrap = document.getElementById('ea-alerts-wrap');
+      try {
+        const r = await fetch('/api/ea-alerts');
+        const d = await r.json();
+        const alerts = (d.alerts || []).slice(0, 10);
+        if (alerts.length === 0) {
+          wrap.innerHTML = '<p style="color:var(--dim);">No alerts in the last 24h.</p>';
+          return;
+        }
+        wrap.innerHTML = alerts.map(function(a) {
+          const time = a.at ? new Date(a.at).toLocaleString() : '';
+          const text = (a.text || '').replace(/</g, '&lt;').replace(/\n/g, '<br/>');
+          return '<div class="ea-alert-item"><span class="ea-alert-time">' + time + '</span>' + text + '</div>';
+        }).join('');
+      } catch (e) {
+        wrap.innerHTML = '<p style="color:var(--dim);">Failed to load: ' + (e.message || 'unknown') + '</p>';
+      }
+    })();
+
+    (async function quietHours() {
+      try {
+        const r = await fetch('/api/ea-preferences');
+        const p = await r.json();
+        document.getElementById('quiet-start').value = p.quietStart || '';
+        document.getElementById('quiet-end').value = p.quietEnd || '';
+      } catch (_) {}
+      document.getElementById('quiet-save').addEventListener('click', async function() {
+        const start = document.getElementById('quiet-start').value.trim() || null;
+        const end = document.getElementById('quiet-end').value.trim() || null;
+        const status = document.getElementById('quiet-status');
+        try {
+          const res = await fetch('/api/ea-preferences', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ quietStart: start, quietEnd: end })
+          });
+          const data = await res.json();
+          if (res.ok) {
+            status.textContent = 'Saved. Quiet window: ' + (data.quietStart && data.quietEnd ? data.quietStart + ' – ' + data.quietEnd : 'off');
+          } else {
+            status.textContent = data.error || 'Save failed';
+          }
+        } catch (e) {
+          status.textContent = 'Error: ' + (e.message || 'unknown');
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

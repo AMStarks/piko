@@ -1,0 +1,8 @@
+torch>=2.0
+transformers>=4.37
+peft>=0.7
+datasets>=2.14
+accelerate>=0.25
+bitsandbytes>=0.41
+# For 14B AWQ path (train_14b_awq.py): pre-quantized load, no BnB
+autoawq>=0.2

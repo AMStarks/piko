@@ -1,0 +1,12 @@
+{
+  "name": "piko-slack-adapter",
+  "version": "1.0.0",
+  "description": "Slack adapter for Piko — forwards messages to POST /api/chat (Socket Mode)",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "dependencies": {
+    "@slack/bolt": "^3.17.0"
+  }
+}

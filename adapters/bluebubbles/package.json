@@ -1,0 +1,10 @@
+{
+  "name": "piko-bluebubbles-adapter",
+  "version": "1.0.0",
+  "description": "iMessage adapter via BlueBubbles — webhook receiver, forwards to POST /api/chat, sends reply via BlueBubbles API",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {}
+}

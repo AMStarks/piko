@@ -112,7 +112,11 @@
 <body>
   <header>
     <h1>Piko</h1>
-    <button type="button" id="newChat">New chat</button>
+    <span style="display:flex;gap:0.5rem;align-items:center;">
+      <button type="button" id="voiceBtn" title="Voice input (Web Speech API)">🎤 Voice</button>
+      <button type="button" id="newChat">New chat</button>
+      <a href="/control" style="font-size:0.85rem;color:var(--text-dim);text-decoration:none;">Control</a>
+    </span>
   </header>
   <div id="messages"></div>
   <div id="form">
@@ -198,6 +202,39 @@
       messagesEl.innerHTML = '';
       setStatus('New chat started.');
       setTimeout(() => setStatus(''), 2000);
+    });
+
+    // Phase 4: Voice input (Web Speech API)
+    const voiceBtn = document.getElementById('voiceBtn');
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    let recognition = null;
+    if (SpeechRecognition) {
+      recognition = new SpeechRecognition();
+      recognition.continuous = false;
+      recognition.interimResults = false;
+      recognition.lang = 'en-US';
+      recognition.onresult = (e) => {
+        const t = e.results[e.results.length - 1][0].transcript;
+        if (t && t.trim()) sendMessage(t.trim());
+      };
+      recognition.onerror = () => setStatus('Voice error. Try again.', true);
+      recognition.onend = () => { voiceBtn.textContent = '🎤 Voice'; voiceBtn.disabled = false; };
+    } else {
+      voiceBtn.disabled = true;
+      voiceBtn.title = 'Voice not supported in this browser';
+    }
+    voiceBtn.addEventListener('click', () => {
+      if (!recognition || loading) return;
+      voiceBtn.textContent = 'Listening…';
+      voiceBtn.disabled = true;
+      setStatus('Listening…');
+      try {
+        recognition.start();
+      } catch (err) {
+        setStatus('Voice error: ' + err.message, true);
+        voiceBtn.textContent = '🎤 Voice';
+        voiceBtn.disabled = false;
+      }
     });
   </script>
 </body>

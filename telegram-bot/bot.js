@@ -111,6 +111,8 @@ function telegramRequest(path, method, body) {
   });
 }
 
+/** WebChat API timeout: Piko + piko:finetune can take 2+ min cold; allow 3 min. */
+const WEBCHAT_TIMEOUT_MS = Number(process.env.PIKO_WEBCHAT_TIMEOUT_MS) || 180000;
 function httpRequest(options, body) {
   return new Promise((resolve, reject) => {
     const req = http.request(options, (res) => {
@@ -119,8 +121,73 @@ function httpRequest(options, body) {
       res.on('end', () => resolve({ statusCode: res.statusCode, data }));
     });
     req.on('error', reject);
-    req.setTimeout(60000, () => { req.destroy(); reject(new Error('timeout')); });
+    req.setTimeout(WEBCHAT_TIMEOUT_MS, () => { req.destroy(); reject(new Error('timeout')); });
     if (body) req.write(body);
+    req.end();
+  });
+}
+
+/** Stream WebChat SSE; onChunk(delta) per chunk, onEdit(fullText) when we have new content (throttled); resolves with full reply or throws. */
+function webchatStream(webchatUrl, message, sessionId, onEdit) {
+  const u = new URL(webchatUrl.replace(/\/$/, '') + '/api/chat');
+  const lib = u.protocol === 'https:' ? https : http;
+  const opts = {
+    hostname: u.hostname,
+    port: u.port || (u.protocol === 'https:' ? 443 : 80),
+    path: u.pathname,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+  };
+  const body = JSON.stringify({ message, sessionId, stream: true });
+  return new Promise((resolve, reject) => {
+    const req = lib.request(opts, (res) => {
+      if (res.statusCode !== 200) {
+        let d = '';
+        res.on('data', (c) => (d += c));
+        res.on('end', () => reject(new Error(res.statusCode + ' ' + (d || res.statusMessage))));
+        return;
+      }
+      let buf = '';
+      let full = '';
+      let lastEdit = 0;
+      const EDIT_INTERVAL_MS = 600;
+      const flushEdit = () => {
+        if (full && onEdit && Date.now() - lastEdit >= EDIT_INTERVAL_MS) {
+          lastEdit = Date.now();
+          onEdit(full).catch(() => {});
+        }
+      };
+      res.on('data', (chunk) => {
+        buf += chunk.toString();
+        const lines = buf.split('\n');
+        buf = lines.pop() || '';
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const j = JSON.parse(line.slice(6));
+              if (j.content) {
+                full += j.content;
+                flushEdit();
+              }
+              if (j.done && j.reply != null) {
+                full = j.reply;
+                if (onEdit) onEdit(full).catch(() => {});
+                resolve(full);
+                return;
+              }
+            } catch (_) {}
+          }
+        }
+      });
+      res.on('end', () => {
+        if (full && !req.destroyed) resolve(full);
+        else if (!full) reject(new Error('Empty stream'));
+      });
+      res.on('error', reject);
+    });
+    req.on('error', reject);
+    req.setTimeout(WEBCHAT_TIMEOUT_MS, () => { req.destroy(); reject(new Error('timeout')); });
+    req.write(body);
     req.end();
   });
 }
@@ -128,6 +195,20 @@ function httpRequest(options, body) {
 async function sendMessage(chatId, text) {
   const body = JSON.stringify({ chat_id: chatId, text: String(text).slice(0, 4096) });
   await telegramRequest('/sendMessage', 'POST', body);
+}
+
+/** Send a message and return its message_id (for later editMessage). */
+async function sendMessageWithId(chatId, text) {
+  const body = JSON.stringify({ chat_id: chatId, text: String(text).slice(0, 4096) });
+  const res = await telegramRequest('/sendMessage', 'POST', body);
+  const json = JSON.parse(res.data || '{}');
+  const messageId = json.result && json.result.message_id;
+  return { messageId };
+}
+
+async function editMessage(chatId, messageId, text) {
+  const body = JSON.stringify({ chat_id: chatId, message_id: messageId, text: String(text).slice(0, 4096) });
+  await telegramRequest('/editMessageText', 'POST', body);
 }
 
 async function sendChatAction(chatId, action) {
@@ -307,15 +388,31 @@ async function processMessage(chatId, message) {
 
   // Chat: prefer WebChat API (same Piko as browser), fallback to Ollama
   await sendChatAction(chatId, 'typing').catch(() => {});
-  // If PIKO_UNIFIED_SESSION_ID is set, WebChat and Telegram share one history.
-  const sessionId = process.env.PIKO_UNIFIED_SESSION_ID || sessionIds.get(chatId) || ('tg-' + String(chatId));
+  const sessionId = process.env.PIKO_UNIFIED_SESSION_ID || ('telegram-' + String(chatId));
   if (PIKO_WEBCHAT_URL) {
     try {
-      const u = new URL(PIKO_WEBCHAT_URL + '/api/chat');
+      // Streaming: accumulate reply, then send one message when done (no placeholder)
+      const reply = await webchatStream(PIKO_WEBCHAT_URL, message, sessionId, null);
+      if (reply != null && reply.trim()) {
+        await sendMessage(chatId, reply.trim());
+        return;
+      }
+    } catch (streamErr) {
+      console.error('[WARN] WebChat stream:', streamErr.message);
+    }
+    try {
+      const u = new URL(PIKO_WEBCHAT_URL.replace(/\/$/, '') + '/api/chat');
       const body = JSON.stringify({ message, sessionId });
-      const opts = { hostname: u.hostname, port: u.port || 80, path: u.pathname, method: 'POST', headers: { 'Content-Type': 'application/json' } };
-      const { statusCode, data } = await httpRequest(opts, body);
-      const json = JSON.parse(data);
+      const opts = { hostname: u.hostname, port: u.port || (u.protocol === 'https:' ? 443 : 80), path: u.pathname, method: 'POST', headers: { 'Content-Type': 'application/json' } };
+      const lib = u.protocol === 'https:' ? https : http;
+      const { statusCode, data } = await new Promise((resolve, reject) => {
+        const req = lib.request(opts, (res) => { let d = ''; res.on('data', (c) => (d += c)); res.on('end', () => resolve({ statusCode: res.statusCode, data: d })); });
+        req.on('error', reject);
+        req.setTimeout(WEBCHAT_TIMEOUT_MS, () => { req.destroy(); reject(new Error('timeout')); });
+        req.write(body);
+        req.end();
+      });
+      const json = JSON.parse(data || '{}');
       if (statusCode === 200 && json.reply != null) {
         await sendMessage(chatId, json.reply);
         return;

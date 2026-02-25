@@ -1,0 +1,20 @@
+# Piko WebChat — Phase 5.3. One-command run. Ollama must run on host; see OLLAMA_URL below.
+services:
+  piko:
+    build: .
+    ports:
+      - "3000:3000"
+    volumes:
+      - piko-data:/app/data
+    environment:
+      - PORT=3000
+      - PIKO_DATA_DIR=/app/data
+      # Point to Ollama on host. Mac/Windows: host.docker.internal. Linux: use host IP or run Ollama in a container.
+      - OLLAMA_URL=${OLLAMA_URL:-http://host.docker.internal:11434}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.1:latest}
+    env_file:
+      - .env
+    restart: unless-stopped
+
+volumes:
+  piko-data:

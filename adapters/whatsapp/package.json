@@ -1,0 +1,12 @@
+{
+  "name": "piko-whatsapp-adapter",
+  "version": "1.0.0",
+  "description": "WhatsApp adapter for Piko — Baileys multi-device, forwards messages to POST /api/chat",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.9"
+  }
+}

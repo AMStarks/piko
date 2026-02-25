@@ -5,9 +5,19 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js"
+    "dev": "node server.js",
+    "test": "node --test tests/planner.test.js tests/memory.test.js tests/beliefLoop.test.js"
   },
   "engines": {
     "node": ">=16"
+  },
+  "dependencies": {
+    "@notionhq/client": "^2.2.15",
+    "better-sqlite3": "^12.6.2",
+    "dotenv": "^16.0.0",
+    "litellm": "^0.12.0",
+    "node-cron": "^3.0.3",
+    "pdf-parse": "^1.1.1",
+    "pino": "^10.3.1"
   }
 }

@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>pm2.magnus</string>
+	<key>UserName</key>
+	<string>magnus</string>
+	<key>KeepAlive</key>
+	<true/>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/sh</string>
+		<string>-c</string>
+		<string>/Users/magnus/node-v20.18.0-darwin-x64/lib/node_modules/pm2/bin/pm2 resurrect</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>OnDemand</key>
+	<false/>
+	<key>LaunchOnlyOnce</key>
+	<true/>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/Users/magnus/node-v20.18.0-darwin-x64/bin</string>
+		<key>PM2_HOME</key>
+		<string>/Users/magnus/.pm2</string>
+	</dict>
+	<key>StandardErrorPath</key>
+	<string>/tmp/pm2.magnus.err</string>
+	<key>StandardOutPath</key>
+	<string>/tmp/pm2.magnus.out</string>
+</dict>
+</plist>

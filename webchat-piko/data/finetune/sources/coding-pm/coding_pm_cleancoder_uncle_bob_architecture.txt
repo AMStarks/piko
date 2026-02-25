@@ -1,0 +1,29 @@
+# Source: The Clean Architecture
+# Author: Robert C. Martin (Uncle Bob)
+# URL: https://blog.cleancoder.com/uncle-bob/2012/08/13/the-clean-architecture.html
+# Accessed: Feb 2026
+# Attribution: Robert C. Martin, fair use excerpt.
+
+The Clean Architecture
+
+The objective of Clean Architecture is separation of concerns by dividing the software into layers. The architectures produce systems that are:
+
+1. Independent of any external agency. Your business rules don't know anything about the outside world.
+2. Independent of Database. You can swap out Oracle or SQL Server for Mongo, BigTable, CouchDB. Your business rules are not bound to the database.
+3. Independent of UI. The UI can change easily without changing the rest of the system.
+4. Testable. The business rules can be tested without the UI, Database, Web Server, or any other external element.
+5. Independent of Frameworks. The architecture does not depend on some library. Use frameworks as tools, not constraints.
+
+The Dependency Rule: Source code dependencies can only point inwards. Nothing in an inner circle can know anything about something in an outer circle. Data formats used in an outer circle should not be used by an inner circle.
+
+Entities encapsulate Enterprise-wide business rules. They are the least likely to change when something external changes.
+
+Use Cases contain application-specific business rules. They orchestrate the flow of data to and from the entities. This layer is isolated from database, UI, and frameworks.
+
+Interface Adapters convert data from the format most convenient for use cases and entities to the format most convenient for external agencies (Database, Web). MVC belongs here. All SQL should be restricted to this layer.
+
+Frameworks and Drivers: the outermost layer. The Web is a detail. The database is a detail. Keep these on the outside where they can do little harm.
+
+Use the Dependency Inversion Principle when crossing boundaries. The use case calls an interface in the inner circle; the presenter in the outer circle implements it. Dynamic polymorphism creates source code dependencies that oppose the flow of control.
+
+Data crossing boundaries should be simple data structures—structs, DTOs, or arguments. Don't pass Entities or Database rows inwards. Pass data in the form most convenient for the inner circle.

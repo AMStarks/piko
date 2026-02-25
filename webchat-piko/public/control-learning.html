@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Piko — Learning</title>
+  <style>
+    :root { --bg: #1a1b1e; --surface: #25262a; --border: #3d3f44; --text: #e4e4e7; --dim: #a1a1aa; --accent: #7c9cbf; --ok: #6b9b6b; --warn: #c9a227; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: system-ui, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding: 1rem; }
+    h1 { font-size: 1.25rem; margin: 0 0 1rem 0; }
+    a { color: var(--accent); }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; margin-bottom: 1rem; }
+    .card h2 { font-size: 0.9rem; margin: 0 0 0.5rem 0; color: var(--dim); }
+    .tabs { display: flex; gap: 0.25rem; margin-bottom: 1rem; flex-wrap: wrap; }
+    .tabs button { padding: 0.5rem 1rem; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); color: var(--text); cursor: pointer; font-size: 0.9rem; }
+    .tabs button:hover { background: #2d2e32; }
+    .tabs button.active { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+    .db-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+    .db-table th, .db-table td { text-align: left; padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+    .db-table th { color: var(--dim); font-weight: 600; }
+    .db-table tr:hover td { background: rgba(255,255,255,0.03); }
+    .db-table .actions { white-space: nowrap; }
+    .db-table .actions button { margin-right: 0.25rem; padding: 0.25rem 0.5rem; border-radius: 4px; border: 1px solid var(--border); background: transparent; color: var(--dim); cursor: pointer; font-size: 0.8rem; }
+    .db-table .actions button:hover { color: var(--text); }
+    .db-table .actions button.delete:hover { color: #e07070; }
+    .add-row { margin-top: 0.75rem; }
+    .add-row button { padding: 0.5rem 1rem; border-radius: 6px; border: 1px solid var(--accent); background: var(--accent); color: var(--bg); cursor: pointer; font-size: 0.9rem; }
+    .add-row button:hover { opacity: 0.9; }
+    .bulk-actions { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem; flex-wrap: wrap; }
+    .bulk-actions button { padding: 0.35rem 0.75rem; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); color: var(--dim); cursor: pointer; font-size: 0.85rem; }
+    .bulk-actions button:hover { color: var(--text); }
+    .bulk-actions button.delete-selected { color: #e07070; }
+    .bulk-actions button.delete-selected:hover { background: rgba(224,112,112,0.15); }
+    .bulk-actions button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .search-bar { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem; }
+    .empty-state { color: var(--dim); padding: 1.5rem; text-align: center; font-size: 0.9rem; }
+    #error { color: #e07070; margin-bottom: 0.5rem; }
+    #status { color: var(--dim); font-size: 0.9rem; margin-left: 0.5rem; }
+    .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 100; padding: 1rem; }
+    .modal-overlay.hidden { display: none; }
+    .modal { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.25rem; min-width: 320px; max-width: 560px; width: 100%; max-height: 90vh; overflow-y: auto; }
+    .modal h3 { margin: 0 0 1rem 0; font-size: 1rem; }
+    .modal label { display: block; margin-bottom: 0.25rem; color: var(--dim); font-size: 0.85rem; }
+    .modal input, .modal textarea { width: 100%; padding: 0.5rem 0.75rem; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 0.9rem; font-family: inherit; margin-bottom: 0.75rem; }
+    .modal textarea { min-height: 120px; resize: vertical; }
+    .modal-actions { display: flex; gap: 0.5rem; margin-top: 1rem; }
+    .modal-actions button { padding: 0.5rem 1rem; border-radius: 6px; cursor: pointer; font-size: 0.9rem; }
+    .modal-actions .save { background: var(--ok); color: var(--bg); border: none; }
+    .modal-actions .cancel { background: transparent; color: var(--dim); border: 1px solid var(--border); }
+    .drag-handle { cursor: grab; color: var(--dim); padding: 0 0.25rem; user-select: none; }
+    .drag-handle:active { cursor: grabbing; }
+    .content-cell.editable { cursor: text; }
+    .content-cell.editable:hover { background: rgba(255,255,255,0.05); }
+    .content-cell input.inline-edit { width: 100%; padding: 0.35rem 0.5rem; border: 1px solid var(--accent); border-radius: 4px; background: var(--bg); color: var(--text); font-size: inherit; font-family: inherit; }
+    .loading { color: var(--dim); padding: 1rem; }
+    .control-layout { display: flex; min-height: 100vh; }
+    .control-sidebar { width: 200px; flex-shrink: 0; background: var(--surface); border-right: 1px solid var(--border); padding: 1rem; }
+    .control-sidebar .nav-title { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--dim); margin-bottom: 0.5rem; }
+    .control-sidebar a { display: block; padding: 0.4rem 0.5rem; color: var(--dim); text-decoration: none; border-radius: 6px; font-size: 0.9rem; }
+    .control-sidebar a:hover { color: var(--text); background: rgba(255,255,255,0.05); }
+    .control-sidebar a.active { color: var(--accent); font-weight: 600; }
+    .control-main { flex: 1; padding: 1rem; overflow: auto; max-width: 1200px; }
+    .global-search-wrap { margin-bottom: 1rem; position: relative; }
+    .global-search-wrap input { width: 100%; max-width: 360px; padding: 0.5rem 0.75rem; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); color: var(--text); font-size: 0.9rem; }
+    .global-search-results { position: absolute; left: 0; right: 0; max-width: 480px; max-height: 320px; overflow-y: auto; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; margin-top: 2px; z-index: 50; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
+    .global-search-results section { padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--border); }
+    .global-search-results .section-title { font-size: 0.75rem; color: var(--dim); text-transform: uppercase; margin-bottom: 0.25rem; }
+    .global-search-results a, .global-search-results .item { display: block; padding: 0.25rem 0; font-size: 0.85rem; color: var(--text); text-decoration: none; }
+    @media (max-width: 640px) { .control-sidebar { width: auto; border-right: none; border-bottom: 1px solid var(--border); display: flex; flex-wrap: wrap; gap: 0.25rem; } .control-sidebar .nav-title { width: 100%; } }
+  </style>
+</head>
+<body>
+  <div class="control-layout">
+    <nav class="control-sidebar">
+      <div class="nav-title">Control</div>
+      <a href="/control">Dashboard</a>
+      <a href="/control-prompts">Prompts</a>
+      <a href="/control-learning" class="active">Learning</a>
+      <a href="/control-moltbook">Moltbook</a>
+      <a href="/control-mind">Mind</a>
+      <a href="/control-wisdom">Wisdom core</a>
+      <a href="/control-wisdom-metrics">Wisdom metrics</a>
+      <a href="/control-channels">Channels</a>
+      <a href="/control-integrations">Integrations</a>
+      <a href="/control-accounts">Accounts</a>
+    </nav>
+    <main class="control-main">
+  <div class="global-search-wrap"><input type="text" id="global-search-input" placeholder="🔍 Search learning, prompts, posts…" autocomplete="off" /><div id="global-search-results" class="global-search-results" style="display: none;"></div></div>
+  <a class="back" href="/control" style="display:inline-block;margin-bottom:0.5rem;font-size:0.9rem;">← Control</a>
+  <h1>Learning repo</h1>
+  <p id="error"></p>
+  <div class="tabs" id="tabs"></div>
+  <div class="search-bar" id="search-bar" style="display: none;">
+    <label for="search-input" style="color:var(--dim);font-size:0.85rem;">Search:</label>
+    <input type="text" id="search-input" placeholder="Filter rows…" style="flex:1;min-width:0;max-width:280px;padding:0.4rem 0.6rem;border-radius:6px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:0.9rem;" />
+  </div>
+  <div class="card" id="card">
+    <div class="loading" id="loading">Loading…</div>
+    <div id="content" style="display: none;"></div>
+  </div>
+  <div id="modal" class="modal-overlay hidden">
+    <div class="modal">
+      <h3 id="modal-title">Edit</h3>
+      <label id="modal-label-1">Content</label>
+      <input type="text" id="modal-input-1" placeholder="..." />
+      <div id="modal-row-2" style="display: none;">
+        <label id="modal-label-2">Content</label>
+        <textarea id="modal-input-2" placeholder="..."></textarea>
+      </div>
+      <div id="modal-preview-wrap" style="margin-top:0.75rem;padding:0.5rem 0;border-top:1px solid var(--border);display: none;">
+        <div class="section-title" style="font-size:0.75rem;color:var(--dim);margin-bottom:0.25rem;">Piko says</div>
+        <div id="modal-preview-text" style="font-size:0.9rem;color:var(--text);font-style:italic;"></div>
+        <div id="modal-preview-loading" style="font-size:0.85rem;color:var(--dim);">Loading…</div>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="save" id="modal-save">Save</button>
+        <button type="button" class="cancel" id="modal-cancel">Cancel</button>
+      </div>
+    </div>
+  </div>
+  <script>
+    const el = (id) => document.getElementById(id);
+    function esc(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;'); }
+
+    let databases = [];
+    let currentId = null;
+    let currentData = null; // { items } or { blocks }
+    let searchQuery = '';
+
+    async function loadDatabases() {
+      const r = await fetch('/api/control/learning');
+      if (!r.ok) throw new Error(r.statusText);
+      const d = await r.json();
+      databases = d.databases || [];
+    }
+
+    async function loadDatabase(id) {
+      el('error').textContent = '';
+      searchQuery = '';
+      el('search-input').value = '';
+      el('loading').style.display = 'block';
+      el('content').style.display = 'none';
+      try {
+        const r = await fetch('/api/control/learning/' + id);
+        if (!r.ok) throw new Error(r.statusText);
+        currentData = await r.json();
+        currentId = id;
+        renderTabs();
+        renderContent();
+      } catch (e) {
+        el('error').textContent = 'Load failed: ' + e.message;
+      }
+      el('loading').style.display = 'none';
+      el('content').style.display = 'block';
+    }
+
+    function renderTabs() {
+      el('tabs').innerHTML = databases.map((db) =>
+        `<button type="button" class="${db.id === currentId ? 'active' : ''}" data-id="${esc(db.id)}">${esc(db.name)}</button>`
+      ).join('');
+      el('tabs').querySelectorAll('button').forEach((btn) => {
+        btn.addEventListener('click', () => loadDatabase(btn.dataset.id));
+      });
+    }
+
+    function renderContent() {
+      if (!currentData) return;
+      const isRabbit = currentId === 'rabbit-hole';
+      const maxTensions = 5;
+
+      const card = el('card');
+      const searchBar = el('search-bar');
+      if (isRabbit) {
+        const blocks = currentData.blocks || [];
+        if (blocks.length === 0) {
+          searchBar.style.display = 'none';
+          el('content').innerHTML = '<div class="empty-state">No rabbit-hole notes yet. Add one to get started.</div>';
+        } else {
+          searchBar.style.display = 'flex';
+          el('content').innerHTML = `<div class="bulk-actions"><button type="button" class="select-all-btn">Select all</button><button type="button" class="select-none-btn">Select none</button><button type="button" class="delete-selected-btn delete-selected" disabled>Delete selected</button><button type="button" class="archive-selected-btn" disabled>Archive selected</button><button type="button" class="export-json-btn">Export JSON</button></div>
+            <table class="db-table"><thead><tr><th style="width:2rem"><input type="checkbox" class="select-all-cb" title="Select all" /></th><th></th><th>Title</th><th>Content</th><th class="actions">Actions</th></tr></thead><tbody>
+              ${blocks.map((b, i) => {
+                const title = (b.title || '').slice(0, 60);
+                const content = (b.content || '').slice(0, 80);
+                const searchable = ((b.title || '') + ' ' + (b.content || '')).toLowerCase();
+                return `<tr data-index="${i}" data-search="${esc(searchable)}"><td><input type="checkbox" class="row-select-cb" data-index="${i}" /></td><td class="drag-handle" title="Drag to reorder">⋮⋮</td><td>${esc(title)}${(b.title || '').length > 60 ? '…' : ''}</td><td>${esc(content)}${(b.content || '').length > 80 ? '…' : ''}</td><td class="actions"><button type="button" class="edit-row" data-index="${i}">Edit</button><button type="button" class="delete-row delete" data-index="${i}">Delete</button></td></tr>`;
+              }).join('')}
+            </tbody></table>
+            <div class="add-row"><button type="button" id="add-btn">New note</button></div>`;
+        }
+      } else {
+        const items = currentData.items || [];
+        const isTensions = currentId === 'tensions';
+        if (items.length === 0) {
+          searchBar.style.display = 'none';
+          el('content').innerHTML = `<div class="empty-state">No ${currentId === 'sticky-ideas' ? 'sticky ideas' : 'tensions'} yet. Add one to get started.</div>`;
+        } else {
+          searchBar.style.display = 'flex';
+          el('content').innerHTML = `<div class="bulk-actions"><button type="button" class="select-all-btn">Select all</button><button type="button" class="select-none-btn">Select none</button><button type="button" class="delete-selected-btn delete-selected" disabled>Delete selected</button><button type="button" class="archive-selected-btn" disabled>Archive selected</button><button type="button" class="export-json-btn">Export JSON</button></div>
+            <table class="db-table"><thead><tr><th style="width:2rem"><input type="checkbox" class="select-all-cb" title="Select all" /></th><th></th><th>Content</th><th class="actions">Actions</th></tr></thead><tbody>
+              ${items.map((item, i) => {
+                const searchable = item.toLowerCase();
+                return `<tr data-index="${i}" data-search="${esc(searchable)}"><td><input type="checkbox" class="row-select-cb" data-index="${i}" /></td><td class="drag-handle" title="Drag to reorder">⋮⋮</td><td class="content-cell editable" data-index="${i}" title="Click to edit">${esc(item.slice(0, 120))}${item.length > 120 ? '…' : ''}</td><td class="actions"><button type="button" class="edit-row" data-index="${i}">Edit</button><button type="button" class="delete-row delete" data-index="${i}">Delete</button></td></tr>`;
+              }).join('')}
+            </tbody></table>
+            <div class="add-row"><button type="button" id="add-btn" ${isTensions && items.length >= maxTensions ? 'disabled' : ''}>${isTensions ? 'New tension' : 'New sticky idea'}</button> ${isTensions ? `<span style="color:var(--dim);font-size:0.85rem">(max ${maxTensions})</span>` : ''}</div>`;
+        }
+      }
+
+      el('content').querySelectorAll('.edit-row').forEach((btn) => {
+        btn.addEventListener('click', () => openEdit(parseInt(btn.dataset.index, 10)));
+      });
+      el('content').querySelectorAll('.delete-row').forEach((btn) => {
+        btn.addEventListener('click', () => deleteRow(parseInt(btn.dataset.index, 10)));
+      });
+      const addBtn = el('content').querySelector('#add-btn');
+      if (addBtn) addBtn.addEventListener('click', () => openEdit(-1));
+
+      el('content').querySelectorAll('.content-cell.editable').forEach((cell) => {
+        cell.addEventListener('click', () => startInlineEdit(parseInt(cell.dataset.index, 10)));
+      });
+
+      setupBulkActions();
+      setupDragReorder();
+      applySearchFilter();
+    }
+
+    function applySearchFilter() {
+      const q = (searchQuery || '').trim().toLowerCase();
+      el('content').querySelectorAll('.db-table tbody tr[data-search]').forEach((tr) => {
+        const text = (tr.getAttribute('data-search') || '').toLowerCase();
+        tr.style.display = !q || text.indexOf(q) !== -1 ? '' : 'none';
+      });
+    }
+
+    function setupBulkActions() {
+      const container = el('content');
+      const selectAllCb = container.querySelector('.select-all-cb');
+      const selectAllBtn = container.querySelector('.select-all-btn');
+      const selectNoneBtn = container.querySelector('.select-none-btn');
+      const deleteSelectedBtn = container.querySelector('.delete-selected-btn');
+      const archiveSelectedBtn = container.querySelector('.archive-selected-btn');
+      const exportJsonBtn = container.querySelector('.export-json-btn');
+      const rowCbs = container.querySelectorAll('.row-select-cb');
+      if (!rowCbs.length) return;
+      function updateBulkButtons() {
+        const n = container.querySelectorAll('.row-select-cb:checked').length;
+        if (deleteSelectedBtn) deleteSelectedBtn.disabled = n === 0;
+        if (archiveSelectedBtn) archiveSelectedBtn.disabled = n === 0;
+        if (selectAllCb) selectAllCb.checked = n === rowCbs.length && n > 0;
+        if (selectAllCb) selectAllCb.indeterminate = n > 0 && n < rowCbs.length;
+      }
+      const updateDeleteButton = updateBulkButtons;
+      if (selectAllCb) {
+        selectAllCb.addEventListener('change', () => {
+          rowCbs.forEach((cb) => { cb.checked = selectAllCb.checked; });
+          updateDeleteButton();
+        });
+      }
+      if (selectAllBtn) selectAllBtn.addEventListener('click', () => { rowCbs.forEach((cb) => { cb.checked = true; }); if (selectAllCb) selectAllCb.checked = true; selectAllCb && (selectAllCb.indeterminate = false); updateDeleteButton(); });
+      if (selectNoneBtn) selectNoneBtn.addEventListener('click', () => { rowCbs.forEach((cb) => { cb.checked = false; }); if (selectAllCb) { selectAllCb.checked = false; selectAllCb.indeterminate = false; } updateDeleteButton(); });
+      rowCbs.forEach((cb) => cb.addEventListener('change', updateDeleteButton));
+      if (deleteSelectedBtn) {
+        deleteSelectedBtn.addEventListener('click', () => {
+          const indices = Array.from(container.querySelectorAll('.row-select-cb:checked')).map((c) => parseInt(c.dataset.index, 10)).sort((a, b) => b - a);
+          if (indices.length === 0) return;
+          if (!confirm(`Delete ${indices.length} selected row(s)?`)) return;
+          const isRabbit = currentId === 'rabbit-hole';
+          if (isRabbit) {
+            const blocks = (currentData.blocks || []).filter((_, i) => !indices.includes(i));
+            currentData.blocks = blocks;
+          } else {
+            currentData.items = (currentData.items || []).filter((_, i) => !indices.includes(i));
+          }
+          renderContent();
+          save();
+        });
+      }
+      if (archiveSelectedBtn) {
+        archiveSelectedBtn.addEventListener('click', async () => {
+          const indices = Array.from(container.querySelectorAll('.row-select-cb:checked')).map((c) => parseInt(c.dataset.index, 10));
+          if (indices.length === 0) return;
+          if (!confirm(`Archive ${indices.length} selected row(s) to the archived file?`)) return;
+          try {
+            const r = await fetch('/api/control/learning/' + currentId + '/archive', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ indices }) });
+            const j = await r.json().catch(() => ({}));
+            if (j.ok) { el('error').textContent = ''; el('status').textContent = 'Archived ' + (j.archived || indices.length) + '.'; setTimeout(() => { el('status').textContent = ''; }, 2000); await loadDatabase(currentId); } else { el('error').textContent = j.error || 'Archive failed'; }
+          } catch (e) { el('error').textContent = 'Archive failed: ' + e.message; }
+        });
+      }
+      if (exportJsonBtn) {
+        exportJsonBtn.addEventListener('click', () => {
+          const payload = currentId === 'rabbit-hole' ? { database: currentId, blocks: currentData.blocks } : { database: currentId, items: currentData.items };
+          const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = currentId + '-' + new Date().toISOString().slice(0, 10) + '.json';
+          a.click();
+          URL.revokeObjectURL(a.href);
+        });
+      }
+      updateBulkButtons();
+    }
+
+    function startInlineEdit(index) {
+      const items = [...(currentData.items || [])];
+      const fullText = items[index] || '';
+      const cell = el('content').querySelector(`.content-cell.editable[data-index="${index}"]`);
+      if (!cell) return;
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'inline-edit';
+      input.value = fullText;
+      input.autofocus = true;
+      const finish = () => {
+        const newVal = input.value.trim();
+        if (newVal !== fullText) {
+          items[index] = newVal;
+          currentData.items = items;
+          renderContent();
+          save();
+        } else {
+          cell.textContent = fullText.slice(0, 120) + (fullText.length > 120 ? '…' : '');
+        }
+        input.remove();
+      };
+      input.addEventListener('blur', finish);
+      input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); input.blur(); } if (e.key === 'Escape') { input.value = fullText; input.blur(); } });
+      cell.textContent = '';
+      cell.appendChild(input);
+      input.focus();
+    }
+
+    let previewDebounceTimer;
+    function fetchPreview() {
+      const wrap = document.getElementById('modal-preview-wrap');
+      const textEl = document.getElementById('modal-preview-text');
+      const loadingEl = document.getElementById('modal-preview-loading');
+      if (!wrap || !textEl || !loadingEl) return;
+      const isRabbit = currentId === 'rabbit-hole';
+      const content = (isRabbit ? el('modal-input-2').value : el('modal-input-1').value).trim();
+      const title = isRabbit ? el('modal-input-1').value.trim() : '';
+      if (!content && !title) { wrap.style.display = 'none'; return; }
+      wrap.style.display = 'block';
+      textEl.textContent = '';
+      loadingEl.style.display = 'block';
+      fetch('/api/control/learning/preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ databaseId: currentId, content: isRabbit ? (title + '\n\n' + content) : content, title: isRabbit ? title : undefined }),
+      }).then((r) => r.json()).then((j) => {
+        loadingEl.style.display = 'none';
+        textEl.textContent = (j.preview || '').replace(/^["']|["']$/g, '') || '—';
+      }).catch(() => { loadingEl.style.display = 'none'; textEl.textContent = 'Preview unavailable.'; });
+    }
+    function schedulePreview() {
+      clearTimeout(previewDebounceTimer);
+      previewDebounceTimer = setTimeout(fetchPreview, 1500);
+    }
+    function openEdit(index) {
+      const isRabbit = currentId === 'rabbit-hole';
+      el('modal-title').textContent = index === -1 ? (isRabbit ? 'New note' : (currentId === 'tensions' ? 'New tension' : 'New sticky idea')) : 'Edit';
+      el('modal-row-2').style.display = isRabbit ? 'block' : 'none';
+      el('modal-label-1').textContent = isRabbit ? 'Title' : 'Content';
+      el('modal-label-2').textContent = 'Content';
+      const wrap = document.getElementById('modal-preview-wrap');
+      if (wrap) wrap.style.display = 'none';
+
+      if (index === -1) {
+        el('modal-input-1').value = isRabbit ? new Date().toISOString().slice(0, 10) + ': ' : '';
+        el('modal-input-2').value = '';
+      } else if (isRabbit) {
+        const blocks = currentData.blocks || [];
+        const b = blocks[index] || {};
+        el('modal-input-1').value = b.title || '';
+        el('modal-input-2').value = b.content || '';
+      } else {
+        const items = currentData.items || [];
+        el('modal-input-1').value = items[index] || '';
+      }
+      el('modal').dataset.editIndex = String(index);
+      el('modal').classList.remove('hidden');
+      (isRabbit ? el('modal-input-2') : el('modal-input-1')).focus();
+      schedulePreview();
+    }
+
+    function closeModal() {
+      el('modal').classList.add('hidden');
+    }
+
+    function applyEdit() {
+      const index = parseInt(el('modal').dataset.editIndex, 10);
+      const isRabbit = currentId === 'rabbit-hole';
+      if (isRabbit) {
+        const blocks = [...(currentData.blocks || [])];
+        const title = el('modal-input-1').value.trim() || new Date().toISOString().slice(0, 10) + ': Note';
+        const content = el('modal-input-2').value.trim();
+        if (index === -1) blocks.push({ title, content });
+        else blocks[index] = { title, content };
+        currentData.blocks = blocks;
+      } else {
+        const items = [...(currentData.items || [])];
+        const text = el('modal-input-1').value.trim();
+        if (index === -1) items.push(text);
+        else items[index] = text;
+        currentData.items = items;
+      }
+      closeModal();
+      renderContent();
+      save();
+    }
+
+    function deleteRow(index) {
+      if (!confirm('Delete this row?')) return;
+      const isRabbit = currentId === 'rabbit-hole';
+      if (isRabbit) {
+        currentData.blocks = (currentData.blocks || []).filter((_, i) => i !== index);
+      } else {
+        currentData.items = (currentData.items || []).filter((_, i) => i !== index);
+      }
+      renderContent();
+      save();
+    }
+
+    async function save() {
+      el('error').textContent = '';
+      el('status').textContent = 'Saving…';
+      try {
+        const body = currentId === 'rabbit-hole' ? { blocks: currentData.blocks } : { items: currentData.items };
+        const r = await fetch('/api/control/learning/' + currentId, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.error || r.statusText);
+        el('status').textContent = 'Saved.';
+        setTimeout(() => { el('status').textContent = ''; }, 2000);
+      } catch (e) {
+        el('error').textContent = 'Save failed: ' + e.message;
+      }
+    }
+
+    function setupDragReorder() {
+      const tbody = el('content').querySelector('.db-table tbody');
+      if (!tbody) return;
+      const rows = Array.from(tbody.querySelectorAll('tr'));
+      rows.forEach((row, i) => {
+        const handle = row.querySelector('.drag-handle');
+        if (!handle) return;
+        handle.setAttribute('draggable', 'true');
+        handle.addEventListener('dragstart', (e) => { e.dataTransfer.setData('text/plain', String(i)); e.dataTransfer.effectAllowed = 'move'; });
+      });
+      rows.forEach((row, i) => {
+        row.addEventListener('dragover', (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; });
+        row.addEventListener('drop', (e) => {
+          e.preventDefault();
+          const from = parseInt(e.dataTransfer.getData('text/plain'), 10);
+          if (from === i) return;
+          const isRabbit = currentId === 'rabbit-hole';
+          if (isRabbit) {
+            const blocks = [...(currentData.blocks || [])];
+            const [removed] = blocks.splice(from, 1);
+            blocks.splice(i, 0, removed);
+            currentData.blocks = blocks;
+          } else {
+            const items = [...(currentData.items || [])];
+            const [removed] = items.splice(from, 1);
+            items.splice(i, 0, removed);
+            currentData.items = items;
+          }
+          renderContent();
+          save();
+        });
+      });
+    }
+
+    el('modal-save').addEventListener('click', applyEdit);
+    el('modal-cancel').addEventListener('click', closeModal);
+    el('modal').addEventListener('click', (e) => { if (e.target === el('modal')) closeModal(); });
+    el('modal-input-1').addEventListener('input', schedulePreview);
+    el('modal-input-2').addEventListener('input', schedulePreview);
+
+    el('search-input').addEventListener('input', () => {
+      searchQuery = el('search-input').value;
+      applySearchFilter();
+    });
+
+    (function initGlobalSearch() {
+      const input = document.getElementById('global-search-input');
+      const resultsEl = document.getElementById('global-search-results');
+      let debounceTimer;
+      function esc2(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;'); }
+      function showResults(data) {
+        const parts = [];
+        if (data.learning && data.learning.length) parts.push('<section><div class="section-title">Learning (' + data.learning.length + ')</div>' + data.learning.slice(0, 5).map((x) => '<a href="/control-learning">' + esc2(x.text) + (x.label ? ' (' + x.label + ')' : '') + '</a>').join('') + '</section>');
+        if (data.moltbook && data.moltbook.length) parts.push('<section><div class="section-title">Moltbook (' + data.moltbook.length + ')</div>' + data.moltbook.slice(0, 5).map((x) => '<a href="' + (x.url || '#') + '" target="_blank" rel="noopener">' + esc2(x.text) + (x.date ? ' (' + new Date(x.date).toLocaleDateString() + ')' : '') + '</a>').join('') + '</section>');
+        if (data.journal && data.journal.length) parts.push('<section><div class="section-title">Journal (' + data.journal.length + ')</div>' + data.journal.slice(0, 5).map((x) => '<span class="item">' + esc2(x.text) + '</span>').join('') + '</section>');
+        if (parts.length === 0) resultsEl.innerHTML = '<section><span class="item" style="color:var(--dim)">No results</span></section>'; else resultsEl.innerHTML = parts.join('');
+        resultsEl.style.display = 'block';
+      }
+      function doSearch() {
+        const q = (input && input.value || '').trim();
+        if (q.length < 2) { resultsEl.style.display = 'none'; return; }
+        fetch('/api/control/search?q=' + encodeURIComponent(q)).then((r) => r.json()).then(showResults).catch(() => { resultsEl.innerHTML = '<section><span class="item" style="color:var(--dim)">Search failed</span></section>'; resultsEl.style.display = 'block'; });
+      }
+      if (input) { input.addEventListener('input', () => { clearTimeout(debounceTimer); debounceTimer = setTimeout(doSearch, 300); }); input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { clearTimeout(debounceTimer); doSearch(); } }); }
+      document.addEventListener('click', (e) => { if (resultsEl && input && !resultsEl.contains(e.target) && e.target !== input) resultsEl.style.display = 'none'; });
+    })();
+
+    (async () => {
+      await loadDatabases();
+      if (databases.length) await loadDatabase(databases[0].id);
+      else { el('loading').style.display = 'none'; el('content').innerHTML = '<div class="empty-state">No databases.</div>'; el('content').style.display = 'block'; }
+    })();
+  </script>
+    </main>
+  </div>
+</body>
+</html>

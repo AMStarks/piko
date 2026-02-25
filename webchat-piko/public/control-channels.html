@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Piko — Channels</title>
+  <style>
+    :root { --bg: #1a1b1e; --surface: #25262a; --border: #3d3f44; --text: #e4e4e7; --dim: #a1a1aa; --accent: #7c9cbf; --ok: #6b9b6b; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: system-ui, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding: 1rem; }
+    h1 { font-size: 1.25rem; margin: 0 0 1rem 0; }
+    a { color: var(--accent); }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; margin-bottom: 1rem; }
+    .card h2 { font-size: 0.9rem; margin: 0 0 0.5rem 0; color: var(--dim); }
+    .control-layout { display: flex; min-height: 100vh; }
+    .control-sidebar { width: 200px; flex-shrink: 0; background: var(--surface); border-right: 1px solid var(--border); padding: 1rem; }
+    .control-sidebar .nav-title { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--dim); margin-bottom: 0.5rem; }
+    .control-sidebar a { display: block; padding: 0.4rem 0.5rem; color: var(--dim); text-decoration: none; border-radius: 6px; font-size: 0.9rem; }
+    .control-sidebar a:hover { color: var(--text); background: rgba(255,255,255,0.05); }
+    .control-sidebar a.active { color: var(--accent); font-weight: 600; }
+    .control-main { flex: 1; padding: 1rem; overflow: auto; max-width: 900px; }
+    pre, code { font-size: 0.85rem; color: var(--dim); background: var(--bg); padding: 0.25rem 0.5rem; border-radius: 4px; }
+    pre { white-space: pre-wrap; margin: 0.5rem 0; padding: 0.75rem; }
+    .channel { margin-bottom: 1rem; }
+    .channel-name { font-weight: 600; margin-bottom: 0.25rem; }
+  </style>
+</head>
+<body>
+  <div class="control-layout">
+    <nav class="control-sidebar">
+      <div class="nav-title">Control</div>
+      <a href="/control">Dashboard</a>
+      <a href="/control-prompts">Prompts</a>
+      <a href="/control-learning">Learning</a>
+      <a href="/control-moltbook">Moltbook</a>
+      <a href="/control-mind">Mind</a>
+      <a href="/control-wisdom">Wisdom core</a>
+      <a href="/control-wisdom-metrics">Wisdom metrics</a>
+      <a href="/control-channels" class="active">Channels</a>
+      <a href="/control-integrations">Integrations</a>
+      <a href="/control-accounts">Accounts</a>
+    </nav>
+    <main class="control-main">
+      <a href="/control" style="display:inline-block;margin-bottom:0.5rem;font-size:0.9rem;">← Control</a>
+      <h1>Channels</h1>
+      <p style="color:var(--dim);font-size:0.9rem;">WebChat, iMessage, Telegram, WhatsApp, etc. — same Piko brain. Run each adapter and allowlist sources from WebChat.</p>
+      <div class="card">
+        <h2>iMessage (BlueBubbles)</h2>
+        <div class="channel">
+          <div class="channel-name">Mac + BlueBubbles Server + Piko adapter</div>
+          <p style="margin:0.25rem 0;font-size:0.9rem;">On the Mac that has Messages: install <a href="https://bluebubbles.app/install" target="_blank" rel="noopener">BlueBubbles Server</a>, run the Piko BlueBubbles adapter from this repo (<code>adapters/bluebubbles/</code>). Add webhook <code>http://localhost:3010/webhook</code> (New Messages). Allowlist from WebChat: <code>/allow imessage *</code> or specific chat GUIDs.</p>
+          <p style="margin:0.5rem 0 0 0;font-size:0.85rem;color:var(--dim);">See <code>docs/BLUEBUBBLES_PIKO_IMESSAGE_SETUP.md</code> for full setup. Same session shape as other channels: <code>imessage-&lt;chatGuid&gt;</code>.</p>
+        </div>
+      </div>
+      <div class="card">
+        <h2>WhatsApp (Baileys)</h2>
+        <div class="channel">
+          <div class="channel-name">QR pairing — ~30s</div>
+          <p style="margin:0.25rem 0;font-size:0.9rem;">From the project root (webchat-piko):</p>
+          <pre>cd channels/whatsapp
+npm install
+PIKO_WEBCHAT_URL=<span id="base-url">http://localhost:3000</span> node bot.js</pre>
+          <p style="margin:0.5rem 0 0 0;font-size:0.85rem;color:var(--dim);">Scan the QR in the terminal with WhatsApp → Linked devices → Link a device. Auth saved in <code>channels/whatsapp/auth/</code>.</p>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Telegram</h2>
+        <p style="font-size:0.9rem;">Run the Telegram bot (or hub) that POSTs to <code>/api/chat</code> with <code>sessionId: "telegram-&lt;chatId&gt;"</code>. Allowlist: <code>/allow telegram &lt;chatId&gt;</code> or <code>/allow telegram *</code> from WebChat.</p>
+      </div>
+      <div class="card">
+        <h2>Other channels</h2>
+        <p style="font-size:0.9rem;">Discord, Slack adapters live in <code>adapters/</code>. Same pattern: <code>PIKO_WEBCHAT_URL</code>, channel token, then <code>/allow &lt;source&gt; &lt;id&gt;</code> from WebChat.</p>
+      </div>
+      <div class="card">
+        <h2>Security</h2>
+        <p style="font-size:0.9rem;">Local adapters only — no marketplace. You control pairing and allowlist. Same Wisdom Core and truth engine on every channel.</p>
+      </div>
+    </main>
+  </div>
+  <script>
+    try {
+      document.getElementById('base-url').textContent = window.location.origin || 'http://localhost:3000';
+    } catch (_) {}
+  </script>
+</body>
+</html>

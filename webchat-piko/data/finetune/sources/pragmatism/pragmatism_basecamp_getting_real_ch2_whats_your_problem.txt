@@ -1,0 +1,17 @@
+# Source: Getting Real – Chapter: What's Your Problem?
+# Authors: Jason Fried, David Heinemeier Hansson, 37signals
+# URL: https://basecamp.com/gettingreal/02.2-whats-your-problem
+# Accessed: Feb 2026
+# Attribution: Basecamp/37signals, fair use excerpt.
+
+What's Your Problem?
+
+Build software for yourself. A great way to build software is to start out by solving your own problems. You'll be the target audience and you'll know what's important and what's not. That gives you a great head start on delivering a breakout product. The key: if you're having this problem, it's likely hundreds of thousands of others are in the same boat. There's your market.
+
+Basecamp originated in a problem: As a design firm we needed a simple way to communicate with clients about projects. Every tool we found either didn't do what we needed or was bloated with features we didn't need—billing, strict access controls, charts, graphs. We decided to build our own.
+
+When you solve your own problem, you create a tool that you're passionate about. Passion means you'll truly use it and care about it. And that's the best way to get others to feel passionate about it too.
+
+Scratching your own itch: Open Source embraced this mantra long ago. As the designer or developer, you're faced with hundreds of micro-decisions each day: blue or green? One table or two? Static or dynamic? If it's important, we might ask. The rest, we guess. All that guessing builds up debt—an interconnected web of assumptions. Open Source developers, scratching their own itches, don't suffer this. Because they are their own users, they know the correct answers to 90% of the decisions they have to make. That's one reason folks come home after a hard day and work on open source: It's relaxing. —Dave Thomas, The Pragmatic Programmer
+
+You need to care about it. When you write a book, you need more than an interesting story. You need a desire to tell it. You need to be personally invested. If you're going to live with something for years, you need to care about it. —Malcolm Gladwell

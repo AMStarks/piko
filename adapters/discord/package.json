@@ -1,0 +1,12 @@
+{
+  "name": "piko-discord-adapter",
+  "version": "1.0.0",
+  "description": "Discord adapter for Piko — forwards messages to POST /api/chat",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.14.1"
+  }
+}

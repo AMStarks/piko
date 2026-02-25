@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Piko — Wisdom metrics</title>
+  <style>
+    :root { --bg: #1a1b1e; --surface: #25262a; --border: #3d3f44; --text: #e4e4e7; --dim: #a1a1aa; --accent: #7c9cbf; --ok: #6b9b6b; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: system-ui, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding: 1rem; }
+    h1 { font-size: 1.25rem; margin: 0 0 1rem 0; }
+    a { color: var(--accent); }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; margin-bottom: 1rem; }
+    .card h2 { font-size: 0.9rem; margin: 0 0 0.5rem 0; color: var(--dim); }
+    .control-layout { display: flex; min-height: 100vh; }
+    .control-sidebar { width: 200px; flex-shrink: 0; background: var(--surface); border-right: 1px solid var(--border); padding: 1rem; }
+    .control-sidebar .nav-title { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--dim); margin-bottom: 0.5rem; }
+    .control-sidebar a { display: block; padding: 0.4rem 0.5rem; color: var(--dim); text-decoration: none; border-radius: 6px; font-size: 0.9rem; }
+    .control-sidebar a:hover { color: var(--text); background: rgba(255,255,255,0.05); }
+    .control-sidebar a.active { color: var(--accent); font-weight: 600; }
+    .control-main { flex: 1; padding: 1rem; overflow: auto; max-width: 900px; }
+    .metric-row { display: flex; gap: 1rem; flex-wrap: wrap; margin: 0.5rem 0; }
+    .metric-box { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 0.5rem 0.75rem; font-size: 0.9rem; }
+    .top-wisdom { list-style: none; padding: 0; margin: 0; }
+    .top-wisdom li { padding: 0.4rem 0; border-bottom: 1px solid var(--border); font-size: 0.9rem; }
+    .top-wisdom li:last-child { border-bottom: none; }
+    .wisdom-id { color: var(--accent); font-weight: 600; }
+    .wisdom-score { color: var(--dim); font-size: 0.85rem; }
+    #error { color: #e07070; margin-bottom: 0.5rem; }
+    #status { color: var(--ok); font-size: 0.9rem; }
+  </style>
+</head>
+<body>
+  <div class="control-layout">
+    <nav class="control-sidebar">
+      <div class="nav-title">Control</div>
+      <a href="/control">Dashboard</a>
+      <a href="/control-prompts">Prompts</a>
+      <a href="/control-learning">Learning</a>
+      <a href="/control-moltbook">Moltbook</a>
+      <a href="/control-mind">Mind</a>
+      <a href="/control-wisdom">Wisdom core</a>
+      <a href="/control-wisdom-metrics" class="active">Wisdom metrics</a>
+      <a href="/control-channels">Channels</a>
+      <a href="/control-integrations">Integrations</a>
+      <a href="/control-accounts">Accounts</a>
+    </nav>
+    <main class="control-main">
+      <a href="/control" style="display:inline-block;margin-bottom:0.5rem;font-size:0.9rem;">← Control</a>
+      <h1>Piko maturation dashboard</h1>
+      <p style="color:var(--dim);font-size:0.9rem;">Wisdom growth, relationship trust, and truth engine. Affirm wisdom in chat with e.g. "w001 is spot on".</p>
+      <p id="error"></p>
+      <span id="status"></span>
+      <div id="loading" style="color:var(--dim);padding:0.5rem 0;">Loading…</div>
+      <div id="content" style="display:none;">
+        <div class="card">
+          <h2>Relationship</h2>
+          <div class="metric-row">
+            <span class="metric-box">Wedded: <strong id="days-wedded">0</strong> days</span>
+            <span class="metric-box">Trust: <strong id="trust-score">0</strong>%</span>
+            <span class="metric-box">Advice followed: <strong id="advice-total">0</strong> (7d: <strong id="advice-7d">0</strong>)</span>
+          </div>
+        </div>
+        <div class="card">
+          <h2>Wisdom growth</h2>
+          <div class="metric-row">
+            <span class="metric-box">Total wisdom: <strong id="wisdom-total">0</strong></span>
+            <span class="metric-box">Confirmed: <strong id="wisdom-confirmed">0</strong></span>
+            <span class="metric-box">Last distilled: <strong id="last-distilled">—</strong></span>
+            <span class="metric-box">Maturation score: <strong id="maturation-score">0</strong></span>
+          </div>
+        </div>
+        <div class="card">
+          <h2>Top wisdom (by confirmed × age score)</h2>
+          <ul class="top-wisdom" id="top-wisdom"></ul>
+        </div>
+        <div class="card">
+          <h2>Truth engine (this week)</h2>
+          <div class="metric-row">
+            <span class="metric-box">Claims: <strong id="claims-count">0</strong></span>
+            <span class="metric-box">Confirmed this week: <strong id="confirmed-week">0</strong></span>
+            <span class="metric-box">Corrections: <strong id="corrections-count">0</strong></span>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+  <script>
+    const el = (id) => document.getElementById(id);
+    function setError(msg) { el('error').textContent = msg || ''; }
+
+    function render(m) {
+      const rel = m.relationship || {};
+      const af = rel.advice_followed || {};
+      el('days-wedded').textContent = rel.days_wedded ?? 0;
+      el('trust-score').textContent = Math.round((rel.trust_score ?? 0) * 100);
+      el('advice-total').textContent = af.total ?? 0;
+      el('advice-7d').textContent = af.recent_7d ?? 0;
+
+      const w = m.wisdom || {};
+      el('wisdom-total').textContent = w.total ?? 0;
+      el('wisdom-confirmed').textContent = w.confirmed ?? 0;
+      el('last-distilled').textContent = w.last_distilled || '—';
+      el('maturation-score').textContent = ((m.wisdom_growth || {}).maturation_score ?? 0).toFixed(2);
+
+      const top = (w.top || []).slice(0, 10);
+      el('top-wisdom').innerHTML = top.length
+        ? top.map((x) => `<li><span class="wisdom-id">${escapeHtml(x.id)}</span> "${escapeHtml((x.text || '').slice(0, 80))}${(x.text || '').length > 80 ? '…' : ''}" <span class="wisdom-score">(${x.confirmed ?? 0} confirms, ${x.age_days ?? 0}d → score ${x.score ?? 0})</span></li>`).join('')
+        : '<li style="color:var(--dim);">No wisdom yet. Run nightly distillation on Wisdom core.</li>';
+
+      const te = m.truth_engine || {};
+      el('claims-count').textContent = te.claims_count ?? 0;
+      el('confirmed-week').textContent = te.confirmed_this_week ?? 0;
+      el('corrections-count').textContent = te.corrections_count ?? 0;
+    }
+    function escapeHtml(s) {
+      return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    fetch('/api/metrics')
+      .then((r) => r.ok ? r.json() : Promise.reject(new Error(r.statusText)))
+      .then((data) => {
+        el('loading').style.display = 'none';
+        el('content').style.display = 'block';
+        render(data);
+      })
+      .catch((e) => {
+        el('loading').textContent = 'Failed: ' + e.message;
+        setError(e.message);
+      });
+  </script>
+</body>
+</html>

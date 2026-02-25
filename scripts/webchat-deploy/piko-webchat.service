@@ -11,6 +11,10 @@ RestartSec=5
 Environment=PORT=3000
 Environment=OLLAMA_URL=http://localhost:11434/v1/chat/completions
 Environment=OLLAMA_MODEL=llama3.1:latest
+Environment=PIKO_OLLAMA_ONLY=1
+# Unified session: one bot for WebChat + Telegram (and any other channel hitting /api/chat).
+Environment=PIKO_UNIFIED_SESSION_ID=main
+Environment=PIKO_DAILY_MEMORY_ENABLED=1
 # Optional: Grok (xAI) second opinion when Piko isn't satisfied with Cursor result. Set on Optimus, never commit.
 # Environment=GROK_API_KEY=
 
