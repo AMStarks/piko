@@ -26,7 +26,7 @@ const execAsync = promisify(exec);
 const PORT = Number(process.env.PORT) || 3000;
 const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434/v1/chat/completions';
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'llama3.1:latest';
-const { ai, aiStream, MODEL_PRIMARY } = require('./lib/llm');
+const { ai, aiStream, ollamaNativeChat, MODEL_PRIMARY } = require('./lib/llm');
 const PROMPTS_DIR = path.join(__dirname, 'prompts');
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const HISTORY_DIR = process.env.PIKO_HISTORY_DIR || path.join(__dirname, 'history');
@@ -62,6 +62,7 @@ const AGENT_ENV_OPTIMUS = {
   HOME: process.env.HOME || '/root',
   PATH: process.env.PATH || '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
 };
+const MODEL_GATE_BLOCK_CANDIDATE = process.env.PIKO_MODEL_GATE_BLOCK_CANDIDATE !== '0' && process.env.PIKO_MODEL_GATE_BLOCK_CANDIDATE !== 'false';
 // Grok (xAI) — optional second opinion when Piko isn't satisfied with Cursor's result
 const GROK_API_KEY = process.env.GROK_API_KEY || process.env.XAI_API_KEY;
 const GROK_MODEL = process.env.GROK_MODEL || 'grok-4';
@@ -79,6 +80,76 @@ const EA_ALERTS_FILE = path.join(DATA_DIR, 'ea-alerts.json');
 const EA_PREFERENCES_FILE = path.join(DATA_DIR, 'ea-preferences.json');
 const LINKED_ACCOUNTS_FILE = path.join(DATA_DIR, 'linked-accounts.json');
 const CURRENT_MODEL_FILE = path.join(DATA_DIR, 'current_model.txt');
+const PENDING_CANCEL_FILE = path.join(DATA_DIR, 'pending-cancel-confirmations.json');
+const PROACTIVE_WEBHOOK_URL = String(process.env.PIKO_PROACTIVE_WEBHOOK_URL || '').trim();
+const PROACTIVE_WEBHOOK_WHATSAPP_URL = String(process.env.PIKO_PROACTIVE_WEBHOOK_WHATSAPP_URL || '').trim();
+const PROACTIVE_WEBHOOK_IMESSAGE_URL = String(process.env.PIKO_PROACTIVE_WEBHOOK_IMESSAGE_URL || '').trim();
+const PROACTIVE_WEBHOOK_BEARER = String(process.env.PIKO_PROACTIVE_WEBHOOK_BEARER || '').trim();
+const PROACTIVE_CYCLE_TIMEOUT_MS = Math.max(1000, Number(process.env.PIKO_PROACTIVE_CYCLE_TIMEOUT_MS || 60000));
+const LEGION_ADAPTER_API_BASE = String(process.env.PIKO_LEGION_ADAPTER_API_BASE || process.env.LEGION_ADAPTER_API_BASE || 'http://127.0.0.1:8000').trim();
+const LEGION_ADAPTER_API_BEARER = String(process.env.PIKO_LEGION_ADAPTER_API_BEARER || '').trim();
+const LEGION_BRIEF_DEFAULT_ADAPTER = String(process.env.PIKO_LEGION_BRIEF_DEFAULT_ADAPTER || 'ausmakersupplies').trim();
+const AUSMAKER_BASE_URL = String(process.env.AUSMAKER_BASE_URL || process.env.PIKO_AUSMAKER_BASE_URL || 'http://127.0.0.1:5001').trim();
+const PIKO_WEBHOOK_SECRET = String(process.env.PIKO_WEBHOOK_SECRET || '').trim();
+/** Pending NL intent confirmation: sessionKey -> { extracted, createdAt }. Expires after 5 min. */
+const pendingIntentsBySession = new Map();
+const PENDING_INTENT_EXPIRY_MS = 5 * 60 * 1000;
+const PENDING_CANCEL_TTL_MS = 5 * 60 * 1000;
+
+/** Tracks in-flight requests to coalesce duplicates and prevent OpenClaw state corruption. */
+const inFlightRequests = new Map();
+
+/** Per-session mutex to prevent double-tap history corruption (sequential processing per sessionId). */
+const sessionLocks = new Map();
+async function acquireSessionLock(sessionId, task) {
+  if (!sessionLocks.has(sessionId)) sessionLocks.set(sessionId, Promise.resolve());
+  const previousTask = sessionLocks.get(sessionId);
+  let release;
+  const nextTask = new Promise((resolve) => { release = resolve; });
+  sessionLocks.set(sessionId, previousTask.then(() => nextTask));
+  try {
+    await previousTask;
+    return await task();
+  } finally {
+    release();
+  }
+}
+
+function loadPendingCancelConfirmations() {
+  const map = new Map();
+  try {
+    if (fs.existsSync(PENDING_CANCEL_FILE)) {
+      const raw = fs.readFileSync(PENDING_CANCEL_FILE, 'utf8');
+      const obj = JSON.parse(raw);
+      if (obj && typeof obj === 'object') {
+        const now = Date.now();
+        for (const [k, v] of Object.entries(obj)) {
+          if (v && Array.isArray(v.intentIds) && v.expiresAt && v.expiresAt > now) {
+            map.set(k, { intentIds: v.intentIds, expiresAt: v.expiresAt });
+          }
+        }
+      }
+    }
+  } catch (e) {
+    if (process.env.PIKO_LOG_PLANNER === '1') console.warn('[pendingCancel] load:', e.message);
+  }
+  return map;
+}
+
+function savePendingCancelConfirmations(map) {
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    const obj = {};
+    for (const [k, v] of map.entries()) {
+      if (v && Array.isArray(v.intentIds)) obj[k] = { intentIds: v.intentIds, expiresAt: v.expiresAt };
+    }
+    fs.writeFileSync(PENDING_CANCEL_FILE, JSON.stringify(obj, null, 2), 'utf8');
+  } catch (e) {
+    if (process.env.PIKO_LOG_PLANNER === '1') console.warn('[pendingCancel] save:', e.message);
+  }
+}
+
+const pendingCancelConfirmations = loadPendingCancelConfirmations();
 
 function loadLinkedAccounts() {
   try {
@@ -98,6 +169,133 @@ function saveLinkedAccounts(data) {
     log('warn', 'linked-accounts-save', { error: e.message });
     return false;
   }
+}
+
+function buildConnectorContext() {
+  return {
+    env: process.env,
+    dataDir: DATA_DIR,
+    linkedAccounts: loadLinkedAccounts(),
+  };
+}
+
+function loadMobilePreferences() {
+  const defaults = {
+    quietStart: null,
+    quietEnd: null,
+    mobilePushEnabled: true,
+    backgroundSyncEnabled: true,
+    updatedAt: null,
+  };
+  try {
+    if (!fs.existsSync(EA_PREFERENCES_FILE)) return defaults;
+    const raw = fs.readFileSync(EA_PREFERENCES_FILE, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return defaults;
+    return {
+      ...defaults,
+      ...parsed,
+      mobilePushEnabled: parsed.mobilePushEnabled !== false,
+      backgroundSyncEnabled: parsed.backgroundSyncEnabled !== false,
+      updatedAt: parsed.updatedAt ? String(parsed.updatedAt) : null,
+    };
+  } catch (_) {
+    return defaults;
+  }
+}
+
+function saveMobilePreferences(nextPrefs, expectedUpdatedAt) {
+  const current = loadMobilePreferences();
+  const expected = String(expectedUpdatedAt || '').trim();
+  if (expected && current.updatedAt && expected !== current.updatedAt) {
+    const err = new Error('Preference version conflict');
+    err.code = 'PREFERENCES_CONFLICT';
+    err.current = current;
+    throw err;
+  }
+  const merged = mergeMobilePreferences(current, nextPrefs);
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.writeFileSync(EA_PREFERENCES_FILE, JSON.stringify(merged, null, 2), 'utf8');
+  return merged;
+}
+
+function buildIntentSnapshot(now) {
+  const intents = loadIntents();
+  const reminders = intents.filter((i) => i.type === 'reminder' && (i.status === 'pending' || !i.status));
+  const scheduled = intents.filter((i) => i.type === 'scheduled' && (i.status === 'pending' || !i.status));
+  const queue = intents.filter((i) => (i.type === 'queue' || i.type === 'task') && (i.status === 'pending' || !i.status));
+  const reminderDue = (r) => r.dueAt || r.time;
+  const scheduledRun = (s) => s.dueAt || s.run;
+  const nextReminder = reminders
+    .filter((r) => new Date(reminderDue(r) || 0) > now)
+    .sort((a, b) => new Date(reminderDue(a)) - new Date(reminderDue(b)))[0] || null;
+  const nextScheduled = scheduled
+    .filter((s) => new Date(scheduledRun(s) || 0) > now)
+    .sort((a, b) => new Date(scheduledRun(a)) - new Date(scheduledRun(b)))[0] || null;
+  return {
+    queueLength: queue.length,
+    remindersCount: reminders.length,
+    scheduledCount: scheduled.length,
+    nextReminder: nextReminder ? {
+      at: reminderDue(nextReminder),
+      text: (nextReminder.title || nextReminder.message || nextReminder.text || '').slice(0, 120),
+    } : null,
+    nextScheduled: nextScheduled ? {
+      at: scheduledRun(nextScheduled),
+      command: (nextScheduled.command || '').slice(0, 120),
+    } : null,
+  };
+}
+
+function getMobilePollHintSeconds(intentSnapshot) {
+  if (intentSnapshot.nextReminder) return 60;
+  if (intentSnapshot.queueLength > 0) return 120;
+  return 300;
+}
+
+const OLLAMA_HEALTH_CACHE_MS = Math.max(5000, Number(process.env.PIKO_OLLAMA_HEALTH_CACHE_MS || 30000));
+const OLLAMA_HEALTH_TIMEOUT_MS = Math.max(500, Number(process.env.PIKO_OLLAMA_HEALTH_TIMEOUT_MS || 1500));
+let ollamaHealthCache = { checkedAtMs: 0, ok: null };
+
+async function probeOllamaReachability() {
+  try {
+    const target = new url.URL(OLLAMA_URL);
+    const opts = {
+      hostname: target.hostname,
+      port: target.port || (target.protocol === 'https:' ? 443 : 80),
+      path: '/api/tags',
+      method: 'GET',
+    };
+    const requester = target.protocol === 'https:' ? https : http;
+    const statusCode = await new Promise((resolve, reject) => {
+      const req = requester.request(opts, (res) => {
+        resolve(Number(res.statusCode) || 0);
+        res.resume();
+      });
+      req.on('error', reject);
+      req.setTimeout(OLLAMA_HEALTH_TIMEOUT_MS, () => req.destroy(new Error('timeout')));
+      req.end();
+    });
+    return statusCode >= 200 && statusCode < 500;
+  } catch (_) {
+    return false;
+  }
+}
+
+async function getCachedOllamaHealth() {
+  const nowMs = Date.now();
+  if (ollamaHealthCache.ok !== null && (nowMs - ollamaHealthCache.checkedAtMs) < OLLAMA_HEALTH_CACHE_MS) {
+    return {
+      ok: !!ollamaHealthCache.ok,
+      checkedAt: new Date(ollamaHealthCache.checkedAtMs).toISOString(),
+    };
+  }
+  const ok = await probeOllamaReachability();
+  ollamaHealthCache = { checkedAtMs: nowMs, ok };
+  return {
+    ok,
+    checkedAt: new Date(nowMs).toISOString(),
+  };
 }
 
 function clearEnvVar(key) {
@@ -121,7 +319,6 @@ function clearEnvVar(key) {
   delete process.env[key];
   return true;
 }
-const TAVILY_API_KEY = process.env.TAVILY_API_KEY || process.env.TAVILY_KEY;
 const SERPER_API_KEY = process.env.SERPER_API_KEY || process.env.SERPER_KEY;
 const MOLTBOOK_API_KEY = process.env.MOLTBOOK_API_KEY || process.env.MOLTBOOK_KEY;
 // Phase 2: weather (Open-Meteo), news (RSS or NewsAPI), Gmail
@@ -175,7 +372,19 @@ const DEFAULT_SYSTEM = 'You are ClawFriend (Piko), a witty, empathetic AI assist
 // —— Logging & metrics ——
 const LOG_PATH = process.env.PIKO_LOG_PATH || path.join(DATA_DIR, 'piko.log');
 const LOG_CONSOLE = process.env.PIKO_LOG_CONSOLE === 'true' || process.env.PIKO_LOG_CONSOLE === '1';
-const metrics = { requests: 0, errors: 0, chat: 0, commands: 0 };
+const metrics = {
+  requests: 0,
+  errors: 0,
+  chat: 0,
+  commands: 0,
+  conversation: {
+    route: { casual: 0, socialChat: 0, full: 0, deep: 0 },
+    fallbackApplied: 0,
+    stiltedDetected: 0,
+    resetTrigger: 0,
+    bleedTrigger: 0,
+  },
+};
 const startTime = Date.now();
 const { log: logStructured } = require('./lib/logger');
 function log(level, msg, meta = {}, requestId) {
@@ -184,6 +393,92 @@ function log(level, msg, meta = {}, requestId) {
 }
 const sessionStore = require('./lib/sessionStore');
 const rateLimit = require('./lib/rateLimit');
+
+const CHAT_MAX_CONCURRENCY = Math.max(1, parseInt(process.env.PIKO_CHAT_MAX_CONCURRENCY || '2', 10) || 2);
+const CHAT_QUEUE_MAX = Math.max(0, parseInt(process.env.PIKO_CHAT_QUEUE_MAX || '24', 10) || 24);
+const CHAT_QUEUE_WAIT_MS = Math.max(250, parseInt(process.env.PIKO_CHAT_QUEUE_WAIT_MS || '2000', 10) || 2000);
+let chatInFlight = 0;
+const chatQueue = [];
+
+metrics.conversation.chatQueue = {
+  inFlight: 0,
+  queued: 0,
+  maxConcurrency: CHAT_MAX_CONCURRENCY,
+  maxQueue: CHAT_QUEUE_MAX,
+  waitMs: CHAT_QUEUE_WAIT_MS,
+  admitted: 0,
+  rejected: 0,
+  timedOut: 0,
+  peakInFlight: 0,
+  peakQueued: 0,
+};
+
+function updateChatQueueMetrics() {
+  const cq = metrics.conversation.chatQueue;
+  cq.inFlight = chatInFlight;
+  cq.queued = chatQueue.length;
+  cq.peakInFlight = Math.max(cq.peakInFlight, chatInFlight);
+  cq.peakQueued = Math.max(cq.peakQueued, chatQueue.length);
+}
+
+function releaseChatSlot() {
+  chatInFlight = Math.max(0, chatInFlight - 1);
+  while (chatQueue.length > 0) {
+    const next = chatQueue.shift();
+    if (!next || next.cancelled) continue;
+    if (next.timer) clearTimeout(next.timer);
+    chatInFlight += 1;
+    updateChatQueueMetrics();
+    metrics.conversation.chatQueue.admitted += 1;
+    next.resolve(() => {
+      if (next.released) return;
+      next.released = true;
+      releaseChatSlot();
+    });
+    return;
+  }
+  updateChatQueueMetrics();
+}
+
+function acquireChatSlot() {
+  if (chatInFlight < CHAT_MAX_CONCURRENCY) {
+    chatInFlight += 1;
+    updateChatQueueMetrics();
+    metrics.conversation.chatQueue.admitted += 1;
+    return Promise.resolve(() => releaseChatSlot());
+  }
+  if (chatQueue.length >= CHAT_QUEUE_MAX) {
+    const err = new Error('Chat queue full');
+    err.code = 'chat_queue_full';
+    metrics.conversation.chatQueue.rejected += 1;
+    updateChatQueueMetrics();
+    return Promise.reject(err);
+  }
+  return new Promise((resolve, reject) => {
+    const entry = { resolve, reject, cancelled: false, released: false, timer: null };
+    entry.timer = setTimeout(() => {
+      entry.cancelled = true;
+      metrics.conversation.chatQueue.timedOut += 1;
+      updateChatQueueMetrics();
+      const err = new Error('Chat queue wait timeout');
+      err.code = 'chat_queue_timeout';
+      reject(err);
+    }, CHAT_QUEUE_WAIT_MS);
+    chatQueue.push(entry);
+    updateChatQueueMetrics();
+  });
+}
+
+const DATA_SOUL_PATH = path.join(DATA_DIR, 'SOUL.md');
+
+function loadDataSoul() {
+  try {
+    if (fs.existsSync(DATA_SOUL_PATH)) {
+      return fs.readFileSync(DATA_SOUL_PATH, 'utf8').trim();
+    }
+  } catch (_) {}
+  return '';
+}
 
 function loadSystemPrompt() {
   let identity = '';
@@ -343,13 +638,96 @@ const {
   createIntent,
   updateIntent,
   parseDuration,
+  nextDueFromSchedule,
 } = require('./lib/intents.js');
+
+/** Normalize natural-language schedule from LLM to canonical format for nextDueFromSchedule. */
+function normalizeSchedule(s) {
+  if (!s || typeof s !== 'string') return s;
+  let out = s
+    .toLowerCase()
+    .replace(/every hour (from|between) /gi, 'hourly ')
+    .replace(/\s+to\s+|\s+and\s+/g, '-')
+    .replace(/\s+at\s+/g, ' ')
+    .replace(/\s+daily\s*$/g, '')
+    .trim();
+  // 12h -> 24h for common patterns (6am -> 06:00, 11pm -> 23:00)
+  out = out.replace(/(\d{1,2})(?::(\d{2}))?\s*am\b/gi, (_, h, m) => {
+    const hr = parseInt(h, 10);
+    const hour = hr === 12 ? 0 : hr;
+    return `${String(hour).padStart(2, '0')}:${(m || '00')}`;
+  });
+  out = out.replace(/(\d{1,2})(?::(\d{2}))?\s*pm\b/gi, (_, h, m) => {
+    const hr = parseInt(h, 10);
+    const hour = hr === 12 ? 12 : hr + 12;
+    return `${String(hour).padStart(2, '0')}:${(m || '00')}`;
+  });
+  return out;
+}
 const { updateMind, loadMind, saveSelfModel, saveBeliefs } = require('./lib/mind');
 const { getCorpusBlockForPrompt, regenerateSummary, loadCorpus, DOCS: CORPUS_DOCS, readDoc, CORPUS_DIR } = require('./lib/corpus');
+const { getKnowledgeBaseBlockForPrompt } = require('./lib/knowledgeBase');
 const { getTruthBlockForPrompt, appendCorrection, getTruthStats } = require('./lib/truth');
 const beliefLoop = require('./lib/beliefLoop');
 const memory = require('./lib/memory');
-const { createResponsePlan, formatPlanForPrompt } = require('./lib/planner');
+const { createResponsePlan, formatPlanForPrompt, classifyDepthOptional } = require('./lib/planner');
+const { loadPolicy: loadProactivePolicy, savePolicy: saveProactivePolicy } = require('./lib/proactivePolicy');
+const { listDecisions: listLegateDecisions, findDecisionByTrace } = require('./lib/phase0/decisionLedger');
+const { sendLegionCommand } = require('./lib/phase0/legionClient');
+const { executeDecisionAction, replayDecisionActionDeadLetter } = require('./lib/phase0/decisionActions');
+const { listDeadLetters: listLegateActionDeadLetters } = require('./lib/phase0/actionDeadLetters');
+const { getSnapshot: getLegateLinkReliability } = require('./lib/phase0/linkReliability');
+const {
+  recordEvent: recordLegateObsEvent,
+  getObservability: getLegateObservability,
+  getTraceCorrelation: getLegateTraceCorrelation,
+  getSloSnapshot: getLegateSloSnapshot,
+} = require('./lib/phase0/observability');
+const { loadRollout: loadLegateRollout, saveRollout: saveLegateRollout, canExecuteProductionAction } = require('./lib/phase0/rollout');
+const {
+  startBriefSession,
+  getBriefSession,
+  clearBriefSession,
+  nextMissingField,
+  isBriefComplete,
+  setBriefField,
+  parseFieldValueLine,
+  formatRecap,
+  appendConfirmedBrief,
+} = require('./lib/phase0/legionBrief');
+const { isLegionApproveAllowed, verifyAndStripApprovalPin } = require('./lib/legionApprove');
+const { handleConversationQualityRoute } = require('./lib/routes/controlConversationQuality');
+const { handleLegateEventsRoute } = require('./lib/routes/legateEvents');
+const { handleLegateDecisionRequestRoute } = require('./lib/routes/legateDecisionRequest');
+const { listConnectors, getConnectorHealth, invokeConnector } = require('./lib/connectors');
+const { createProactiveEngine } = require('./lib/proactiveEngine');
+const { createProactiveCycleRunner } = require('./lib/proactive/schedulerRunner');
+const {
+  loadState,
+  upsertDeviceHeartbeat,
+  registerPushToken,
+  recordPushAck,
+  listDevices,
+  getMobileReliabilityMetrics,
+} = require('./lib/mobileState');
+const { toWidgetPayload, toLiveActivityPayload, toIosDashboardPayload } = require('./lib/mobileContracts');
+const { decideMobilePoll } = require('./lib/mobileCadence');
+const { loadRules, createRule, updateRule, deleteRule, toggleRule } = require('./lib/webhookRules');
+const { processWebhookEvent } = require('./lib/webhookProcessor');
+const {
+  makeWeakEtag,
+  parseIfMatchVersion,
+  buildMobilePolicyPatch,
+  mergeMobilePreferences,
+} = require('./lib/mobileSync');
+const {
+  loadRegistry,
+  promoteModel,
+  rollbackModel,
+  upsertModel,
+  getLatestGateEvaluation,
+  getModelOpsOverview,
+} = require('./lib/modelRegistry');
 /** Resolve path under SANDBOX_DIR; return null if outside sandbox or invalid. */
 function resolveSandboxPath(userPath) {
   if (!userPath || typeof userPath !== 'string') return null;
@@ -381,6 +759,86 @@ function saveSessionsConfig(config) {
   }
 }
 
+function appendPendingNotification(line) {
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.appendFileSync(PENDING_NOTIFICATIONS_FILE, String(line || '').slice(0, 2000) + '\n', 'utf8');
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function resolveProactiveWebhookUrl(meta) {
+  const rawTarget = String((meta && meta.target) || '').trim();
+  const target = rawTarget.toLowerCase();
+  if (rawTarget.startsWith('http://') || rawTarget.startsWith('https://')) return rawTarget;
+  if (target === 'whatsapp_bridge' && PROACTIVE_WEBHOOK_WHATSAPP_URL) return PROACTIVE_WEBHOOK_WHATSAPP_URL;
+  if (target === 'imessage_bridge' && PROACTIVE_WEBHOOK_IMESSAGE_URL) return PROACTIVE_WEBHOOK_IMESSAGE_URL;
+  return PROACTIVE_WEBHOOK_URL;
+}
+
+async function sendProactiveWebhook(message, meta) {
+  const target = String((meta && meta.target) || '').toLowerCase();
+  const endpoint = resolveProactiveWebhookUrl(meta);
+  if (target === 'whatsapp_bridge' && !PROACTIVE_WEBHOOK_WHATSAPP_URL && !PROACTIVE_WEBHOOK_URL) {
+    throw new Error('Missing PIKO_PROACTIVE_WEBHOOK_WHATSAPP_URL (or global webhook fallback)');
+  }
+  if (target === 'imessage_bridge' && !PROACTIVE_WEBHOOK_IMESSAGE_URL && !PROACTIVE_WEBHOOK_URL) {
+    throw new Error('Missing PIKO_PROACTIVE_WEBHOOK_IMESSAGE_URL (or global webhook fallback)');
+  }
+  if (!endpoint) throw new Error('No proactive webhook endpoint configured');
+  let parsed;
+  try {
+    parsed = new url.URL(endpoint);
+  } catch (_) {
+    throw new Error('Invalid proactive webhook URL');
+  }
+  const body = JSON.stringify({
+    source: 'piko_proactive',
+    at: new Date().toISOString(),
+    channel: meta && meta.channel ? String(meta.channel).slice(0, 60) : 'webhook',
+    target: meta && meta.target ? String(meta.target).slice(0, 60) : 'webhook',
+    urgency: meta && meta.urgency ? String(meta.urgency).slice(0, 20) : 'normal',
+    message: String(message || '').slice(0, 2000),
+  });
+  const headers = {
+    'Content-Type': 'application/json',
+    'Content-Length': Buffer.byteLength(body),
+    'User-Agent': 'piko-proactive/1.0',
+  };
+  if (PROACTIVE_WEBHOOK_BEARER) headers.Authorization = 'Bearer ' + PROACTIVE_WEBHOOK_BEARER;
+  const opts = {
+    hostname: parsed.hostname,
+    port: parsed.port || (parsed.protocol === 'http:' ? 80 : 443),
+    path: (parsed.pathname || '/') + (parsed.search || ''),
+    method: 'POST',
+    headers,
+  };
+  const requester = parsed.protocol === 'http:' ? httpRequest : httpsRequest;
+  const { statusCode, data } = await requester(opts, body);
+  if (statusCode < 200 || statusCode >= 300) {
+    const payload = String(data || '').slice(0, 200);
+    throw new Error(`Webhook dispatch failed (${statusCode}): ${payload}`);
+  }
+  return { ok: true };
+}
+
+const proactiveEngine = createProactiveEngine({
+  dataDir: DATA_DIR,
+  loadPolicy: loadProactivePolicy,
+  loadIntents,
+  sendTelegram: telegramNotify,
+  appendPending: appendPendingNotification,
+  sendWebhook: sendProactiveWebhook,
+  log,
+});
+const proactiveCycleRunner = createProactiveCycleRunner({
+  runCycle: proactiveEngine.runCycle,
+  log,
+  defaultTimeoutMs: PROACTIVE_CYCLE_TIMEOUT_MS,
+});
+
 /** Model override: data/current_model.txt holds an Ollama tag (e.g. qwen2.5:32b). Used when no per-session model is set. */
 function getCurrentModelOverride() {
   try {
@@ -390,6 +848,14 @@ function getCurrentModelOverride() {
     }
   } catch (_) {}
   return null;
+}
+
+function setCurrentModelOverride(tag) {
+  const value = String(tag || '').trim();
+  if (!value) throw new Error('Missing model tag');
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.writeFileSync(CURRENT_MODEL_FILE, value, 'utf8');
+  return value;
 }
 
 // —— Allowlist (per-channel DM pairing) ——
@@ -419,6 +885,90 @@ function parseSessionSource(sessionId) {
   if (idx <= 0) return { source: 'webchat', externalId: null };
   return { source: sessionId.slice(0, idx).toLowerCase(), externalId: sessionId.slice(idx + 1) };
 }
+// Non-human automation clients should never share the unified human chat memory.
+function isAutomationSession(sessionId) {
+  const s = String(sessionId || '').trim().toLowerCase();
+  if (!s) return false;
+  const exact = new Set([
+    'intent-poller',
+    'scheduler',
+    'cron',
+    'system',
+    'worker',
+    'healthcheck',
+    'auto',
+  ]);
+  if (exact.has(s)) return true;
+  return (
+    s.startsWith('intent-') ||
+    s.startsWith('scheduler-') ||
+    s.startsWith('cron-') ||
+    s.startsWith('system-') ||
+    s.startsWith('worker-') ||
+    s.startsWith('auto-') ||
+    s.startsWith('health-') ||
+    s.includes('poller')
+  );
+}
+/**
+ * Learning-related questions. When true:
+ * - At fast-path (2945): return buildLearningUpdateReply() immediately — NO LLM, no timeout.
+ * - At full-path (3107): inject RAG + learning blocks (only for explicit "what have you learned" etc).
+ * Casual check-ins like "have you been learning much recently?" take the fast path to avoid timeouts.
+ */
+function requestsLearningUpdate(message) {
+  const text = String(message || '').toLowerCase();
+  return (
+    /\bhave you been learning\b/.test(text) ||
+    /\blearned (anything|much)\b/.test(text) ||
+    /what (have|did) you (been\s+)?learn(ing|ed)/.test(text) ||
+    /what are you learning/.test(text) ||
+    /(tell me|what)'?s?\s+(about|your)\s+(recent\s+)?learning/.test(text) ||
+    /anything (new|interesting) (you've|you have)?\s*learn/.test(text) ||
+    /\brecent learning\b/.test(text) ||
+    /\brabbit[- ]?hole\b/.test(text) ||
+    /^\/learning\b/.test(text)
+  );
+}
+function isSimpleStatusAck(message) {
+  const text = String(message || '').trim().toLowerCase();
+  if (!text || /\?/.test(text)) return false;
+  return /^(so far so good|so far, so good|all good|good thanks|doing good|doing well|not bad|pretty good|fine thanks|same here|sounds good|nice|cool|ok|okay|alright|cheers|thanks)[.!]*$/.test(text);
+}
+function pickBySeed(items, seed) {
+  if (!Array.isArray(items) || items.length === 0) return '';
+  const s = String(seed || '');
+  let h = 0;
+  for (let i = 0; i < s.length; i += 1) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return items[h % items.length];
+}
+function isToneDriftComplaint(message) {
+  const text = String(message || '').toLowerCase();
+  return /\b(random|weird|disjointed|off|odd|strange)\b/.test(text) && /\?/.test(text);
+}
+function buildLearningUpdateReply() {
+  const fallback = "Lately I've been testing conversational reliability and agent orchestration workflows.";
+  try {
+    if (!fs.existsSync(RABBIT_HOLE_NOTES_FILE)) return fallback;
+    const raw = fs.readFileSync(RABBIT_HOLE_NOTES_FILE, 'utf8');
+    const blocks = raw.split(/\n## /).filter(Boolean);
+    const last = (blocks.slice(-1)[0] || '').trim();
+    if (!last) return fallback;
+    const lines = last.split(/\n/).map((l) => l.trim()).filter(Boolean);
+    // Prefer the first content line after timestamp/title lines.
+    const candidate = lines.find((l) => !/^#/.test(l) && !/^\d{4}-\d{2}-\d{2}/.test(l) && l.length > 15) || '';
+    const clean = candidate
+      .replace(/^[-*•]\s*/, '')
+      .replace(/[`*_#]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!clean) return fallback;
+    const out = clean.slice(0, 180);
+    return /[.!?]$/.test(out) ? out : `${out}.`;
+  } catch (_) {
+    return fallback;
+  }
+}
 function isAllowedByAllowlist(allowlist, source, externalId) {
   if (source === 'webchat') return true;
   const list = allowlist[source];
@@ -443,11 +993,264 @@ try {
 }
 
 const MAX_HISTORY = sessionStore.MAX_HISTORY;
-const SLICE_HISTORY = 30;
+const SLICE_HISTORY = Math.max(6, Math.min(30, parseInt(process.env.PIKO_SLICE_HISTORY || '6', 10) || 6));
 
 function parseUrl(u) {
   const parsed = url.parse(u, true);
   return { pathname: parsed.pathname || '/', query: parsed.query };
+}
+
+function extractWordLimit(message) {
+  const text = String(message || '').toLowerCase();
+  const digitMatch = text.match(/(?:under|in|to|at most|max)\s+(\d+)\s+words?/i) || text.match(/(\d+)\s+words?\s+max/i);
+  if (digitMatch && Number(digitMatch[1]) > 0) return Number(digitMatch[1]);
+  const wordMap = {
+    one: 1, two: 2, three: 3, four: 4, five: 5, six: 6,
+    seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12,
+  };
+  const wordMatch = text.match(/(?:under|in|to|at most|max)\s+(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+words?/i);
+  if (wordMatch && wordMap[wordMatch[1]]) return wordMap[wordMatch[1]];
+  return 0;
+}
+
+function extractSentenceLimit(message) {
+  const text = String(message || '').toLowerCase();
+  if (/(one|1|single)\s+sentence/.test(text)) return 1;
+  if (/(one|1|single)\s+line/.test(text)) return 1;
+  return 0;
+}
+
+function requestsNoQuestion(message) {
+  const text = String(message || '').toLowerCase();
+  return /do not ask questions?/.test(text) || /\bno questions?\b/.test(text) || /\bno question\b/.test(text);
+}
+
+function isKeepItShortPrompt(message) {
+  const text = String(message || '').toLowerCase().trim();
+  return /(keep it short|keep this short|keep it brief|be brief|short reply|brief reply)/.test(text);
+}
+
+function requestsLegionBrief(message) {
+  const text = String(message || '').toLowerCase().trim();
+  if (!text) return false;
+  if (text === 'legion brief') return true;
+  if (text.startsWith('/legion brief') || text.startsWith('/legion-brief')) return true;
+  return /(start|create|make|prepare|fill|do|need|want|ask for|give me)\b[\s\S]{0,40}\blegion brief\b/.test(text);
+}
+
+function inferLegionAdapterFromBrief(fields) {
+  const objective = String(fields && fields.objective || '').toLowerCase();
+  const scope = String(fields && fields.scope || '').toLowerCase();
+  const merged = `${objective} ${scope}`;
+  if (/\baus\s*maker\b|\bausmaker\b|\bcin7\b|\bshopify\b/.test(merged)) return 'ausmakersupplies';
+  return LEGION_BRIEF_DEFAULT_ADAPTER || 'ausmakersupplies';
+}
+
+const { inferCapabilityFromObjectiveAsync } = require('./lib/legionCapabilities');
+
+function postJsonToUrl(urlString, payload, options = {}) {
+  return new Promise((resolve, reject) => {
+    let u;
+    try { u = new URL(urlString); } catch (e) { return reject(e); }
+    const body = JSON.stringify(payload || {});
+    const timeoutMs = Math.max(1000, Number(options.timeoutMs || 15000));
+    const headers = {
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(body),
+      ...(options.headers || {}),
+    };
+    const lib = u.protocol === 'https:' ? https : http;
+    const req = lib.request({
+      hostname: u.hostname,
+      port: u.port || (u.protocol === 'https:' ? 443 : 80),
+      path: `${u.pathname}${u.search || ''}`,
+      method: 'POST',
+      headers,
+    }, (res) => {
+      let raw = '';
+      res.on('data', (c) => { raw += c; });
+      res.on('end', () => {
+        let parsed = {};
+        try { parsed = raw ? JSON.parse(raw) : {}; } catch (_) {}
+        resolve({ statusCode: res.statusCode || 0, body: parsed, raw });
+      });
+    });
+    req.on('error', reject);
+    req.setTimeout(timeoutMs, () => req.destroy(new Error('request timeout')));
+    req.write(body);
+    req.end();
+  });
+}
+
+async function dispatchLegionBrief(brief, dispatchContext) {
+  const fields = brief && brief.fields ? brief.fields : {};
+  const adapterId = inferLegionAdapterFromBrief(fields);
+  const model = dispatchContext && dispatchContext.model;
+  const capability = await inferCapabilityFromObjectiveAsync(fields, DATA_DIR, model);
+  if (!adapterId || !capability) {
+    return { ok: false, code: 'NO_CAPABILITY_MATCH', message: 'Could not infer adapter/capability from brief objective.' };
+  }
+  const endpoint = `${LEGION_ADAPTER_API_BASE.replace(/\/$/, '')}/api/adapters/${encodeURIComponent(adapterId)}/run`;
+  const payload = {
+    capability,
+    input: {
+      include_raw: capability === 'inventory.low_stock.scan',
+    },
+    context: {
+      trace_id: `trc_brief_${Date.now()}`,
+      brief_id: `lbrief_${Date.now()}`,
+      project_id: adapterId,
+      execution_mode: String(fields.execution_mode || 'needs_approval'),
+      requested_by: 'piko',
+      risk_level: String(fields.risk_level || 'medium'),
+      piko_user_id: String(dispatchContext && dispatchContext.piko_user_id || ''),
+      piko_decision_id: `dec_brief_${Date.now()}`,
+    },
+  };
+  const headers = LEGION_ADAPTER_API_BEARER ? { Authorization: `Bearer ${LEGION_ADAPTER_API_BEARER}` } : {};
+  const timeoutMs = Math.max(5000, parseInt(process.env.PIKO_LEGION_TIMEOUT_MS || '20000', 10));
+  const res = await postJsonToUrl(endpoint, payload, { timeoutMs, headers });
+  if (res.statusCode >= 200 && res.statusCode < 300 && res.body && res.body.ok) {
+    return {
+      ok: true,
+      adapterId,
+      capability,
+      runId: String(res.body.run_id || ''),
+      status: String(res.body.status || 'accepted'),
+    };
+  }
+  return {
+    ok: false,
+    code: 'DISPATCH_FAILED',
+    message: `Legion dispatch failed (HTTP ${res.statusCode})`,
+    details: res.body && res.body.error ? res.body.error : null,
+  };
+}
+
+const LEGION_APPROVE_PENDING_FILE = path.join(DATA_DIR, 'phase0-legion-approve-pending.json');
+
+function loadApprovalPending() {
+  try {
+    if (!fs.existsSync(LEGION_APPROVE_PENDING_FILE)) return {};
+    const raw = fs.readFileSync(LEGION_APPROVE_PENDING_FILE, 'utf8');
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function setApprovalPending(sessionKey, opts = {}) {
+  const data = loadApprovalPending();
+  data[sessionKey] = {
+    awaiting: 'po_submit',
+    since: new Date().toISOString(),
+    source: opts.source || null,
+  };
+  fs.mkdirSync(path.dirname(LEGION_APPROVE_PENDING_FILE), { recursive: true });
+  fs.writeFileSync(LEGION_APPROVE_PENDING_FILE, JSON.stringify(data, null, 2), 'utf8');
+}
+
+function clearApprovalPending(sessionKey) {
+  const data = loadApprovalPending();
+  if (data[sessionKey]) {
+    delete data[sessionKey];
+    fs.writeFileSync(LEGION_APPROVE_PENDING_FILE, JSON.stringify(data, null, 2), 'utf8');
+  }
+}
+
+async function dispatchLegionPoSubmit(poPayload, dispatchContext) {
+  const adapterId = LEGION_BRIEF_DEFAULT_ADAPTER || 'ausmakersupplies';
+  const endpoint = `${LEGION_ADAPTER_API_BASE.replace(/\/$/, '')}/api/adapters/${encodeURIComponent(adapterId)}/run`;
+  const payload = {
+    capability: 'purchase_order.submit',
+    input: {
+      purchase_order_payload: poPayload,
+      dry_run: false,
+    },
+    context: {
+      trace_id: `trc_approve_${Date.now()}`,
+      execution_mode: 'auto',
+      requested_by: 'piko',
+      piko_user_id: String(dispatchContext && dispatchContext.piko_user_id || ''),
+      piko_decision_id: `dec_approve_${Date.now()}`,
+    },
+  };
+  const headers = LEGION_ADAPTER_API_BEARER ? { Authorization: `Bearer ${LEGION_ADAPTER_API_BEARER}` } : {};
+  const res = await postJsonToUrl(endpoint, payload, { timeoutMs: 30000, headers });
+  if (res.statusCode >= 200 && res.statusCode < 300 && res.body && res.body.ok) {
+    return {
+      ok: true,
+      adapterId,
+      runId: String(res.body.run_id || ''),
+      status: String(res.body.status || 'accepted'),
+      result: res.body.result,
+    };
+  }
+  return {
+    ok: false,
+    code: 'DISPATCH_FAILED',
+    message: `Legion PO submit failed (HTTP ${res.statusCode})`,
+    details: res.body && res.body.error ? res.body.error : null,
+  };
+}
+
+function enforceReplyConstraints(reply, constraints = {}) {
+  let text = String(reply || '').trim();
+  if (!text) return text;
+  const maxSentences = Number(constraints.maxSentences || 0);
+  const noQuestion = constraints.noQuestion === true;
+  const maxWords = Number(constraints.maxWords || 0);
+
+  if (maxSentences > 0) {
+    const bits = text.split(/(?<=[.!?])\s+/).filter(Boolean);
+    text = bits.slice(0, maxSentences).join(' ').trim() || text;
+  }
+  if (noQuestion) {
+    text = text.replace(/\?/g, '.');
+  }
+  if (maxWords > 0) {
+    text = truncateToWords(text, maxWords);
+  }
+  if (!/[.!?]$/.test(text)) text += '.';
+  return text;
+}
+
+function truncateToWords(text, maxWords) {
+  const words = String(text || '').trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return '';
+  const take = Math.max(1, Math.min(20, Number(maxWords) || 1));
+  const out = words.slice(0, take).join(' ');
+  return /[.!?]$/.test(out) ? out : `${out}.`;
+}
+
+function findRequestedNickname(history, sessionKey) {
+  try {
+    const durable = memory.getSessionNickname(sessionKey);
+    if (durable) return durable;
+  } catch (_) {}
+  const priorUsers = Array.isArray(history) ? history.filter((m) => m && m.role === 'user').map((m) => String(m.content || '')) : [];
+  for (let i = priorUsers.length - 1; i >= 0; i -= 1) {
+    const line = priorUsers[i];
+    let m = line.match(/nickname is\s+([a-z0-9_-]+)/i);
+    if (m && m[1]) return m[1];
+    m = line.match(/call me\s+([a-z0-9_-]+)/i);
+    if (m && m[1]) return m[1];
+    m = line.match(/use\s+([a-z0-9_-]+)\s+as my nickname/i);
+    if (m && m[1]) return m[1];
+  }
+  return '';
+}
+
+function extractNicknameFromMessage(message) {
+  const text = String(message || '').trim();
+  let m = text.match(/nickname is\s+([a-z0-9_-]+)/i);
+  if (m && m[1]) return m[1];
+  m = text.match(/call me\s+([a-z0-9_-]+)/i);
+  if (m && m[1]) return m[1];
+  m = text.match(/use\s+([a-z0-9_-]+)\s+as my nickname/i);
+  if (m && m[1]) return m[1];
+  return '';
 }
 
 function httpRequest(options, body) {
@@ -665,21 +1468,38 @@ async function fetchMoltbookPostsByPiko(key) {
 async function ollamaChat(messages, model, options = {}) {
   const m = model || OLLAMA_MODEL;
   const normalized = (m && m.startsWith('ollama/')) ? m : `ollama/${m || OLLAMA_MODEL}`;
-  return ai(messages, {
+  const defaultMaxTokens = Math.max(64, Math.min(1200, Number(process.env.PIKO_CHAT_MAX_TOKENS || 1024)));
+  const timeoutMs = Math.max(5000, Number(process.env.PIKO_OLLAMA_TIMEOUT_MS || 45000));
+  return withTimeout(ai(messages, {
     model: normalized,
-    max_tokens: options.max_tokens ?? 4000,
+    max_tokens: options.max_tokens ?? defaultMaxTokens,
     temperature: options.temperature,
     repeat_penalty: options.repeat_penalty,
     presence_penalty: options.presence_penalty,
     frequency_penalty: options.frequency_penalty,
-  });
+  }), timeoutMs, 'ollama_chat_timeout');
 }
 
 /** Phase 3: stream via LiteLLM; onChunk(delta) for each piece; returns full reply. */
 async function ollamaChatStream(messages, onChunk, model, options = {}) {
   const m = model || OLLAMA_MODEL;
   const normalized = (m && m.startsWith('ollama/')) ? m : `ollama/${m || OLLAMA_MODEL}`;
-  return aiStream(messages, onChunk, normalized, options);
+  const timeoutMs = Math.max(5000, Number(process.env.PIKO_OLLAMA_TIMEOUT_MS || 45000));
+  return withTimeout(aiStream(messages, onChunk, normalized, options), timeoutMs, 'ollama_stream_timeout');
+}
+
+function withTimeout(promise, timeoutMs, code) {
+  let timer = null;
+  const timeoutPromise = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      const err = new Error(`Timeout after ${timeoutMs}ms`);
+      err.code = code || 'TIMEOUT';
+      reject(err);
+    }, timeoutMs);
+  });
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
 }
 
 /** Call xAI Grok (OpenAI-compatible). Returns content string or null on missing key/error. */
@@ -713,6 +1533,11 @@ async function grokChat(messages) {
 }
 
 function send(res, statusCode, body, contentType = 'application/json') {
+  if (res.writableEnded) return;
+  if (res.headersSent) {
+    try { res.end(body); } catch (_) {}
+    return;
+  }
   res.writeHead(statusCode, { 'Content-Type': contentType });
   res.end(body);
 }
@@ -736,7 +1561,15 @@ function telegramNotify(text) {
   return new Promise((resolve, reject) => {
     const lib = u.protocol === 'https:' ? https : http;
     const req = lib.request(
-      { hostname: u.hostname, path: u.pathname + u.search, method: 'POST', headers: { 'Content-Type': 'application/json' } },
+      {
+        hostname: u.hostname,
+        path: u.pathname + u.search,
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        // Optimus can intermittently fail IPv6 egress to Telegram.
+        // Force IPv4 for deterministic delivery from server-side dispatch.
+        family: 4,
+      },
       (res) => {
         let data = '';
         res.on('data', (ch) => (data += ch));
@@ -859,6 +1692,7 @@ async function handleIosHub(req, res) {
     const chatBody = JSON.stringify({ message, sessionId });
     const host = '127.0.0.1';
     const port = PORT;
+    const inquiryTimeoutMs = Math.max(30000, Number(process.env.PIKO_OLLAMA_TIMEOUT_MS || 45000)) + 10000; // model timeout + buffer
     return new Promise((resolve) => {
       const opts = { hostname: host, port, path: '/api/chat', method: 'POST', headers: { 'Content-Type': 'application/json' } };
       const reqIn = http.request(opts, (resIn) => {
@@ -874,7 +1708,7 @@ async function handleIosHub(req, res) {
         });
       });
       reqIn.on('error', (e) => resolve(send(res, 502, JSON.stringify({ error: 'Chat request failed: ' + e.message }))));
-      reqIn.setTimeout(60000, () => { reqIn.destroy(); resolve(send(res, 504, JSON.stringify({ error: 'Chat timeout' }))); });
+      reqIn.setTimeout(inquiryTimeoutMs, () => { reqIn.destroy(); resolve(send(res, 504, JSON.stringify({ error: 'Chat timeout' }))); });
       reqIn.write(chatBody);
       reqIn.end();
     });
@@ -1108,11 +1942,61 @@ async function handleApiChat(req, res) {
   }
   const streamReply = json.stream === true;
   const sessionId = typeof json.sessionId === 'string' ? json.sessionId : null;
-  // Session key: PIKO_UNIFIED_SESSION_ID forces one shared conversation; otherwise use request's sessionId so app (main) and Telegram (telegram-<chatId>) have separate histories and no cross-channel meta replies.
-  const key = process.env.PIKO_UNIFIED_SESSION_ID || sessionId || 'main';
+  // Session key: keep unified memory for human channels, but isolate automation clients.
+  const automationSession = isAutomationSession(sessionId);
+  if (!automationSession) {
+    try {
+      require('./scripts/proactiveThinker').updateLastInteraction();
+    } catch (_) {}
+  }
+  const key = automationSession ? (sessionId || 'automation') : (process.env.PIKO_UNIFIED_SESSION_ID || sessionId || 'main');
+  // Keep identity facts scoped to the caller-provided session to avoid cross-channel nickname bleed.
+  const identityKey = sessionId || key;
   const clientIp = (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || (req.socket && req.socket.remoteAddress) || 'unknown';
+  const ollamaPriority = automationSession ? 'background' : 'user';
+  const { runWithContext } = require('./lib/requestContext');
+  return runWithContext({ priority: ollamaPriority }, async () => {
+  return acquireSessionLock(key, async () => {
   const limit = rateLimit.check(clientIp);
   if (!limit.ok) return send(res, 429, JSON.stringify({ error: 'Too many requests' }));
+
+  // Promise-based request coalescing: duplicate requests wait for original and get same payload
+  const userIdentifier = key;
+  const msgSignature = `${userIdentifier}::${message.trim().toLowerCase()}`;
+
+  if (inFlightRequests.has(msgSignature)) {
+    console.warn('[SERVER] Piggybacking duplicate request onto active process:', msgSignature.slice(0, 80) + (msgSignature.length > 80 ? '...' : ''));
+    try {
+      const { statusCode, body } = await inFlightRequests.get(msgSignature);
+      return send(res, statusCode, body);
+    } catch (e) {
+      return send(res, 500, JSON.stringify({ reply: 'Concurrent request failed.' }));
+    }
+  }
+
+  let resolveReq;
+  const reqPromise = new Promise((resolve) => { resolveReq = resolve; });
+  inFlightRequests.set(msgSignature, reqPromise);
+
+  const originalEnd = res.end.bind(res);
+  const originalWriteHead = res.writeHead.bind(res);
+  let capturedStatus = 200;
+  res.writeHead = function (statusCode, ...args) {
+    capturedStatus = statusCode;
+    return originalWriteHead(statusCode, ...args);
+  };
+  res.end = function (body, encoding, callback) {
+    if (resolveReq) {
+      try {
+        resolveReq({ statusCode: capturedStatus, body: typeof body === 'string' ? body : String(body) });
+      } catch (_) {
+        resolveReq({ statusCode: 500, body: JSON.stringify({ reply: '' }) });
+      }
+      resolveReq = null;
+      setTimeout(() => inFlightRequests.delete(msgSignature), 5000);
+    }
+    return originalEnd(body, encoding, callback);
+  };
 
   const sessionsConfig = loadSessionsConfig();
   const profile = (sessionsConfig[key] && sessionsConfig[key].profile) || 'main';
@@ -1196,10 +2080,435 @@ async function handleApiChat(req, res) {
     if (!ok) return send(res, 200, JSON.stringify({ reply: 'Command not allowed in this session.' }));
   }
 
+  const lowerMessage = String(message || '').toLowerCase().trim();
+
+  // —— Pending Legion approve: next message is PO payload or cancel ——
+  const approvalPending = loadApprovalPending()[key];
+  if (approvalPending && approvalPending.awaiting === 'po_submit') {
+    const trimmed = String(message || '').trim();
+    if (/\/legion\s*[-]?\s*approve\s+cancel/i.test(trimmed)) {
+      clearApprovalPending(key);
+      return send(res, 200, JSON.stringify({ reply: 'Legion approve cancelled.' }));
+    }
+    if (trimmed.startsWith('{')) {
+      let poPayload = null;
+      try {
+        poPayload = JSON.parse(trimmed);
+      } catch (_) {}
+      if (poPayload && typeof poPayload === 'object' && !Array.isArray(poPayload)) {
+        if (!isLegionApproveAllowed(reqSource)) {
+          return send(res, 403, JSON.stringify({ reply: 'PO approval is restricted to primary channels. Set PIKO_LEGION_APPROVE_PRIMARY_SOURCES to allow this source.' }));
+        }
+        const initSource = approvalPending.source;
+        if (initSource != null && String(reqSource || '') !== String(initSource)) {
+          clearApprovalPending(key);
+          return send(res, 403, JSON.stringify({ reply: 'PO approval must be completed from the same channel that initiated it.' }));
+        }
+        const pinCheck = verifyAndStripApprovalPin(poPayload);
+        if (!pinCheck.ok) {
+          return send(res, 403, JSON.stringify({ reply: pinCheck.error }));
+        }
+        clearApprovalPending(key);
+        const pikoUserId = reqExternalId != null ? `${reqSource}:${reqExternalId}` : `${reqSource}:${key}`;
+        let dispatch;
+        try {
+          dispatch = await dispatchLegionPoSubmit(pinCheck.payload, { piko_user_id: pikoUserId });
+        } catch (e) {
+          dispatch = { ok: false, code: 'DISPATCH_EXCEPTION', message: e && e.message ? e.message : 'Dispatch failed' };
+        }
+        const reply = dispatch.ok
+          ? `PO submit accepted: run_id=${dispatch.runId || 'n/a'} (${dispatch.status}).`
+          : `PO submit failed: ${dispatch.message || 'Unknown error'}.`;
+        return send(res, 200, JSON.stringify({ reply }));
+      }
+    }
+    clearApprovalPending(key);
+    return send(res, 200, JSON.stringify({
+      reply: 'Expected JSON PO payload. Cancelled. Use /legion approve submit with inline JSON, e.g. /legion approve submit {"supplier":"X","lines":[{"sku":"A","quantity":1}]}',
+    }));
+  }
+
+  // —— /legion approve submit (PO approval path) ——
+  if (lowerMessage.startsWith('/legion approve') || lowerMessage.startsWith('/legion-approve')) {
+    if (!isLegionApproveAllowed(reqSource)) {
+      return send(res, 403, JSON.stringify({ reply: 'PO approval is restricted to primary channels. Set PIKO_LEGION_APPROVE_PRIMARY_SOURCES (e.g. webchat,app) to allow this source.' }));
+    }
+    const rest = lowerMessage.replace('/legion-approve', '/legion approve').replace('/legion approve', '').trim();
+    if (rest.startsWith('submit')) {
+      const afterSubmit = rest.slice(6).trim();
+      let poPayload = null;
+      if (afterSubmit.startsWith('{')) {
+        try {
+          poPayload = JSON.parse(afterSubmit);
+        } catch (_) {}
+      }
+      if (poPayload && typeof poPayload === 'object' && !Array.isArray(poPayload)) {
+        const pinCheck = verifyAndStripApprovalPin(poPayload);
+        if (!pinCheck.ok) {
+          return send(res, 403, JSON.stringify({ reply: pinCheck.error }));
+        }
+        const pikoUserId = reqExternalId != null ? `${reqSource}:${reqExternalId}` : `${reqSource}:${key}`;
+        let dispatch;
+        try {
+          dispatch = await dispatchLegionPoSubmit(pinCheck.payload, { piko_user_id: pikoUserId });
+        } catch (e) {
+          dispatch = { ok: false, code: 'DISPATCH_EXCEPTION', message: e && e.message ? e.message : 'Dispatch failed' };
+        }
+        const reply = dispatch.ok
+          ? `PO submit accepted: run_id=${dispatch.runId || 'n/a'} (${dispatch.status}).`
+          : `PO submit failed: ${dispatch.message || 'Unknown error'}.`;
+        return send(res, 200, JSON.stringify({ reply }));
+      }
+      setApprovalPending(key, { source: reqSource });
+      const pinHint = process.env.PIKO_LEGION_APPROVE_PIN ? ' Include "_pin": "your-pin" in the JSON when you paste it.' : '';
+      return send(res, 200, JSON.stringify({
+        reply: 'Awaiting PO payload. Paste JSON in your next message, e.g. {"supplier":"Example Supplier","lines":[{"sku":"ABC-123","quantity":10}]}. Or use /legion approve cancel to cancel.' + pinHint,
+      }));
+    }
+    if (rest.startsWith('cancel')) {
+      clearApprovalPending(key);
+      return send(res, 200, JSON.stringify({ reply: 'Legion approve cancelled.' }));
+    }
+    return send(res, 200, JSON.stringify({
+      reply: 'Usage: /legion approve submit [<json>] | /legion approve cancel',
+    }));
+  }
+
+  // —— Legion brief wizard (/legion brief) ——
+  const isLegionBriefCommand = lowerMessage.startsWith('/legion brief') || lowerMessage.startsWith('/legion-brief');
+  let activeBrief = getBriefSession(DATA_DIR, key);
+  const isNaturalStart = !activeBrief && !isLegionBriefCommand && requestsLegionBrief(message);
+  let shouldHandleActiveBriefTurn = !!activeBrief && !String(message || '').trim().startsWith('/');
+
+  // Stale brief expiration: if idle >15 min, assume user abandoned the form
+  if (activeBrief && !isLegionBriefCommand) {
+    const updatedMs = activeBrief.updatedAt ? new Date(activeBrief.updatedAt).getTime() : 0;
+    if (Date.now() - updatedMs > 15 * 60 * 1000) {
+      clearBriefSession(DATA_DIR, key);
+      console.log(`[BRIEF INTERRUPT] Brief for session ${key} is stale (>15 mins). Auto-cancelling.`);
+      shouldHandleActiveBriefTurn = false;
+      activeBrief = null;
+    }
+  }
+
+  // Semantic Bouncer: context-switching logic (is user answering the wizard or switching to a new command?)
+  if (activeBrief && !isLegionBriefCommand) {
+    const { classifyUserIntent } = require('./lib/semanticBouncer');
+    const nextField = nextMissingField(activeBrief);
+    const currentQuestion = nextField ? nextField.prompt : 'Unknown';
+    const intent = await classifyUserIntent(message, currentQuestion, sessionModel);
+    if (process.env.PIKO_LOG_PLANNER === '1') console.log(`[SEMANTIC ROUTER] User intent classified as: ${intent}`);
+
+    if (intent === 'escape') {
+      clearBriefSession(DATA_DIR, key);
+      return send(res, 200, JSON.stringify({ reply: "Okay, I've cancelled the brief. What do you need?" }));
+    }
+    if (intent === 'intent_override') {
+      clearBriefSession(DATA_DIR, key);
+      console.log('[BRIEF INTERRUPT] User switched context (intent_override). Cancelling brief.');
+      shouldHandleActiveBriefTurn = false;
+      activeBrief = null;
+    }
+    // intent === 'form_input' — let the brief wizard absorb the message
+  }
+
+  if (isLegionBriefCommand || isNaturalStart || shouldHandleActiveBriefTurn) {
+    const cmdRest = isLegionBriefCommand
+      ? lowerMessage.replace('/legion-brief', '/legion brief').slice('/legion brief'.length).trim()
+      : '';
+
+    if (isLegionBriefCommand && (cmdRest === 'cancel' || cmdRest === 'stop')) {
+      clearBriefSession(DATA_DIR, key);
+      return send(res, 200, JSON.stringify({ reply: 'Legion Brief cancelled.' }));
+    }
+
+    if (!activeBrief && (isNaturalStart || isLegionBriefCommand)) {
+      const started = startBriefSession(DATA_DIR, key);
+      const next = nextMissingField(started);
+      const intro = [
+        'Legion Brief started.',
+        'I will collect the required details step-by-step, then relay the full recap before proceeding.',
+        next ? `${next.prompt}` : 'Please provide the objective.',
+        'Tips: use "field: value" to set specific fields; /legion brief show; /legion brief cancel.',
+      ].join('\n');
+      return send(res, 200, JSON.stringify({ reply: intro }));
+    }
+
+    const brief = getBriefSession(DATA_DIR, key);
+    if (!brief) {
+      return send(res, 200, JSON.stringify({ reply: 'No active Legion Brief. Start with /legion brief.' }));
+    }
+
+    if (isLegionBriefCommand && cmdRest === 'show') {
+      const recap = formatRecap(brief);
+      const next = nextMissingField(brief);
+      const trailer = next ? `\n\nNext needed: ${next.prompt}` : '\n\nAll fields captured. Reply "/legion brief confirm" to proceed or "/legion brief edit <field>: <value>".';
+      return send(res, 200, JSON.stringify({ reply: recap + trailer }));
+    }
+
+    if (isLegionBriefCommand && cmdRest === 'confirm') {
+      if (!isBriefComplete(brief)) {
+        const next = nextMissingField(brief);
+        return send(res, 200, JSON.stringify({ reply: `Brief is incomplete. ${next ? next.prompt : 'Please continue.'}` }));
+      }
+      appendConfirmedBrief(DATA_DIR, brief);
+      let dispatch = null;
+      try {
+        const pikoUserId = reqExternalId != null ? `${reqSource}:${reqExternalId}` : `${reqSource}:${key}`;
+        dispatch = await dispatchLegionBrief(brief, { piko_user_id: pikoUserId, model: sessionModel });
+      } catch (e) {
+        dispatch = { ok: false, code: 'DISPATCH_EXCEPTION', message: e && e.message ? e.message : 'Dispatch failed' };
+      }
+      clearBriefSession(DATA_DIR, key);
+      let resultSummary = '';
+      if (dispatch && dispatch.ok && dispatch.runId && dispatch.capability) {
+        try {
+          const { pollLegionRun, buildSummaryFromResult } = require('./lib/legionRunPoller');
+          const { saveLegionResult, isSilentCapability } = require('./lib/sharedContext');
+          const polled = await pollLegionRun(dispatch.runId, LEGION_ADAPTER_API_BASE);
+          if (polled.ok && polled.result) {
+            saveLegionResult(DATA_DIR, dispatch.capability, polled.result);
+            const fromIntentPoller = String(key || '').toLowerCase() === 'intent-poller';
+            const skipNotify = fromIntentPoller && isSilentCapability(dispatch.capability, DATA_DIR);
+            if (!skipNotify) {
+              resultSummary = buildSummaryFromResult(polled.result, dispatch.capability, DATA_DIR);
+              if (resultSummary) {
+                appendPendingNotification(resultSummary);
+                telegramNotify(resultSummary).catch(() => {});
+              }
+            }
+          }
+        } catch (e) {
+          if (process.env.PIKO_LOG_PLANNER === '1') console.warn('[legion-brief] poll/deliver:', e.message);
+        }
+      }
+      const dispatchLine = dispatch && dispatch.ok
+        ? `Dispatch accepted: adapter=${dispatch.adapterId}, capability=${dispatch.capability}, run_id=${dispatch.runId || 'n/a'} (${dispatch.status}).`
+        : `Dispatch not started: ${dispatch && dispatch.message ? dispatch.message : 'No matching capability or Legion unavailable.'}`;
+      const reply = [
+        `${formatRecap(brief)}`,
+        '',
+        'Confirmed. I will proceed with this Legion Brief.',
+        dispatchLine,
+        resultSummary ? `\n${resultSummary}` : '',
+      ].join('\n');
+      return send(res, 200, JSON.stringify({ reply }));
+    }
+
+    let fieldInput = null;
+    if (isLegionBriefCommand && cmdRest.startsWith('edit ')) {
+      fieldInput = parseFieldValueLine(cmdRest.slice(5).trim());
+    } else if (!isLegionBriefCommand) {
+      fieldInput = parseFieldValueLine(message);
+    }
+
+    if (!fieldInput && !isLegionBriefCommand) {
+      const next = nextMissingField(brief);
+      if (next) fieldInput = { fieldKey: next.key, value: message };
+    }
+
+    if (!fieldInput) {
+      return send(res, 200, JSON.stringify({ reply: 'Usage: /legion brief | /legion brief show | /legion brief edit <field>: <value> | /legion brief confirm | /legion brief cancel' }));
+    }
+
+    const saved = setBriefField(DATA_DIR, key, fieldInput.fieldKey, fieldInput.value);
+    if (!saved.ok) return send(res, 200, JSON.stringify({ reply: saved.error || 'Could not update Legion Brief field.' }));
+
+    const current = saved.session;
+    if (!isBriefComplete(current)) {
+      const next = nextMissingField(current);
+      return send(res, 200, JSON.stringify({ reply: `Saved.\n${next ? next.prompt : 'Continue.'}` }));
+    }
+
+    return send(res, 200, JSON.stringify({
+      reply: `${formatRecap(current)}\n\nReply "/legion brief confirm" to proceed, or "/legion brief edit <field>: <value>" to revise.`,
+    }));
+  }
+
+  // —— /legion schedule ——
+  if (lowerMessage.startsWith('/legion schedule') || lowerMessage.startsWith('/legion-schedule')) {
+    const rest = lowerMessage.replace('/legion-schedule', '/legion schedule').replace('/legion schedule', '').trim();
+    if (rest === 'list' || rest === '') {
+      const intents = loadIntents();
+      const legionScheduled = intents.filter((i) => i && i.type === 'legion_scheduled' && (i.status === 'pending' || !i.status));
+      if (legionScheduled.length === 0) {
+        return send(res, 200, JSON.stringify({ reply: 'No scheduled Legion tasks. Use /legion schedule daily 08:00 <objective> to add one.' }));
+      }
+      const lines = legionScheduled.map((s) => {
+        const due = s.dueAt ? new Date(s.dueAt).toLocaleString() : '—';
+        const sched = s.schedule || 'one-shot';
+        const obj = (s.title || s.description || s.briefFields?.objective || s.command || '').slice(0, 50);
+        return `- ${s.id}: ${sched} (next: ${due}) ${obj}`;
+      });
+      return send(res, 200, JSON.stringify({ reply: 'Scheduled Legion tasks:\n' + lines.join('\n') + '\n\nCancel: /legion schedule cancel <id>' }));
+    }
+    if (rest.startsWith('cancel ')) {
+      const id = rest.slice(7).trim();
+      if (!id) return send(res, 200, JSON.stringify({ reply: 'Usage: /legion schedule cancel <id> (e.g. intent_1772943737170_210)' }));
+      const updated = updateIntent(id, { status: 'cancelled' });
+      if (!updated) return send(res, 200, JSON.stringify({ reply: `Intent ${id} not found.` }));
+      if (updated.type !== 'legion_scheduled') return send(res, 200, JSON.stringify({ reply: 'That intent is not a Legion schedule.' }));
+      return send(res, 200, JSON.stringify({ reply: `Cancelled: ${(updated.title || updated.description || '').slice(0, 50)}` }));
+    }
+    // /legion schedule daily 08:00 <objective> | hourly HH:MM-HH:MM <objective> | cron 0 17 * * 1-5 <objective> | in N <objective>
+    const parts = rest.split(/\s+/);
+    if (parts.length < 3) {
+      return send(res, 200, JSON.stringify({ reply: 'Usage: /legion schedule daily HH:MM <objective> | hourly HH:MM-HH:MM <objective> | cron 0 17 * * 1-5 <objective> | in N <objective>' }));
+    }
+    const [freq, timeStr, ...restParts] = parts;
+    let schedule, nextDue, objective;
+    const inMatch = /^in$/i.test(freq) && /^\d+$/.test(timeStr);
+    if (inMatch) {
+      objective = restParts.join(' ').trim();
+      const mins = Math.max(1, Math.min(60, parseInt(timeStr, 10)));
+      const from = new Date();
+      nextDue = new Date(from.getTime() + mins * 60 * 1000).toISOString();
+      schedule = `in ${mins}`;
+    } else if (/^cron$/i.test(freq)) {
+      // cron 0 17 * * 1-5 <objective> — 5 fields: min hour dom month dow
+      if (restParts.length < 6) {
+        return send(res, 200, JSON.stringify({ reply: 'Usage: /legion schedule cron 0 17 * * 1-5 <objective> (5 cron fields + objective, e.g. weekdays at 5pm)' }));
+      }
+      const cronFields = restParts.slice(0, 5);
+      objective = restParts.slice(5).join(' ').trim();
+      schedule = `cron ${cronFields.join(' ')}`;
+      nextDue = nextDueFromSchedule(schedule, new Date());
+    } else {
+      objective = restParts.join(' ').trim();
+      schedule = `${freq.toLowerCase()} ${timeStr}`;
+      nextDue = nextDueFromSchedule(schedule, new Date());
+    }
+    if (!objective) {
+      return send(res, 200, JSON.stringify({ reply: 'Usage: /legion schedule daily HH:MM <objective> | hourly HH:MM-HH:MM <objective> | cron 0 17 * * 1-5 <objective>' }));
+    }
+    if (!nextDue) {
+      return send(res, 200, JSON.stringify({ reply: 'Invalid schedule. Use: daily HH:MM, hourly HH:MM-HH:MM, cron 0 17 * * 1-5 (weekdays 5pm), or in N' }));
+    }
+    // Idempotency: skip duplicate if same schedule+objective created in last 30s (client double-send)
+    const intents = loadIntents();
+    const cutoff = Date.now() - 30000;
+    const recentDup = intents.find(
+      (i) =>
+        i &&
+        i.type === 'legion_scheduled' &&
+        (i.status === 'pending' || !i.status) &&
+        i.schedule === schedule &&
+        (i.title === objective || i.description === objective) &&
+        new Date(i.createdAt || 0).getTime() >= cutoff
+    );
+    if (recentDup) {
+      const replyMsg = inMatch
+        ? `Already scheduled (in ${timeStr} min). I'll run ${objective.slice(0, 50)}${objective.length > 50 ? '…' : ''} when it's due.`
+        : schedule.startsWith('hourly ') || schedule.startsWith('cron ')
+          ? `Already scheduled ${schedule}. I'll run ${objective.slice(0, 50)}${objective.length > 50 ? '…' : ''} when it's due.`
+          : `Already scheduled daily at ${timeStr}. I'll run ${objective.slice(0, 50)}${objective.length > 50 ? '…' : ''} when it's due.`;
+      return send(res, 200, JSON.stringify({ reply: replyMsg }));
+    }
+    const briefFields = {
+      objective,
+      success_criteria: 'Task completed as scheduled',
+      scope: 'Recurring Legion task',
+      constraints: 'Scheduled via Piko',
+      risk_level: 'low',
+      priority: 'P2',
+      deadline: 'Ongoing',
+      execution_mode: 'auto',
+    };
+    createIntent({
+      type: 'legion_scheduled',
+      title: objective,
+      description: objective,
+      dueAt: nextDue,
+      schedule,
+      briefFields,
+      source: reqSource,
+      sessionId: key,
+    });
+    const replyMsg = inMatch
+      ? `Done. Scheduled in ${timeStr} min — I'll run ${objective.slice(0, 50)}${objective.length > 50 ? '…' : ''} when it's due.`
+      : schedule.startsWith('hourly ')
+        ? `Done. Scheduled ${schedule} — I'll run ${objective.slice(0, 50)}${objective.length > 50 ? '…' : ''} when it's due.`
+        : schedule.startsWith('cron ')
+          ? `Done. Scheduled ${schedule} — I'll run ${objective.slice(0, 50)}${objective.length > 50 ? '…' : ''} when it's due.`
+          : `Done. Scheduled daily at ${timeStr} — I'll run ${objective.slice(0, 50)}${objective.length > 50 ? '…' : ''} when it's due.`;
+    return send(res, 200, JSON.stringify({ reply: replyMsg }));
+  }
+
+  // —— /webhook (rules for event-driven actions) ——
+  if (lowerMessage.startsWith('/webhook') || lowerMessage.startsWith('/webhook ')) {
+    const rest = lowerMessage.replace(/^\/webhook\s*/, '').trim();
+    if (rest === '' || rest === 'rules' || rest === 'list') {
+      const rules = loadRules();
+      if (rules.length === 0) {
+        return send(res, 200, JSON.stringify({ reply: 'No webhook rules yet. Add one with /webhook add <eventType> legion [or dm]. Example: /webhook add low_stock_alert legion' }));
+      }
+      const lines = rules.map((r) => {
+        const acts = (r.actions || []).map((a) => a.type).join(', ') || 'none';
+        const status = r.enabled ? 'on' : 'off';
+        return `• ${r.eventType} (${r.id}) [${status}]: ${acts}`;
+      });
+      return send(res, 200, JSON.stringify({ reply: 'Webhook rules:\n' + lines.join('\n') }));
+    }
+    if (rest.startsWith('add ')) {
+      const spec = rest.slice(4).trim();
+      const parts = spec.split(/\s+/);
+      const eventType = parts[0];
+      if (!eventType || !/^[a-z0-9_]+$/.test(eventType)) {
+        return send(res, 200, JSON.stringify({ reply: 'Usage: /webhook add <eventType> legion|dm. Example: /webhook add low_stock_alert legion' }));
+      }
+      const actions = [];
+      if (parts.includes('legion')) {
+        let capability = 'inventory.low_stock.scan';
+        if (/low_stock|inventory|stock/.test(eventType)) capability = 'inventory.low_stock.scan';
+        else if (/sale|forecast|analysis/.test(eventType)) capability = 'sales.analysis.run';
+        actions.push({ type: 'legion', adapterId: 'ausmakersupplies', capability });
+      }
+      if (parts.includes('dm')) {
+        actions.push({ type: 'dm', channel: 'telegram', template: `Webhook: {{eventType}} — {{payload}}` });
+      }
+      if (actions.length === 0) actions.push({ type: 'log' });
+      const rule = createRule({ eventType, sourceFilter: [], actions });
+      return send(res, 200, JSON.stringify({ reply: `Added rule for \`${eventType}\`: ${actions.map((a) => a.type).join(', ')}.` }));
+    }
+    if (rest.startsWith('pause ')) {
+      const eventType = rest.slice(6).trim();
+      const rules = loadRules().filter((r) => r.eventType === eventType);
+      let toggled = 0;
+      for (const r of rules) {
+        if (r.enabled) {
+          toggleRule(r.id);
+          toggled++;
+        }
+      }
+      return send(res, 200, JSON.stringify({ reply: toggled > 0 ? `Paused ${toggled} rule(s) for \`${eventType}\`.` : `No enabled rules for \`${eventType}\`.` }));
+    }
+    if (rest.startsWith('resume ')) {
+      const eventType = rest.slice(7).trim();
+      const rules = loadRules().filter((r) => r.eventType === eventType);
+      let toggled = 0;
+      for (const r of rules) {
+        if (!r.enabled) {
+          toggleRule(r.id);
+          toggled++;
+        }
+      }
+      return send(res, 200, JSON.stringify({ reply: toggled > 0 ? `Resumed ${toggled} rule(s) for \`${eventType}\`.` : `No disabled rules for \`${eventType}\`.` }));
+    }
+    return send(res, 200, JSON.stringify({ reply: 'Usage: /webhook rules | add <eventType> legion|dm | pause <eventType> | resume <eventType>' }));
+  }
+
   // —— /new ——
   if (message === '/new') {
-    sessionStore.clear(key);
-    return send(res, 200, JSON.stringify({ reply: 'New session.' }));
+    (async () => {
+      try {
+        const { flushSessionToVectorMemory } = require('./lib/vectorMemory');
+        await flushSessionToVectorMemory(key);
+      } catch (_) {}
+      sessionStore.clear(key);
+      clearBriefSession(DATA_DIR, key);
+      clearApprovalPending(key);
+    })().then(() => send(res, 200, JSON.stringify({ reply: 'New session.' })));
+    return;
   }
 
   // —— Phase 4: /profile (multi-session) ——
@@ -1227,6 +2536,16 @@ async function handleApiChat(req, res) {
       try {
         if (fs.existsSync(CURRENT_MODEL_FILE)) fs.unlinkSync(CURRENT_MODEL_FILE);
       } catch (_) {}
+      try {
+        upsertModel(OLLAMA_MODEL, { status: 'primary', source: 'model_command_default' });
+        promoteModel({
+          modelTag: OLLAMA_MODEL,
+          toStage: 'primary',
+          by: 'model_command',
+          notes: 'Reset to default model',
+          allowUnsafe: true,
+        });
+      } catch (_) {}
       if (sessionsConfig[key] && sessionsConfig[key].model) {
         const { model, ...restConfig } = sessionsConfig[key];
         sessionsConfig[key] = Object.keys(restConfig).length ? restConfig : undefined;
@@ -1242,6 +2561,16 @@ async function handleApiChat(req, res) {
     try {
       fs.mkdirSync(DATA_DIR, { recursive: true });
       fs.writeFileSync(CURRENT_MODEL_FILE, rest, 'utf8');
+      try {
+        upsertModel(rest, { status: 'primary', source: 'model_command' });
+        promoteModel({
+          modelTag: rest,
+          toStage: 'primary',
+          by: 'model_command',
+          notes: 'Set by /model command',
+          allowUnsafe: true,
+        });
+      } catch (_) {}
     } catch (e) {
       return send(res, 200, JSON.stringify({ reply: 'Failed to save model override: ' + e.message }));
     }
@@ -1314,14 +2643,10 @@ async function handleApiChat(req, res) {
     if (!query) return send(res, 200, JSON.stringify({ reply: 'Usage: /search "your query"' }));
     try {
       let reply = '';
-      if (TAVILY_API_KEY) {
-        const body = JSON.stringify({ api_key: TAVILY_API_KEY, query, max_results: 5 });
-        const u = new URL('https://api.tavily.com/search');
-        const opts = { hostname: u.hostname, port: 443, path: u.pathname, method: 'POST', headers: { 'Content-Type': 'application/json' } };
-        const { statusCode, data } = await httpsRequest(opts, body);
-        const json = JSON.parse(data);
-        const results = (json.results || []).slice(0, 5);
-        reply = results.map((r, i) => `${i + 1}. ${r.title || ''}\n${r.url || ''}\n${(r.content || '').slice(0, 200)}…`).join('\n\n') || 'No results.';
+      const { querySearXNG } = require('./lib/sovereignSearch');
+      const searxResults = await querySearXNG(query, 5);
+      if (searxResults.length > 0) {
+        reply = searxResults.map((r, i) => `${i + 1}. ${r.title || ''}\n${r.url || ''}\n${(r.content || '').slice(0, 200)}…`).join('\n\n');
       } else if (SERPER_API_KEY) {
         const body = JSON.stringify({ q: query });
         const u = new URL('https://google.serper.dev/search');
@@ -1331,7 +2656,7 @@ async function handleApiChat(req, res) {
         const results = (json.organic || []).slice(0, 5);
         reply = results.map((r, i) => `${i + 1}. ${r.title || ''}\n${r.link || ''}\n${(r.snippet || '').slice(0, 200)}…`).join('\n\n') || 'No results.';
       } else {
-        reply = 'Set TAVILY_API_KEY or SERPER_API_KEY for web search.';
+        reply = 'No results. Ensure SearXNG is running on port 8080, or set SERPER_API_KEY for fallback.';
       }
       return send(res, 200, JSON.stringify({ reply }));
     } catch (e) {
@@ -1597,19 +2922,9 @@ async function handleApiChat(req, res) {
     }
   }
 
-  // —— v2.0: /cycle (trigger full poster run) ——
+  // —— /cycle (Moltbook disabled — no longer maintained)
   if (message === '/cycle') {
-    const scriptPath = path.join(__dirname, 'scripts', 'moltbook-poster.js');
-    const cwd = __dirname;
-    exec('node scripts/moltbook-poster.js', { cwd, env: process.env, timeout: 90000 }, (err, stdout, stderr) => {
-      const out = (stdout || '').trim();
-      const errOut = (stderr || '').trim();
-      if (err) {
-        return send(res, 200, JSON.stringify({ reply: 'Cycle failed: ' + (err.message || 'timeout') + (out ? '\n' + out.slice(-500) : '') + (errOut ? '\n' + errOut.slice(-300) : '') }));
-      }
-      return send(res, 200, JSON.stringify({ reply: 'Cycle done.\n' + (out ? out.slice(-600) : '') }));
-    });
-    return;
+    return send(res, 200, JSON.stringify({ reply: 'Moltbook is disabled. Use /queue, /status, or /profile main for other actions.' }));
   }
 
   // —— Phase 2: /weather ——
@@ -1991,6 +3306,216 @@ async function handleApiChat(req, res) {
   let history = sessionStore.getHistory(key) || [];
   history.push({ role: 'user', content: message });
 
+  // —— Pending cancel confirmation: "yes" executes multi-item cancel ——
+  const trimmedMsg = String(message || '').trim().replace(/[.!?]+$/, '');
+  if (/^(yes|y|confirm|ok|sure|yes please|do it)$/i.test(trimmedMsg) && pendingCancelConfirmations.has(key)) {
+    const pending = pendingCancelConfirmations.get(key);
+    pendingCancelConfirmations.delete(key);
+    savePendingCancelConfirmations(pendingCancelConfirmations);
+    if (pending.expiresAt && Date.now() > pending.expiresAt) {
+      const reply = "That confirmation expired. Ask to cancel again if you still want to.";
+      history.push({ role: 'assistant', content: reply });
+      sessionStore.append(key, 'user', message);
+      sessionStore.append(key, 'assistant', reply);
+      return send(res, 200, JSON.stringify({ reply }));
+    }
+    const { removeIntentById } = require('./lib/intents');
+    let cancelled = 0;
+    for (const id of pending.intentIds || []) {
+      if (removeIntentById(id)) cancelled++;
+    }
+    const reply = cancelled > 0 ? `Too easy. I've cancelled those ${cancelled} schedule(s) for you. Anything else?` : 'No matching schedules found.';
+    history.push({ role: 'assistant', content: reply });
+    sessionStore.append(key, 'user', message);
+    sessionStore.append(key, 'assistant', reply);
+    return send(res, 200, JSON.stringify({ reply }));
+  }
+
+  // —— Pending NL intent confirmation: "yes" creates the legion_scheduled ——
+  const pending = pendingIntentsBySession.get(key);
+  if (pending) {
+    const age = Date.now() - (pending.createdAt || 0);
+    if (age > PENDING_INTENT_EXPIRY_MS) {
+      if (process.env.PIKO_LOG_PLANNER === '1') console.log('[intent] Pending expired for key:', key);
+      pendingIntentsBySession.delete(key);
+    } else if (/^(yes|y|confirm|ok|sure)$/i.test(trimmedMsg)) {
+      pendingIntentsBySession.delete(key);
+      const { type, schedule, objective } = pending.extracted;
+      if (process.env.PIKO_LOG_PLANNER === '1') console.log('[intent] Confirmation received for key:', key, 'objective:', objective, 'schedule:', schedule);
+      const nextDue = nextDueFromSchedule(schedule, new Date());
+      if (nextDue) {
+        const briefFields = {
+          objective,
+          success_criteria: 'Task completed as scheduled',
+          scope: 'Recurring Legion task',
+          constraints: 'Scheduled via Piko',
+          risk_level: 'low',
+          priority: 'P2',
+          deadline: 'Ongoing',
+          execution_mode: 'auto',
+        };
+        createIntent({
+          type: 'legion_scheduled',
+          title: objective,
+          description: objective,
+          dueAt: nextDue,
+          schedule,
+          briefFields,
+          source: reqSource,
+          sessionId: key,
+          _creationSource: 'nl_confirm',
+        });
+        if (process.env.PIKO_LOG_PLANNER === '1') console.log('[intent] Created from confirmation:', objective, schedule);
+        const reply = `Done — scheduled "${objective}" ${schedule}.`;
+        history.push({ role: 'assistant', content: reply });
+        sessionStore.append(key, 'user', message);
+        sessionStore.append(key, 'assistant', reply);
+        return send(res, 200, JSON.stringify({ reply }));
+      }
+    } else {
+      if (process.env.PIKO_LOG_PLANNER === '1') console.log('[intent] Pending cleared (no yes match) for key:', key);
+      pendingIntentsBySession.delete(key);
+    }
+  } else if (require('./lib/proactivePendingAction').isAffirmativeReply(message)) {
+    const { loadPending, clearPending } = require('./lib/proactivePendingAction');
+    const pp = loadPending(DATA_DIR);
+    if (pp && pp.action) {
+      clearPending(DATA_DIR);
+      const capabilityToObjective = {
+        'purchase_order.draft.create': 'purchase order draft',
+        'inventory.low_stock.scan': 'low stock scan',
+        'sales.analysis.run': 'sales analysis',
+      };
+      const objective = capabilityToObjective[pp.action] || pp.action;
+      const syntheticBrief = {
+        fields: {
+          objective,
+          execution_mode: 'auto',
+          risk_level: 'low',
+        },
+      };
+      try {
+        const dispatch = await dispatchLegionBrief(syntheticBrief, { piko_user_id: `${reqSource || 'chat'}:${key}`, model: sessionModel });
+        if (dispatch.ok && dispatch.runId) {
+          const { pollLegionRun, formatInventoryReply, buildSummaryFromResult } = require('./lib/legionRunPoller');
+          const { saveLegionResult } = require('./lib/sharedContext');
+          const polled = await pollLegionRun(dispatch.runId, LEGION_ADAPTER_API_BASE);
+          if (polled.ok && polled.result) {
+            saveLegionResult(DATA_DIR, dispatch.capability, polled.result);
+            const reply = dispatch.capability === 'inventory.low_stock.scan'
+              ? formatInventoryReply(polled.result, dispatch.capability, DATA_DIR, message)
+              : (buildSummaryFromResult(polled.result, dispatch.capability, DATA_DIR) || 'Done.');
+            history.push({ role: 'assistant', content: reply });
+            sessionStore.append(key, 'user', message);
+            sessionStore.append(key, 'assistant', reply);
+            try {
+              const { logActivity } = require('./lib/activityLog');
+              logActivity('action_router_run', { capability: pp.action, outcome: 'success', source: 'proactive_followup' });
+            } catch (_) {}
+            return send(res, 200, JSON.stringify({ reply }));
+          }
+        }
+      } catch (e) {
+        if (process.env.PIKO_LOG_PLANNER === '1') console.warn('[proactive-followup]', e.message);
+      }
+      const reply = "Couldn't run that — Legion may be unavailable. Try again in a minute.";
+      history.push({ role: 'assistant', content: reply });
+      sessionStore.append(key, 'user', message);
+      sessionStore.append(key, 'assistant', reply);
+      return send(res, 200, JSON.stringify({ reply }));
+    }
+
+    const lastAssistant = [...history].slice(0, -1).reverse().find((m) => m.role === 'assistant' && m.content);
+    const lastAskedConfirm = lastAssistant && /shall i schedule|reply yes to confirm/i.test(String(lastAssistant.content || ''));
+    if (lastAskedConfirm && /^(yes|y|confirm|ok|sure)$/i.test(String(message || '').trim())) {
+      if (process.env.PIKO_LOG_PLANNER === '1') console.log('[intent] User said yes but no pending intent for key:', key, '(possible session mismatch or expiry)');
+      const expiredReply = 'Sorry, that confirmation expired. Please try again — e.g. "schedule Load Recent Data every hour between 6am and 11pm" then reply yes.';
+      history.push({ role: 'assistant', content: expiredReply });
+      sessionStore.append(key, 'user', message);
+      sessionStore.append(key, 'assistant', expiredReply);
+      return send(res, 200, JSON.stringify({ reply: expiredReply }));
+    }
+  }
+
+  const nicknameDeclared = extractNicknameFromMessage(message);
+  if (nicknameDeclared) {
+    const safeNick = nicknameDeclared.slice(0, 24);
+    try {
+      memory.setSessionNickname(identityKey, safeNick, 'chat_declared');
+    } catch (_) {}
+    const reply = `Got it — I will use ${safeNick}.`;
+    history.push({ role: 'assistant', content: reply });
+    sessionStore.append(key, 'user', message);
+    sessionStore.append(key, 'assistant', reply);
+    return send(res, 200, JSON.stringify({ reply }));
+  }
+
+  const wordLimit = extractWordLimit(message);
+  const sentenceLimit = extractSentenceLimit(message);
+  const noQuestionRequested = requestsNoQuestion(message);
+  if (isKeepItShortPrompt(message) && wordLimit === 0 && sentenceLimit === 0) {
+    const reply = 'Got it — keeping it short.';
+    history.push({ role: 'assistant', content: reply });
+    sessionStore.append(key, 'user', message);
+    sessionStore.append(key, 'assistant', reply);
+    return send(res, 200, JSON.stringify({ reply }));
+  }
+  const formatDirectiveOnly = sentenceLimit === 1 && noQuestionRequested && wordLimit === 0 && !/:\s*\S+/.test(String(message || ''));
+  if (formatDirectiveOnly) {
+    const reply = 'Understood — one concise line, no questions.';
+    history.push({ role: 'assistant', content: reply });
+    sessionStore.append(key, 'user', message);
+    sessionStore.append(key, 'assistant', reply);
+    return send(res, 200, JSON.stringify({ reply }));
+  }
+  if (requestsLearningUpdate(message)) {
+    const reply = buildLearningUpdateReply();
+    history.push({ role: 'assistant', content: reply });
+    sessionStore.append(key, 'user', message);
+    sessionStore.append(key, 'assistant', reply);
+    return send(res, 200, JSON.stringify({ reply }));
+  }
+  if (isToneDriftComplaint(message)) {
+    const reply = "You're right — I drifted there. I'll keep it plain and on-topic.";
+    history.push({ role: 'assistant', content: reply });
+    sessionStore.append(key, 'user', message);
+    sessionStore.append(key, 'assistant', reply);
+    return send(res, 200, JSON.stringify({ reply }));
+  }
+  if (isSimpleStatusAck(message)) {
+    const reply = pickBySeed([
+      'Good to hear.',
+      'Nice one.',
+      'Glad it is going smoothly.',
+    ], `${identityKey}:${message}`);
+    history.push({ role: 'assistant', content: reply });
+    sessionStore.append(key, 'user', message);
+    sessionStore.append(key, 'assistant', reply);
+    return send(res, 200, JSON.stringify({ reply }));
+  }
+  if (wordLimit > 0) {
+    const summaryTargetMatch = String(message).match(/summari[sz]e[^:]*:\s*(.+)$/i);
+    const explicitTarget = summaryTargetMatch && summaryTargetMatch[1] ? summaryTargetMatch[1].trim() : '';
+    const prevAssistant = [...history].slice(0, -1).reverse().find((m) => m.role === 'assistant' && m.content);
+    const sourceText = explicitTarget || (prevAssistant && prevAssistant.content ? prevAssistant.content : '');
+    if (sourceText) {
+      const concise = truncateToWords(sourceText, wordLimit);
+      history.push({ role: 'assistant', content: concise });
+      sessionStore.append(key, 'user', message);
+      sessionStore.append(key, 'assistant', concise);
+      return send(res, 200, JSON.stringify({ reply: concise }));
+    }
+  }
+
+  if (/what nickname did i ask you to use\??/i.test(message)) {
+    const nick = findRequestedNickname(history, identityKey);
+    const reply = nick ? `You asked me to use ${nick}.` : 'You have not told me a nickname in this session yet.';
+    history.push({ role: 'assistant', content: reply });
+    sessionStore.append(key, 'user', message);
+    sessionStore.append(key, 'assistant', reply);
+    return send(res, 200, JSON.stringify({ reply }));
+  }
+
   const correctionMatch = message.match(/^(?:actually|no,? it'?s?|that'?s wrong|correction:)\s*(.+)$/i);
   if (correctionMatch && history.length >= 2) {
     const lastAssistant = [...history].reverse().find((m) => m.role === 'assistant');
@@ -2017,65 +3542,1469 @@ async function handleApiChat(req, res) {
     }
   }
 
-  const mind = loadMind();
-  const primaryHuman = (mind.self_model.identity && mind.self_model.identity.primary_human) || process.env.PIKO_PRIMARY_HUMAN || '';
-  const corpusBlock = getCorpusBlockForPrompt(primaryHuman);
-  const truthBlock = getTruthBlockForPrompt();
-  const userBeliefs = memory.getUserBeliefs();
-  const plan = createResponsePlan({
-    userBeliefs,
-    mind,
+  /** Plan first with minimal data. Pass recentTurns for history-aware routing (e.g. "Why?" after deep exchange). */
+  const recentTurnsForPlan = history.slice(-4).map((h) => ({ role: h.role, content: (h.content || '').slice(0, 500) }));
+  let plan = createResponsePlan({
+    userBeliefs: [],
+    mind: {},
     userMessage: message,
-    recentEpisodic: memory.getEpisodic().slice(-3),
+    recentEpisodic: [],
+    recentTurns: recentTurnsForPlan,
   });
-  if (process.env.PIKO_PLANNER_DEBUG === '1' || process.env.PIKO_PLANNER_DEBUG === 'true') {
-    log('info', 'planner', {
-      beliefs_considered: userBeliefs.length,
-      beliefs_summary: userBeliefs.slice(0, 5).map((b) => (b.proposition || '').slice(0, 50)),
-      plan: { verbosity: plan.verbosity, tone: plan.tone, challenge_level: plan.challenge_level, follow_up_questions: plan.follow_up_questions },
-      reason: plan.reason || null,
-    }, {}, req.requestId);
+  /** Optional model classification for borderline full-path messages (15–120 chars). Gate: PIKO_MODEL_ROUTING=1. */
+  if (!plan.casual && !plan.socialChat && !plan.deepReasoning && message.length >= 15 && message.length <= 120) {
+    const modelDepth = await classifyDepthOptional(message, recentTurnsForPlan, sessionModel);
+    if (modelDepth === 'deep') {
+      plan = { ...plan, deepReasoning: true, mode: 'DEEP' };
+      if (process.env.PIKO_LOG_PLANNER === '1') console.log('[PLANNER] Model classified as deep');
+    }
   }
-  const planLine = plan.capabilityQuestion
+  if (process.env.PIKO_PLANNER_DEBUG === '1' || process.env.PIKO_PLANNER_DEBUG === 'true') {
+    log('info', 'planner', { plan: { verbosity: plan.verbosity, tone: plan.tone }, reason: plan.reason || null }, {}, req.requestId);
+  }
+
+  // —— ROUTING: Circuit breakers (no LLM) or routeToAction (single LLM) — Phase 1: merged, no double-LLM tax
+  const useReAct = process.env.PIKO_USE_REACT_AGENT === '1' || process.env.PIKO_USE_REACT_AGENT === 'true';
+
+  // Phase 2.4: Circuit breakers — bypass LLM for common phrasings (both ReAct and non-ReAct)
+  const { loadCapabilityRegistry, getPikoNativeCapabilityIds } = require('./lib/actionRouter');
+  const circuitRegistry = loadCapabilityRegistry();
+  const circuitNativeIds = getPikoNativeCapabilityIds();
+  const circuitValidCaps = new Set([...circuitRegistry.map((c) => c.id), ...circuitNativeIds]);
+
+  // —— CONTEXTUAL CIRCUIT BREAKER: "Top 10 please" after CSV/Top 10 negotiation ——
+  let circuitRoute = null;
+  const historyBeforeTurn = sessionStore.getHistory(key) || [];
+  if (process.env.PIKO_LOG_PLANNER === '1' || /top 10|ten|just list/i.test(message)) {
+    console.log('[CIRCUIT-BREAKER] Incoming History:', historyBeforeTurn?.length, historyBeforeTurn?.slice(-3));
+  }
+  const lastAssistant = [...historyBeforeTurn].reverse().find((m) => m.role === 'assistant' && m.content);
+  const isNegotiatingInventory = lastAssistant && lastAssistant.content && lastAssistant.content.includes('email you the full CSV report');
+  if (isNegotiatingInventory && /top 10|ten|just list/i.test(message)) {
+    console.log('[DECISION] Circuit breaker (contextual) → inventory.low_stock.scan top10=true');
+    circuitRoute = { actionType: 'run_capability', capability: 'inventory.low_stock.scan', opts: { top10: true } };
+  } else if (isNegotiatingInventory && /email|send|csv|yes|download/i.test(message)) {
+    console.log('[DECISION] Circuit breaker (contextual) → inventory.csv.generate');
+    circuitRoute = { actionType: 'run_capability', capability: 'inventory.csv.generate', opts: { silent: false } };
+  } else if (/top 10|ten|just list/i.test(message)) {
+    const reason = !lastAssistant ? 'no assistant message in history' : (!lastAssistant.content || !lastAssistant.content.includes('email you the full CSV report')) ? 'last assistant not in negotiation state' : 'unknown';
+    console.log('[DECISION] Circuit breaker (contextual): no match —', reason, '→ routing via 7B');
+  }
+
+  // Clear digest schedule — deterministic; never let LLM route destructive "stop/clear" commands.
+  // Must mention digest/summary/product change (not generic "schedule" — avoids matching "cancel scheduled inventory scan")
+  if (!circuitRoute && /(stop|cancel|clear|remove|disable).*(digest|summary|product change)/i.test(message)) {
+    console.log('[DECISION] Circuit breaker (clear digest) → clear_digest_schedule');
+    circuitRoute = { actionType: 'clear_digest_schedule' };
+  }
+
+  // Sales summary fast path — "how are sales", "biggest seller", etc. (7B/ReAct often picks sales.analysis.run by mistake → "Legion run completed.")
+  if (!circuitRoute && /how are sales|sales (going|doing|today|this week|this month)|(biggest|best|top) seller|top (sellers?|5|10)|revenue (today|this week|this month)/i.test(message)) {
+    const period = /week|this week/i.test(message) ? 'week' : /month|this month/i.test(message) ? 'month' : 'today';
+    console.log('[DECISION] Circuit breaker (sales summary) → sales_summary_get period=', period);
+    circuitRoute = { actionType: 'sales_summary_get', period };
+  }
+
+  const SHORT_CIRCUITS = [
+    { pattern: /what('s| is|s) in the queue|tell me what is in the queue|what('s| is) (in|the) queue|what have we got in the queue|what do we have in the queue|queue at the moment|what('s| is) (in|the) queue at the moment/i, capability: 'system.intents.read' },
+    { pattern: /what( cron)? jobs are you running|what jobs do you run|cron list|list (cron|background) jobs/i, capability: 'system.operations.read' },
+    { pattern: /cancel.*(scan|task|reminder|schedule)|delete.*(scan|task|schedule)|remove.*(scan|task|schedule)/i, capability: 'system.intents.manage' },
+    { pattern: /(list|show)\s*all\s+(reorder|products?|items?)|list\s+all\s+reorder|full\s+list\s+(of\s+)?(reorder|products?)/i, capability: 'inventory.report.export' },
+    { pattern: /list.*(sku|product).*reorder|which.*(sku|product|item).*reorder|reorder status|run.*low stock scan|what needs ordering|low stock|inventory (scan|check)/i, capability: 'inventory.low_stock.scan' },
+  ];
+  if (!circuitRoute) {
+  for (const sc of SHORT_CIRCUITS) {
+    if (sc.pattern.test(message) && circuitValidCaps.has(sc.capability)) {
+      console.log('[DECISION] Circuit breaker (short-circuit) →', sc.capability);
+      circuitRoute = { actionType: 'run_capability', capability: sc.capability };
+      break;
+    }
+  }
+  }
+
+  if (circuitRoute) {
+    // Circuit breaker matched — run capability directly (no LLM)
+    const route = circuitRoute;
+    if (route.actionType === 'clear_digest_schedule') {
+      const { clearDigestSchedule } = require('./lib/tripwireEngine');
+      const success = clearDigestSchedule();
+      const reply = success
+        ? "Done, boss. I've stopped the daily product change summary and cleared your digest schedule. You won't get those morning alerts anymore."
+        : "I tried to clear the digest schedule, boss, but I hit a file system error. You might need to check my logs.";
+      history.push({ role: 'assistant', content: reply });
+      sessionStore.append(key, 'user', message);
+      sessionStore.append(key, 'assistant', reply);
+      try { const { logActivity } = require('./lib/activityLog'); logActivity('action_router_run', { actionType: 'clear_digest_schedule', outcome: success ? 'success' : 'error', fastPath: true }); } catch (_) {}
+      return send(res, 200, JSON.stringify({ reply }));
+    }
+    if (route.actionType === 'sales_summary_get') {
+      const { getUrl } = require('./lib/legionRunPoller');
+      const period = ['today', 'week', 'month'].includes(String(route.period || 'today').toLowerCase()) ? String(route.period).toLowerCase() : 'today';
+      let url = `${AUSMAKER_BASE_URL.replace(/\/$/, '')}/api/sales/summary?period=${encodeURIComponent(period)}`;
+      if (route.sku && String(route.sku).trim()) url += `&sku=${encodeURIComponent(String(route.sku).trim())}`;
+      try {
+        const getRes = await getUrl(url);
+        if (getRes.statusCode !== 200) {
+          const reply = "Sales API unavailable. Try again in a minute.";
+          history.push({ role: 'assistant', content: reply });
+          sessionStore.append(key, 'user', message);
+          sessionStore.append(key, 'assistant', reply);
+          return send(res, 200, JSON.stringify({ reply }));
+        }
+        const data = JSON.parse(getRes.body || '{}');
+        const top = (data.top_skus || []).slice(0, 5).map((t) => `${t.sku}: ${t.units}`).join(', ');
+        const reply = `Sales for ${period}: ${data.total_units_sold || 0} units sold, $${(data.total_revenue || 0).toFixed(2)} revenue. Top SKUs: ${top || 'none'}.`;
+        history.push({ role: 'assistant', content: reply });
+        sessionStore.append(key, 'user', message);
+        sessionStore.append(key, 'assistant', reply);
+        try { const { logActivity } = require('./lib/activityLog'); logActivity('action_router_run', { capability: 'sales_summary_get', outcome: 'success', fastPath: true }); } catch (_) {}
+        return send(res, 200, JSON.stringify({ reply }));
+      } catch (e) {
+        const reply = "Couldn't fetch sales: " + (e.message || 'Unknown error');
+        history.push({ role: 'assistant', content: reply });
+        sessionStore.append(key, 'user', message);
+        sessionStore.append(key, 'assistant', reply);
+        return send(res, 200, JSON.stringify({ reply }));
+      }
+    }
+    if (route.capability === 'system.operations.read') {
+      const { loadOperations, formatOperationsForPrompt } = require('./lib/operations');
+      const ops = loadOperations();
+      const formatted = formatOperationsForPrompt(ops);
+      const reply = formatted
+        ? `Here's what's running: ${formatted.replace(/\n/g, ' ').trim()}.`
+        : "No background operations configured. Add knowledge/piko-operations.json if you want to track crons.";
+      history.push({ role: 'assistant', content: reply });
+      sessionStore.append(key, 'user', message);
+      sessionStore.append(key, 'assistant', reply);
+      try { const { logActivity } = require('./lib/activityLog'); logActivity('action_router_run', { capability: route.capability, outcome: 'success', fastPath: true }); } catch (_) {}
+      return send(res, 200, JSON.stringify({ reply }));
+    }
+    if (route.capability === 'system.intents.read') {
+      const useTemplate = process.env.PIKO_FAST_QUEUE_TEMPLATE !== '0' && process.env.PIKO_FAST_QUEUE_TEMPLATE !== 'false';
+      const intents = loadIntents();
+      const pending = intents.filter((i) => (i.status === 'pending' || !i.status));
+      const cleanIntents = pending.map((i) => {
+        const task = (i.briefFields && i.briefFields.objective) || i.title || i.description || i.command || i.task || i.type || 'Task';
+        const schedule = i.schedule || (i.dueAt || i.time || i.run ? String(i.dueAt || i.time || i.run).slice(0, 16) : null) || 'Pending';
+        return { task: String(task).slice(0, 60), schedule };
+      });
+      let reply;
+      if (cleanIntents.length === 0) reply = "Queue is empty mate. Nothing scheduled.";
+      else if (cleanIntents.length <= 5) {
+        const parts = cleanIntents.map((c) => `${c.task} (${c.schedule})`);
+        reply = `You've got ${parts.length} in the queue: ${parts.length === 1 ? parts[0] : parts.slice(0, -1).join(', ') + ' and ' + parts[parts.length - 1]}. Let me know if you want to cancel any.`;
+      } else {
+        const shown = cleanIntents.slice(0, 10);
+        const parts = shown.map((c) => `${c.task} (${c.schedule})`);
+        const more = cleanIntents.length - 10;
+        const list = parts.join('; ');
+        reply = `You've got ${cleanIntents.length} in the queue: ${list}${more > 0 ? ` … plus ${more} more.` : ''} Let me know if you want to cancel any.`;
+      }
+      history.push({ role: 'assistant', content: reply });
+      sessionStore.append(key, 'user', message);
+      sessionStore.append(key, 'assistant', reply);
+      try { const { logActivity } = require('./lib/activityLog'); logActivity('action_router_run', { capability: route.capability, outcome: 'success', fastPath: true }); } catch (_) {}
+      return send(res, 200, JSON.stringify({ reply }));
+    }
+    if (route.capability === 'system.intents.manage') {
+      const { getPendingIntents, removeIntentById, findIntentsByDescriptions } = require('./lib/intents');
+      const { ollamaNativeChat } = require('./lib/llm');
+      const pending = getPendingIntents();
+      if (pending.length === 0) {
+        const reply = "Queue is already empty mate. Nothing to cancel.";
+        history.push({ role: 'assistant', content: reply });
+        sessionStore.append(key, 'user', message);
+        sessionStore.append(key, 'assistant', reply);
+        return send(res, 200, JSON.stringify({ reply }));
+      }
+      const simplifiedIntents = pending.map((i) => ({
+        id: i.id,
+        task: `${((i.briefFields && i.briefFields.objective) || i.title || i.description || i.command || i.task || i.type || 'Task').slice(0, 60)} (${i.schedule || 'pending'})`,
+      }));
+      const extractPrompt = `You are a strict data extraction assistant.
+User Request to Cancel: "${String(message || '').slice(0, 500)}"
+
+Current Active Tasks:
+${JSON.stringify(simplifiedIntents, null, 2)}
+
+RULES:
+1. Match the user's request to the Active Tasks. The user will use natural language (e.g., "8am" instead of "08:00", "both" to mean multiple tasks).
+2. Respond ONLY with a valid JSON object. It must contain exactly one key: "ids".
+3. The value of "ids" must be an array of the matched "id" strings.
+
+EXAMPLE OUTPUTS:
+{"ids": ["intent_123_456", "intent_789_012"]}
+{"ids": []}`;
+      let idsToDelete = [];
+      try {
+        const extractModel = process.env.PIKO_ROUTER_MODEL || process.env.PIKO_CASUAL_MODEL || sessionModel;
+        const raw = await ollamaNativeChat(extractModel, [{ role: 'user', content: extractPrompt }], { format: 'json', temperature: 0, max_tokens: 120 });
+        const parsed = JSON.parse((raw || '').replace(/```json\s*|\s*```/g, '').trim());
+        idsToDelete = Array.isArray(parsed.ids) ? parsed.ids : (parsed.idsToDelete || []);
+        if (!Array.isArray(idsToDelete)) idsToDelete = [];
+        const validIds = new Set(pending.map((i) => i.id));
+        idsToDelete = idsToDelete.filter((id) => validIds.has(String(id)));
+      } catch (e) {
+        const raw = String(message || '').replace(/^(?:can you please |please )?(?:cancel|delete|remove):?\s*/i, '').trim();
+        const parts = raw.split(/\n|,\s*|\s+and\s+/i).map((p) => p.replace(/^[-•]\s*/, '').trim()).filter(Boolean);
+        idsToDelete = findIntentsByDescriptions(parts.length ? parts : [message]).map((m) => m.id);
+      }
+      if (idsToDelete.length === 0) {
+        const reply = "No matching schedules found. Ask \"what's in the queue?\" to see what's pending.";
+        history.push({ role: 'assistant', content: reply });
+        sessionStore.append(key, 'user', message);
+        sessionStore.append(key, 'assistant', reply);
+        return send(res, 200, JSON.stringify({ reply }));
+      }
+      const preview = idsToDelete.map((id) => {
+        const i = pending.find((p) => p.id === id);
+        const task = (i && ((i.briefFields && i.briefFields.objective) || i.title || i.description || i.command || i.task || i.type || 'Task')) || id;
+        return `${String(task).slice(0, 50)} (${(i && i.schedule) || 'pending'})`;
+      }).join('; ');
+      const reply = `I'll cancel: ${preview}. Reply YES to confirm.`;
+      pendingCancelConfirmations.set(key, { intentIds: idsToDelete, expiresAt: Date.now() + PENDING_CANCEL_TTL_MS });
+      savePendingCancelConfirmations(pendingCancelConfirmations);
+      history.push({ role: 'assistant', content: reply });
+      sessionStore.append(key, 'user', message);
+      sessionStore.append(key, 'assistant', reply);
+      try { const { logActivity } = require('./lib/activityLog'); logActivity('action_router_run', { capability: route.capability, outcome: 'preview', pendingCount: idsToDelete.length }); } catch (_) {}
+      return send(res, 200, JSON.stringify({ reply }));
+    }
+    if (route.capability === 'inventory.csv.generate') {
+      const { formatInventoryReply, getUrl } = require('./lib/legionRunPoller');
+      const csvUrl = `${AUSMAKER_BASE_URL.replace(/\/$/, '')}/api/forecast/csv`;
+      try {
+        const res2 = await getUrl(csvUrl);
+        if (res2.statusCode !== 200) {
+          const reply = "Couldn't fetch the CSV — AusMaker API may be unavailable. Try again in a minute.";
+          history.push({ role: 'assistant', content: reply });
+          sessionStore.append(key, 'user', message);
+          sessionStore.append(key, 'assistant', reply);
+          return send(res, 200, JSON.stringify({ reply }));
+        }
+        const data = JSON.parse(res2.body || '{}');
+        if (!data.success || !data.csv_content) {
+          const reply = data.error || "No CSV data available. Run a low stock scan first to prime the cache.";
+          history.push({ role: 'assistant', content: reply });
+          sessionStore.append(key, 'user', message);
+          sessionStore.append(key, 'assistant', reply);
+          return send(res, 200, JSON.stringify({ reply }));
+        }
+        const reply = formatInventoryReply(data, 'inventory.csv.generate', DATA_DIR, message, route.opts || {});
+        history.push({ role: 'assistant', content: reply });
+        sessionStore.append(key, 'user', message);
+        sessionStore.append(key, 'assistant', reply);
+        try { const { logActivity } = require('./lib/activityLog'); logActivity('action_router_run', { capability: route.capability, outcome: 'success', fastPath: true }); } catch (_) {}
+        return send(res, 200, JSON.stringify({ reply }));
+      } catch (e) {
+        const reply = "Couldn't generate CSV: " + (e.message || 'Unknown error') + ". Try again in a minute.";
+        history.push({ role: 'assistant', content: reply });
+        sessionStore.append(key, 'user', message);
+        sessionStore.append(key, 'assistant', reply);
+        return send(res, 200, JSON.stringify({ reply }));
+      }
+    }
+    if (route.capability === 'inventory.low_stock.scan' || route.capability === 'inventory.report.export' || route.capability === 'sales.analysis.run' || route.capability === 'purchase_order.draft.create') {
+      const capabilityToObjective = { 'inventory.low_stock.scan': 'low stock scan', 'inventory.report.export': 'low stock scan', 'sales.analysis.run': 'sales analysis', 'purchase_order.draft.create': 'purchase order draft' };
+      const objective = capabilityToObjective[route.capability] || route.capability;
+      const syntheticBrief = { fields: { objective, execution_mode: 'auto', risk_level: 'low' } };
+      const dispatch = await dispatchLegionBrief(syntheticBrief, { piko_user_id: `${reqSource || 'chat'}:${key}`, model: sessionModel });
+      if (!dispatch.ok || !dispatch.runId) {
+        const reply = "Couldn't start that — Legion or the adapter may be unavailable. Try again in a minute.";
+        history.push({ role: 'assistant', content: reply });
+        sessionStore.append(key, 'user', message);
+        sessionStore.append(key, 'assistant', reply);
+        return send(res, 200, JSON.stringify({ reply }));
+      }
+      const { pollLegionRun, formatInventoryReply, buildSummaryFromResult } = require('./lib/legionRunPoller');
+      const { saveLegionResult } = require('./lib/sharedContext');
+      const polled = await pollLegionRun(dispatch.runId, LEGION_ADAPTER_API_BASE);
+      if (polled.ok && polled.result) {
+        saveLegionResult(DATA_DIR, dispatch.capability, polled.result);
+        const reply = (route.capability === 'inventory.low_stock.scan' || route.capability === 'inventory.report.export')
+          ? formatInventoryReply(polled.result, route.capability, DATA_DIR, message, route.opts || {})
+          : (buildSummaryFromResult(polled.result, dispatch.capability, DATA_DIR) || 'Done. No items flagged.');
+        history.push({ role: 'assistant', content: reply });
+        sessionStore.append(key, 'user', message);
+        sessionStore.append(key, 'assistant', reply);
+        try { const { logActivity } = require('./lib/activityLog'); logActivity('action_router_run', { capability: route.capability, runId: dispatch.runId, outcome: 'success', fastPath: true }); } catch (_) {}
+        return send(res, 200, JSON.stringify({ reply }));
+      }
+      const reply = polled.status === 'timeout' ? "Started but taking longer than expected. Try again in a minute." : (polled.error ? `Failed: ${polled.error}` : "Didn't complete. Try again in a minute.");
+      history.push({ role: 'assistant', content: reply });
+      sessionStore.append(key, 'user', message);
+      sessionStore.append(key, 'assistant', reply);
+      return send(res, 200, JSON.stringify({ reply }));
+    }
+  }
+
+  if (!circuitRoute) {
+    const isCompoundTask = /(and then|also|first|secondly|after that|finally|forecast and|check .* and|ping .* then|metrics.*forecast|revenue.*forecast)/i.test(message);
+    if (isCompoundTask) {
+      console.log('[ROUTING] Compound task detected. Routing to Plan-and-Execute Orchestrator.');
+      try {
+        const { planAndExecute } = require('./lib/taskOrchestrator');
+        const finalResponse = await planAndExecute(message, {
+          sessionModel,
+          message,
+          dataDir: DATA_DIR,
+          ausmakerBaseUrl: AUSMAKER_BASE_URL,
+          dispatchLegionBrief,
+          legionAdapterApiBase: LEGION_ADAPTER_API_BASE,
+        });
+        if (finalResponse) {
+          history.push({ role: 'assistant', content: finalResponse });
+          sessionStore.append(key, 'user', message);
+          sessionStore.append(key, 'assistant', finalResponse);
+          return send(res, 200, JSON.stringify({ reply: finalResponse }));
+        }
+      } catch (e) {
+        console.error('[ORCHESTRATOR] Error, falling back to single-shot:', e.message);
+      }
+    }
+    console.log('[DECISION] No circuit match → routing via 7B');
+    try {
+      const { routeToAction } = require('./lib/actionRouter');
+      const lastAssistant = [...history].slice(0, -1).reverse().find((m) => m.role === 'assistant' && m.content);
+      const route = await routeToAction(message, sessionModel, {
+        lastAssistantMessage: lastAssistant ? lastAssistant.content : '',
+      });
+      if (route.actionType === 'none') {
+        // Fall through to casual chat — routeToAction is gatekeeper; chat goes to standard LLM
+        console.log('[DECISION] 7B returned none → casual chat (main LLM)');
+      } else if (route.actionType === 'clarification_needed') {
+        const reply = route.fallbackMessage || "I'm having a little trouble understanding exactly what you want me to do. Did you want to run a task, check the queue, or schedule something?";
+        history.push({ role: 'assistant', content: reply });
+        sessionStore.append(key, 'user', message);
+        sessionStore.append(key, 'assistant', reply);
+        if (process.env.PIKO_LOG_PLANNER === '1') console.log('[SERVER] Clarification Loop — router uncertainty');
+        return send(res, 200, JSON.stringify({ reply }));
+      } else if (route.actionType === 'web_research_run' && route.query) {
+        // Deterministic execution: 7B router said web search — execute directly, bypass ReAct (no second-guessing)
+        console.log('[EXECUTION] Bypassing ReAct. Deterministically executing: web_research_run');
+        try {
+          const { sovereignSearchAndSynthesize } = require('./lib/sovereignSearch');
+          const q = String(route.query).trim().slice(0, 500);
+          const reply = await sovereignSearchAndSynthesize(q, message, sessionModel, { topN: 2 });
+          history.push({ role: 'assistant', content: reply });
+          sessionStore.append(key, 'user', message);
+          sessionStore.append(key, 'assistant', reply);
+          return send(res, 200, JSON.stringify({ reply }));
+        } catch (e) {
+          const reply = "Couldn't search the web: " + (e.message || 'Unknown error');
+          history.push({ role: 'assistant', content: reply });
+          sessionStore.append(key, 'user', message);
+          sessionStore.append(key, 'assistant', reply);
+          return send(res, 200, JSON.stringify({ reply }));
+        }
+      } else if (route.actionType === 'memory_subconscious_search' && route.query) {
+        // Deterministic execution: 7B router said memory search — execute directly, bypass ReAct
+        console.log('[EXECUTION] Bypassing ReAct. Deterministically executing: memory_subconscious_search');
+        try {
+          const vectorMemory = require('./lib/vectorMemory');
+          const hits = await vectorMemory.search(route.query, { limit: 5 });
+          const reply = hits.length === 0
+            ? 'No relevant past context found.'
+            : 'Past context:\n' + hits.map((h, i) => `${i + 1}. ${h.text}`).join('\n');
+          history.push({ role: 'assistant', content: reply });
+          sessionStore.append(key, 'user', message);
+          sessionStore.append(key, 'assistant', reply);
+          return send(res, 200, JSON.stringify({ reply }));
+        } catch (e) {
+          const reply = "Couldn't search memory: " + (e.message || 'Unknown error');
+          history.push({ role: 'assistant', content: reply });
+          sessionStore.append(key, 'user', message);
+          sessionStore.append(key, 'assistant', reply);
+          return send(res, 200, JSON.stringify({ reply }));
+        }
+      } else if (route.actionType === 'python_execute' && route.objective) {
+        // Deterministic execution: 7B router said Python — generate code via LLM, execute in sandbox
+        console.log('[EXECUTION] Bypassing ReAct. Deterministically executing: python_execute');
+        try {
+          const { ollamaNativeChat } = require('./lib/llm');
+          const { executePythonCode } = require('./lib/pythonSandbox');
+          const model = process.env.PIKO_ROUTER_MODEL || process.env.OLLAMA_MODEL || 'piko:finetune';
+          const genPrompt = `Generate a Python script that accomplishes this: ${route.objective}
+Use only standard library and common packages (math, json, csv). If you need pandas or matplotlib, try import them but handle ImportError.
+Output ONLY the raw Python code. No markdown, no explanation, no \`\`\`python.`;
+          const rawCode = await ollamaNativeChat(model, [{ role: 'user', content: genPrompt }], { max_tokens: 1500, temperature: 0.2 });
+          const code = (rawCode && typeof rawCode === 'string' ? rawCode : String(rawCode || ''))
+            .replace(/^```\w*\n?/, '').replace(/\n?```$/, '').trim();
+          if (!code || code.length < 5) {
+            const reply = "Couldn't generate valid Python code for that request.";
+            history.push({ role: 'assistant', content: reply });
+            sessionStore.append(key, 'user', message);
+            sessionStore.append(key, 'assistant', reply);
+            return send(res, 200, JSON.stringify({ reply }));
+          }
+          const output = await executePythonCode(code);
+          const reply = output.startsWith('Error:') ? output : `**Result:**\n\`\`\`\n${output}\n\`\`\``;
+          history.push({ role: 'assistant', content: reply });
+          sessionStore.append(key, 'user', message);
+          sessionStore.append(key, 'assistant', reply);
+          return send(res, 200, JSON.stringify({ reply }));
+        } catch (e) {
+          const reply = "Couldn't run Python: " + (e.message || 'Unknown error');
+          history.push({ role: 'assistant', content: reply });
+          sessionStore.append(key, 'user', message);
+          sessionStore.append(key, 'assistant', reply);
+          return send(res, 200, JSON.stringify({ reply }));
+        }
+      } else if (route.actionType === 'email_send' && route.to && route.subject != null) {
+        console.log('[EXECUTION] Deterministically executing: email_send');
+        try {
+          const { sendEmail } = require('./lib/emailClient');
+          const reply = await sendEmail({ to: route.to, subject: route.subject, body: route.body || '' });
+          history.push({ role: 'assistant', content: reply });
+          sessionStore.append(key, 'user', message);
+          sessionStore.append(key, 'assistant', reply);
+          return send(res, 200, JSON.stringify({ reply }));
+        } catch (e) {
+          const reply = 'Failed to send email: ' + (e.message || 'Unknown error');
+          history.push({ role: 'assistant', content: reply });
+          sessionStore.append(key, 'user', message);
+          sessionStore.append(key, 'assistant', reply);
+          return send(res, 200, JSON.stringify({ reply }));
+        }
+      } else if (route.actionType === 'document_parse' && route.filePath) {
+        console.log('[EXECUTION] Deterministically executing: document_parse');
+        try {
+          const { parseLocalDocument } = require('./lib/documentParser');
+          const reply = await parseLocalDocument(route.filePath);
+          history.push({ role: 'assistant', content: reply });
+          sessionStore.append(key, 'user', message);
+          sessionStore.append(key, 'assistant', reply);
+          return send(res, 200, JSON.stringify({ reply }));
+        } catch (e) {
+          const reply = 'Failed to parse document: ' + (e.message || 'Unknown error');
+          history.push({ role: 'assistant', content: reply });
+          sessionStore.append(key, 'user', message);
+          sessionStore.append(key, 'assistant', reply);
+          return send(res, 200, JSON.stringify({ reply }));
+        }
+      } else if (route.actionType === 'browser_actuate' && route.url && route.actions && route.actions.length) {
+        console.log('[EXECUTION] Deterministically executing: browser_actuate');
+        try {
+          const { actuateWebPage } = require('./lib/webReader');
+          const reply = await actuateWebPage(route.url, route.actions);
+          history.push({ role: 'assistant', content: reply });
+          sessionStore.append(key, 'user', message);
+          sessionStore.append(key, 'assistant', reply);
+          return send(res, 200, JSON.stringify({ reply }));
+        } catch (e) {
+          const reply = 'Web actuation failed: ' + (e.message || 'Unknown error');
+          history.push({ role: 'assistant', content: reply });
+          sessionStore.append(key, 'user', message);
+          sessionStore.append(key, 'assistant', reply);
+          return send(res, 200, JSON.stringify({ reply }));
+        }
+      } else if (route.actionType === 'system_settings_update' && route.key && route.value != null) {
+        console.log('[EXECUTION] Deterministically executing: system_settings_update', route.key, route.value);
+        try {
+          const { updateConfig } = require('./lib/configManager');
+          let parsedValue = route.value;
+          if (route.key.includes('Hour') || route.key === 'proactiveIntervalHours') {
+            parsedValue = parseInt(String(route.value), 10);
+            if (isNaN(parsedValue)) parsedValue = route.value;
+          }
+          const result = updateConfig(route.key, parsedValue);
+          const synthesisPrompt = `You are Piko. The user asked to change a system setting.
+You ran the update tool and got this result: "${result}"
+Confirm to the user that you have updated your internal programming. Keep it brief and conversational.`;
+          if (process.env.PIKO_LOG_PLANNER === '1') console.log('[SYNTHESIS] Asking Piko to confirm settings update...');
+          const reply = (await ollamaNativeChat(sessionModel, [{ role: 'user', content: synthesisPrompt }], { max_tokens: 150, temperature: 0.4 }))?.trim() || result;
+          history.push({ role: 'assistant', content: reply });
+          sessionStore.append(key, 'user', message);
+          sessionStore.append(key, 'assistant', reply);
+          return send(res, 200, JSON.stringify({ reply }));
+        } catch (e) {
+          const reply = 'Settings update failed: ' + (e.message || 'Unknown error');
+          history.push({ role: 'assistant', content: reply });
+          sessionStore.append(key, 'user', message);
+          sessionStore.append(key, 'assistant', reply);
+          return send(res, 200, JSON.stringify({ reply }));
+        }
+      } else if (route.actionType === 'legion_deploy_agent' && route.role && route.taskContext) {
+        console.log('[EXECUTION] Deterministically executing: legion_deploy_agent', route.role);
+        try {
+          const { deploySubAgent } = require('./lib/legionSwarm');
+          const { ollamaNativeChat } = require('./lib/llm');
+
+          // Asynchronous progress ping — fire-and-forget so user knows we're working (quant can take 1–2 min)
+          if (route.role === 'quant') {
+            const { sendToAdmin } = require('./lib/telegramNotifier');
+            sendToAdmin("⏳ *Piko:* I'm spinning up the Quant Agent to crunch these numbers. This requires processing thousands of rows, so it might take a minute or two. I'll ping you as soon as the forecast is ready!").catch(() => {});
+          }
+
+          const rawResult = await deploySubAgent(route.role, route.taskContext);
+          if (rawResult.startsWith('Error:') || rawResult.includes('Failed after')) {
+            history.push({ role: 'assistant', content: rawResult });
+            sessionStore.append(key, 'user', message);
+            sessionStore.append(key, 'assistant', rawResult);
+            return send(res, 200, JSON.stringify({ reply: rawResult }));
+          }
+          const synthesisPrompt = `You are Piko. The user asked you this: "${message}"
+You deployed your '${route.role}' sub-agent to do the heavy lifting, and it returned this raw data:
+
+${rawResult}
+
+- CRITICAL RULE: If the raw data says "Failed", contains a "Traceback", or mentions an Error, you MUST apologize and report the exact error text to the user. Do NOT invent a success story. Do NOT make up numbers.
+- If successful, report the numbers provided in the text. Do not convert units to dollars.
+- Speak directly to your boss without markdown headers like "**Legion quant Agent:**".`;
+          if (process.env.PIKO_LOG_PLANNER === '1') console.log('[SYNTHESIS] Asking Piko to format the agent raw data...');
+          const finalPikoResponse = await ollamaNativeChat(sessionModel, [{ role: 'user', content: synthesisPrompt }], { max_tokens: 250, temperature: 0.4 });
+          const reply = (finalPikoResponse || '').trim() || rawResult;
+          history.push({ role: 'assistant', content: reply });
+          sessionStore.append(key, 'user', message);
+          sessionStore.append(key, 'assistant', reply);
+          return send(res, 200, JSON.stringify({ reply }));
+        } catch (e) {
+          const reply = 'Legion agent failed: ' + (e.message || 'Unknown error');
+          history.push({ role: 'assistant', content: reply });
+          sessionStore.append(key, 'user', message);
+          sessionStore.append(key, 'assistant', reply);
+          return send(res, 200, JSON.stringify({ reply }));
+        }
+      } else if (useReAct && (route.actionType === 'run_capability' || route.actionType === 'create_intent' || route.actionType === 'create_reminder' || route.actionType === 'create_tripwire' || route.actionType === 'create_digest_schedule' || route.actionType === 'forecast_get' || route.actionType === 'forecast_override_set' || route.actionType === 'sales_summary_get' || route.actionType === 'memory_core_update' || route.actionType === 'cancel_intent')) {
+        // sales_summary_get: bypass ReAct — agent often picks sales.analysis.run (Legion) instead, which returns "Legion run completed." with no data
+        if (route.actionType === 'sales_summary_get') {
+          const { getUrl } = require('./lib/legionRunPoller');
+          const period = ['today', 'week', 'month'].includes(String(route.period || 'today').toLowerCase()) ? String(route.period).toLowerCase() : 'today';
+          let url = `${AUSMAKER_BASE_URL.replace(/\/$/, '')}/api/sales/summary?period=${encodeURIComponent(period)}`;
+          if (route.sku && String(route.sku).trim()) url += `&sku=${encodeURIComponent(String(route.sku).trim())}`;
+          try {
+            const getRes = await getUrl(url);
+            if (getRes.statusCode === 200) {
+              const data = JSON.parse(getRes.body || '{}');
+              const top = (data.top_skus || []).slice(0, 5).map((t) => `${t.sku}: ${t.units}`).join(', ');
+              const reply = `Sales for ${period}: ${data.total_units_sold || 0} units sold, $${(data.total_revenue || 0).toFixed(2)} revenue. Top SKUs: ${top || 'none'}.`;
+              history.push({ role: 'assistant', content: reply });
+              sessionStore.append(key, 'user', message);
+              sessionStore.append(key, 'assistant', reply);
+              try { const { logActivity } = require('./lib/activityLog'); logActivity('action_router_run', { actionType: 'sales_summary_get', outcome: 'success', fastPath: true }); } catch (_) {}
+              return send(res, 200, JSON.stringify({ reply }));
+            }
+          } catch (_) {}
+          const reply = "Sales API unavailable. Try again in a minute.";
+          history.push({ role: 'assistant', content: reply });
+          sessionStore.append(key, 'user', message);
+          sessionStore.append(key, 'assistant', reply);
+          return send(res, 200, JSON.stringify({ reply }));
+        }
+        // Task detected — use ReAct agent
+        console.log('[DECISION] Executing via ReAct agent:', route.actionType, route.capability || route.schedule || route.dueAt || '');
+        const { runAgent } = require('./lib/agentBrain');
+      const capabilityToObjective = {
+        'inventory.low_stock.scan': 'low stock scan',
+        'inventory.report.export': 'low stock scan',
+        'sales.analysis.run': 'sales analysis',
+        'purchase_order.draft.create': 'purchase order draft',
+      };
+      const executeTool = async (action, params) => {
+        if (action === 'create_intent' && params.schedule && params.objective) {
+          const { nextDueFromSchedule } = require('./lib/intents');
+          const normalizedSchedule = normalizeSchedule(params.schedule);
+          const nextDue = nextDueFromSchedule(normalizedSchedule, new Date());
+          if (!nextDue) return { error: `Couldn't parse schedule "${params.schedule}". Use daily 09:00 or hourly 06:00-23:00.` };
+          const intents = loadIntents();
+          const alreadyScheduled = intents.some((i) => i && i.type === 'legion_scheduled' && (i.status === 'pending' || !i.status) && i.schedule === normalizedSchedule && (i.title === params.objective || (i.briefFields && i.briefFields.objective === params.objective)));
+          if (alreadyScheduled) return `Already set up — ${params.objective} ${normalizedSchedule}.`;
+          const briefFields = { objective: params.objective, success_criteria: 'Task completed as scheduled', execution_mode: 'auto', risk_level: 'low' };
+          createIntent({ type: 'legion_scheduled', title: params.objective, description: params.objective, dueAt: nextDue, schedule: normalizedSchedule, briefFields, source: reqSource, sessionId: key, _creationSource: 'agent_brain' });
+          return `Done — scheduled ${params.objective} ${normalizedSchedule}.`;
+        }
+        if (action === 'create_reminder' && params.dueAt && params.objective) {
+          const at = new Date(params.dueAt);
+          if (isNaN(at.getTime())) return { error: "Couldn't parse the time. Use ISO format." };
+          createIntent({ type: 'reminder', title: params.objective, dueAt: at.toISOString(), source: reqSource, sessionId: key, _creationSource: 'agent_brain' });
+          return `Reminder set — ${params.objective} at ${at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.`;
+        }
+        if (action === 'create_tripwire' && params.sku && params.operator != null && params.value != null) {
+          const { addTripwire } = require('./lib/tripwireEngine');
+          const sku = String(params.sku || '').trim();
+          const field = String(params.field || 'stock').toLowerCase();
+          const op = String(params.operator).trim() === '=' ? '==' : String(params.operator).trim();
+          const val = parseFloat(params.value);
+          if (!sku || isNaN(val)) return { error: 'I need a SKU and a numeric value to set a tripwire.' };
+          addTripwire(sku, field, op, val);
+          return `Tripwire set! I will alert you if the ${field} for ${sku} goes ${op} ${val}.`;
+        }
+        if (action === 'create_digest_schedule' && params.time) {
+          const { addSummarySchedule, normalizeTimeString } = require('./lib/tripwireEngine');
+          const normalized = normalizeTimeString(params.time);
+          if (!normalized) return { error: 'Please specify a time (e.g. 4pm, 16:00, 9am).' };
+          addSummarySchedule(normalized);
+          return `Got it. I will compile and send the Product Change Summary every day at ${normalized}.`;
+        }
+        if (action === 'forecast_get' && params.sku) {
+          const { getUrl } = require('./lib/legionRunPoller');
+          const sku = String(params.sku || '').trim();
+          if (!sku) return { error: 'Please specify a SKU.' };
+          const url = `${AUSMAKER_BASE_URL.replace(/\/$/, '')}/api/forecast/summary?sku=${encodeURIComponent(sku)}`;
+          const res = await getUrl(url);
+          if (res.statusCode !== 200) return { error: 'Forecast API unavailable. Try again in a minute.' };
+          const data = JSON.parse(res.body || '{}');
+          const months = (data.months || []).map((m) => `${m.year_month}: ${m.qty} (${m.source})`).join(', ');
+          return `Forecast for ${sku}: daily run rate ${data.daily_run_rate || 0}. Next months: ${months || 'none'}.`;
+        }
+        if (action === 'forecast_override_set' && params.sku && params.year_month != null && params.qty != null) {
+          const { postJson } = require('./lib/legionRunPoller');
+          const sku = String(params.sku || '').trim();
+          const ym = String(params.year_month || '').trim();
+          const qty = parseInt(params.qty, 10);
+          if (!sku || !/^\d{4}-\d{2}$/.test(ym) || isNaN(qty)) return { error: 'Need sku, year_month (YYYY-MM), and qty.' };
+          const url = `${AUSMAKER_BASE_URL.replace(/\/$/, '')}/api/forecast/override`;
+          const res = await postJson(url, { sku, year_month: ym, override_qty: qty });
+          if (res.statusCode < 200 || res.statusCode >= 300) return { error: 'Override failed. ' + (res.body || '').slice(0, 100) };
+          return `Override applied. ${sku} is now set to ${qty} units for ${ym}.`;
+        }
+        if (action === 'sales_summary_get') {
+          const { getUrl } = require('./lib/legionRunPoller');
+          const period = ['today', 'week', 'month'].includes(String(params.period || 'today').toLowerCase()) ? String(params.period).toLowerCase() : 'today';
+          let url = `${AUSMAKER_BASE_URL.replace(/\/$/, '')}/api/sales/summary?period=${encodeURIComponent(period)}`;
+          if (params.sku && String(params.sku).trim()) url += `&sku=${encodeURIComponent(String(params.sku).trim())}`;
+          const res = await getUrl(url);
+          if (res.statusCode !== 200) return { error: 'Sales API unavailable. Try again in a minute.' };
+          const data = JSON.parse(res.body || '{}');
+          const top = (data.top_skus || []).slice(0, 5).map((t) => `${t.sku}: ${t.units}`).join(', ');
+          return `Sales for ${period}: ${data.total_units_sold || 0} units sold, $${(data.total_revenue || 0).toFixed(2)} revenue. Top SKUs: ${top || 'none'}.`;
+        }
+        if (action === 'memory_core_update' && params.preference) {
+          const { appendToDataSoul } = require('./lib/vectorMemory');
+          const pref = String(params.preference).trim().slice(0, 500);
+          if (pref) {
+            appendToDataSoul(pref);
+            return `Preference saved to Core Truths: "${pref.slice(0, 80)}${pref.length > 80 ? '…' : ''}".`;
+          }
+          return { error: 'No preference text provided.' };
+        }
+        if (action === 'memory_subconscious_search' && params.query) {
+          const vectorMemory = require('./lib/vectorMemory');
+          const q = String(params.query).trim().slice(0, 300);
+          if (q) {
+            const hits = await vectorMemory.search(q, { limit: 5 });
+            if (hits.length === 0) return 'No relevant past context found.';
+            return 'Past context:\n' + hits.map((h, i) => `${i + 1}. ${h.text}`).join('\n');
+          }
+          return { error: 'No search query provided.' };
+        }
+        if (action === 'web_research_run' && params.query) {
+          const { sovereignSearchAndSynthesize } = require('./lib/sovereignSearch');
+          return await sovereignSearchAndSynthesize(params.query, message, sessionModel, { topN: 2 });
+        }
+        if (action === 'python_execute' && params.code) {
+          const { executePythonCode } = require('./lib/pythonSandbox');
+          return await executePythonCode(params.code);
+        }
+        if (action === 'email_send' && params.to && params.subject != null) {
+          const { sendEmail } = require('./lib/emailClient');
+          return await sendEmail({ to: params.to, subject: params.subject, body: params.body || '' });
+        }
+        if (action === 'document_parse' && params.filePath) {
+          const { parseLocalDocument } = require('./lib/documentParser');
+          return await parseLocalDocument(params.filePath);
+        }
+        if (action === 'browser_actuate' && params.url && Array.isArray(params.actions) && params.actions.length) {
+          const { actuateWebPage } = require('./lib/webReader');
+          return await actuateWebPage(params.url, params.actions);
+        }
+        if (action === 'legion_deploy_agent' && params.role && params.taskContext) {
+          const { deploySubAgent } = require('./lib/legionSwarm');
+          return await deploySubAgent(params.role, params.taskContext);
+        }
+        if (action === 'system.intents.read') {
+          const intents = loadIntents();
+          const pending = intents.filter((i) => i.status === 'pending' || !i.status);
+          const cleanIntents = pending.map((i) => ({ task: ((i.briefFields && i.briefFields.objective) || i.title || i.description || i.command || i.task || i.type || 'Task').slice(0, 60), schedule: i.schedule || 'Pending' }));
+          if (cleanIntents.length === 0) return 'Queue is empty. Nothing scheduled.';
+          if (cleanIntents.length <= 5) return cleanIntents.map((c) => `${c.task} (${c.schedule})`).join('. ');
+          return JSON.stringify(cleanIntents.slice(0, 10));
+        }
+        if (action === 'system.operations.read') {
+          const { loadOperations, formatOperationsForPrompt } = require('./lib/operations');
+          return formatOperationsForPrompt(loadOperations()) || 'No background operations configured.';
+        }
+        if (action === 'system.intents.manage') {
+          const { getPendingIntents, removeIntentById, findIntentsByDescriptions } = require('./lib/intents');
+          const { ollamaNativeChat } = require('./lib/llm');
+          const pending = getPendingIntents();
+          if (pending.length === 0) return "Queue is already empty. Nothing to cancel.";
+          const simplifiedIntents = pending.map((i) => ({ id: i.id, task: `${((i.briefFields && i.briefFields.objective) || i.title || i.description || i.command || i.task || i.type || 'Task').slice(0, 60)} (${i.schedule || 'pending'})` }));
+          const extractPrompt = `User Request to Cancel: "${String(message || '').slice(0, 500)}"\n\nCurrent Active Tasks:\n${JSON.stringify(simplifiedIntents, null, 2)}\n\nRespond ONLY with JSON: {"ids": ["id1","id2"]} or {"ids": []}`;
+          let idsToDelete = [];
+          try {
+            const raw = await ollamaNativeChat(sessionModel, [{ role: 'user', content: extractPrompt }], { format: 'json', temperature: 0, max_tokens: 120 });
+            const parsed = JSON.parse((raw || '').replace(/```json\s*|\s*```/g, '').trim());
+            idsToDelete = Array.isArray(parsed.ids) ? parsed.ids : [];
+            const validIds = new Set(pending.map((i) => i.id));
+            idsToDelete = idsToDelete.filter((id) => validIds.has(String(id)));
+          } catch (_) {
+            const parts = String(message || '').replace(/^(?:can you please |please )?(?:cancel|delete|remove):?\s*/i, '').trim().split(/\n|,\s*|\s+and\s+/i).map((p) => p.replace(/^[-•]\s*/, '').trim()).filter(Boolean);
+            idsToDelete = findIntentsByDescriptions(parts.length ? parts : [message]).map((m) => m.id);
+          }
+          let cancelled = 0;
+          for (const id of idsToDelete) { if (removeIntentById(id)) cancelled++; }
+          return cancelled > 0 ? `Cancelled ${cancelled} schedule(s).` : 'No matching schedules found.';
+        }
+        if (action === 'ausmaker.business.health.review') {
+          const { runBusinessHealthReview } = require('./lib/proactive/analyst');
+          const review = await runBusinessHealthReview(DATA_DIR, { forceAnalyze: true });
+          return review.action === 'alert' && review.anomaly ? `Business: ${review.anomaly.summary || review.anomaly.detail || 'Anomaly detected.'}` : 'Nothing to report — business looks normal.';
+        }
+        if (action === 'business.metrics.aggregate') {
+          const { aggregateBusinessMetrics } = require('./lib/adapters/business.metrics');
+          const r = await aggregateBusinessMetrics();
+          return r.success ? `Metrics: ${r.data.total_sales} units, $${r.data.revenue} revenue (${r.data.timeframe})` : r.error;
+        }
+        if (action === 'system.health.ping') {
+          const { pingEndpoints } = require('./lib/adapters/system.health');
+          let urls = Array.isArray(params.urls) ? params.urls : (process.env.PIKO_HEALTH_CHECK_URLS || '').split(',').map((u) => u.trim()).filter(Boolean);
+          if (urls.length === 0) urls = [(AUSMAKER_BASE_URL || 'http://127.0.0.1:5001').replace(/\/$/, '')];
+          const r = await pingEndpoints(urls);
+          return r.success ? `${r.overall_status}: ${r.results.map((x) => `${x.url}=${x.ok ? x.status : 'fail'}`).join(', ')}` : r.error;
+        }
+        if (action === 'performance.benchmark.run') {
+          const { runPerformanceBenchmark } = require('./lib/adapters/performance.benchmark');
+          const url = params.url || process.env.PIKO_HEALTH_CHECK_URL || AUSMAKER_BASE_URL || 'http://127.0.0.1:5001';
+          const r = await runPerformanceBenchmark(url);
+          return r.success ? `${r.target}: ${r.latency_ms}ms (${r.status})` : r.error;
+        }
+        if (action === 'web.research.run') {
+          const { sovereignSearchAndSynthesize } = require('./lib/sovereignSearch');
+          const q = String(message || params.query || '').trim().slice(0, 500);
+          if (!q) return { error: 'No search query. Provide search terms in your message.' };
+          return await sovereignSearchAndSynthesize(q, message, sessionModel, { topN: 2 });
+        }
+        const objective = capabilityToObjective[action] || action;
+        const syntheticBrief = { fields: { objective, execution_mode: 'auto', risk_level: 'low' } };
+        const dispatch = await dispatchLegionBrief(syntheticBrief, { piko_user_id: `${reqSource || 'chat'}:${key}`, model: sessionModel });
+        if (!dispatch.ok || !dispatch.runId) return "Couldn't start that — Legion or the adapter may be unavailable.";
+        const { pollLegionRun, formatInventoryReply, buildSummaryFromResult } = require('./lib/legionRunPoller');
+        const { saveLegionResult } = require('./lib/sharedContext');
+        const polled = await pollLegionRun(dispatch.runId, LEGION_ADAPTER_API_BASE);
+        if (polled.ok && polled.result) {
+          saveLegionResult(DATA_DIR, dispatch.capability, polled.result);
+          return (action === 'inventory.low_stock.scan' || action === 'inventory.report.export')
+            ? formatInventoryReply(polled.result, action, DATA_DIR, message)
+            : (buildSummaryFromResult(polled.result, dispatch.capability, DATA_DIR) || 'Done. No items flagged.');
+        }
+        if (polled.status === 'timeout') return "Started but taking longer than expected. Try again in a minute.";
+        return polled.error ? `Failed: ${polled.error}` : "Didn't complete. Try again in a minute.";
+      };
+      const reply = await runAgent(message, { executeTool, model: sessionModel });
+      history.push({ role: 'assistant', content: reply });
+      sessionStore.append(key, 'user', message);
+      sessionStore.append(key, 'assistant', reply);
+      return send(res, 200, JSON.stringify({ reply }));
+      } else {
+        // Task but ReAct disabled — inline capability execution
+      console.log('[DECISION] Executing capability from 7B:', route.actionType, route.capability || route.schedule || route.dueAt || '');
+      if (route.actionType === 'cancel_intent') {
+        if (process.env.PIKO_LOG_PLANNER === '1') console.log('[SERVER] Intercepted cancel_intent. Re-routing to system.intents.manage.');
+        route.actionType = 'run_capability';
+        route.capability = 'system.intents.manage';
+      }
+      if (route.actionType === 'run_capability' && route.capability === 'business.metrics.aggregate') {
+        const { aggregateBusinessMetrics } = require('./lib/adapters/business.metrics');
+        const result = await aggregateBusinessMetrics();
+        const reply = result.success
+          ? `**Business Metrics (${result.data.timeframe}):**\n• Total units sold: ${result.data.total_sales}\n• Revenue: $${result.data.revenue}`
+          : `Couldn't fetch metrics: ${result.error}`;
+        history.push({ role: 'assistant', content: reply });
+        sessionStore.append(key, 'user', message);
+        sessionStore.append(key, 'assistant', reply);
+        return send(res, 200, JSON.stringify({ reply }));
+      }
+      if (route.actionType === 'run_capability' && route.capability === 'system.health.ping') {
+        const { pingEndpoints } = require('./lib/adapters/system.health');
+        const urls = (route.opts && route.opts.urls) || (process.env.PIKO_HEALTH_CHECK_URLS || '').split(',').map((u) => u.trim()).filter(Boolean);
+        if (urls.length === 0) urls.push((AUSMAKER_BASE_URL || 'http://127.0.0.1:5001').replace(/\/$/, ''));
+        const result = await pingEndpoints(urls);
+        const reply = result.success
+          ? `**System Health:** ${result.overall_status}\n${result.results.map((r) => `• ${r.url}: ${r.ok ? r.status : (r.error || 'Failed')}`).join('\n')}`
+          : `Health check failed: ${result.error}`;
+        history.push({ role: 'assistant', content: reply });
+        sessionStore.append(key, 'user', message);
+        sessionStore.append(key, 'assistant', reply);
+        return send(res, 200, JSON.stringify({ reply }));
+      }
+      if (route.actionType === 'run_capability' && route.capability === 'performance.benchmark.run') {
+        const { runPerformanceBenchmark } = require('./lib/adapters/performance.benchmark');
+        const url = (route.opts && route.opts.url) || process.env.PIKO_HEALTH_CHECK_URL || AUSMAKER_BASE_URL || 'http://127.0.0.1:5001';
+        const result = await runPerformanceBenchmark(url);
+        const reply = result.success
+          ? `**Performance:** ${result.target}\n• Latency: ${result.latency_ms}ms (${result.status})\n• HTTP: ${result.http_status}`
+          : `Benchmark failed: ${result.error}`;
+        history.push({ role: 'assistant', content: reply });
+        sessionStore.append(key, 'user', message);
+        sessionStore.append(key, 'assistant', reply);
+        return send(res, 200, JSON.stringify({ reply }));
+      }
+      if (route.actionType === 'run_capability' && route.capability === 'inventory.csv.generate') {
+        const { formatInventoryReply, getUrl } = require('./lib/legionRunPoller');
+        const csvUrl = `${AUSMAKER_BASE_URL.replace(/\/$/, '')}/api/forecast/csv`;
+        try {
+          const res2 = await getUrl(csvUrl);
+          if (res2.statusCode !== 200) {
+            const reply = "Couldn't fetch the CSV — AusMaker API may be unavailable. Try again in a minute.";
+            history.push({ role: 'assistant', content: reply });
+            sessionStore.append(key, 'user', message);
+            sessionStore.append(key, 'assistant', reply);
+            return send(res, 200, JSON.stringify({ reply }));
+          }
+          const data = JSON.parse(res2.body || '{}');
+          if (!data.success || !data.csv_content) {
+            const reply = data.error || "No CSV data available. Run a low stock scan first to prime the cache.";
+            history.push({ role: 'assistant', content: reply });
+            sessionStore.append(key, 'user', message);
+            sessionStore.append(key, 'assistant', reply);
+            return send(res, 200, JSON.stringify({ reply }));
+          }
+          const reply = formatInventoryReply(data, 'inventory.csv.generate', DATA_DIR, message, route.opts || {});
+          history.push({ role: 'assistant', content: reply });
+          sessionStore.append(key, 'user', message);
+          sessionStore.append(key, 'assistant', reply);
+          try { const { logActivity } = require('./lib/activityLog'); logActivity('action_router_run', { capability: route.capability, outcome: 'success', fastPath: true }); } catch (_) {}
+          return send(res, 200, JSON.stringify({ reply }));
+        } catch (e) {
+          const reply = "Couldn't generate CSV: " + (e.message || 'Unknown error') + ". Try again in a minute.";
+          history.push({ role: 'assistant', content: reply });
+          sessionStore.append(key, 'user', message);
+          sessionStore.append(key, 'assistant', reply);
+          return send(res, 200, JSON.stringify({ reply }));
+        }
+      }
+      if (route.actionType === 'run_capability' && route.capability) {
+        const { PIKO_NATIVE_CAPABILITIES } = require('./lib/actionRouter');
+        if (PIKO_NATIVE_CAPABILITIES.includes(route.capability)) {
+          if (route.capability === 'system.intents.manage') {
+            const { getPendingIntents, removeIntentById, findIntentsByDescriptions } = require('./lib/intents');
+            const { ollamaNativeChat } = require('./lib/llm');
+            const pending = getPendingIntents();
+            if (pending.length === 0) {
+              const reply = "Queue is already empty mate. Nothing to cancel.";
+              history.push({ role: 'assistant', content: reply });
+              sessionStore.append(key, 'user', message);
+              sessionStore.append(key, 'assistant', reply);
+              return send(res, 200, JSON.stringify({ reply }));
+            }
+            // Simplify so 3B model can fuzzy-match (e.g. "8am" → "08:00", "both" → multiple)
+            const simplifiedIntents = pending.map((i) => {
+              const task = (i.briefFields && i.briefFields.objective) || i.title || i.description || i.command || i.task || i.type || 'Task';
+              return { id: i.id, task: `${String(task).slice(0, 60)} (${i.schedule || 'pending'})` };
+            });
+            const extractPrompt = `You are a strict data extraction assistant.
+User Request to Cancel: "${String(message || '').slice(0, 500)}"
+
+Current Active Tasks:
+${JSON.stringify(simplifiedIntents, null, 2)}
+
+RULES:
+1. Match the user's request to the Active Tasks. The user will use natural language (e.g., "8am" instead of "08:00", "both" to mean multiple tasks).
+2. Respond ONLY with a valid JSON object. It must contain exactly one key: "ids".
+3. The value of "ids" must be an array of the matched "id" strings.
+
+EXAMPLE OUTPUTS:
+{"ids": ["intent_123_456", "intent_789_012"]}
+{"ids": []}`;
+            let idsToDelete = [];
+            try {
+              const extractModel = process.env.PIKO_ROUTER_MODEL || process.env.PIKO_CASUAL_MODEL || sessionModel;
+              const raw = await ollamaNativeChat(extractModel, [{ role: 'user', content: extractPrompt }], {
+                format: 'json',
+                temperature: 0,
+                max_tokens: 120,
+              });
+              console.log('[MANAGE INTENTS] LLM Raw Output:', raw || '(empty)');
+              const cleaned = (raw || '').replace(/```json\s*|\s*```/g, '').trim();
+              const parsed = JSON.parse(cleaned);
+              idsToDelete = Array.isArray(parsed.ids) ? parsed.ids : (parsed.idsToDelete || []);
+              if (!Array.isArray(idsToDelete)) idsToDelete = [];
+              const validIds = new Set(pending.map((i) => i.id));
+              idsToDelete = idsToDelete.filter((id) => validIds.has(String(id)));
+            } catch (e) {
+              if (process.env.PIKO_LOG_PLANNER === '1') console.warn('[manage] LLM extraction failed:', e.message);
+              const raw = String(message || '').replace(/^(?:can you please |please )?(?:cancel|delete|remove):?\s*/i, '').trim();
+              const parts = raw.split(/\n|,\s*|\s+and\s+/i).map((p) => p.replace(/^[-•]\s*/, '').trim()).filter(Boolean);
+              const descriptions = parts.length > 0 ? parts : [raw].filter(Boolean);
+              const matches = findIntentsByDescriptions(descriptions);
+              idsToDelete = matches.map((m) => m.id);
+            }
+            if (idsToDelete.length === 0) {
+              const reply = "No matching schedules found. Ask \"what's in the queue?\" to see what's pending.";
+              history.push({ role: 'assistant', content: reply });
+              sessionStore.append(key, 'user', message);
+              sessionStore.append(key, 'assistant', reply);
+              return send(res, 200, JSON.stringify({ reply }));
+            }
+            const preview = idsToDelete.map((id) => {
+              const i = pending.find((p) => p.id === id);
+              const task = (i && ((i.briefFields && i.briefFields.objective) || i.title || i.description || i.command || i.task || i.type || 'Task')) || id;
+              return `${String(task).slice(0, 50)} (${(i && i.schedule) || 'pending'})`;
+            }).join('; ');
+            const reply = `I'll cancel: ${preview}. Reply YES to confirm.`;
+            pendingCancelConfirmations.set(key, { intentIds: idsToDelete, expiresAt: Date.now() + PENDING_CANCEL_TTL_MS });
+            savePendingCancelConfirmations(pendingCancelConfirmations);
+            history.push({ role: 'assistant', content: reply });
+            sessionStore.append(key, 'user', message);
+            sessionStore.append(key, 'assistant', reply);
+            try {
+              const { logActivity } = require('./lib/activityLog');
+              logActivity('action_router_run', { capability: route.capability, outcome: 'preview', pendingCount: idsToDelete.length });
+            } catch (_) {}
+            return send(res, 200, JSON.stringify({ reply }));
+          }
+          if (route.capability === 'ausmaker.business.health.review') {
+            const { runBusinessHealthReview } = require('./lib/proactive/analyst');
+            const review = await runBusinessHealthReview(DATA_DIR, { forceAnalyze: true });
+            const reply = review.action === 'alert' && review.anomaly
+              ? `Business: ${review.anomaly.summary || review.anomaly.detail || 'Anomaly detected.'}${review.anomaly.detail ? ` ${review.anomaly.detail}` : ''}`
+              : 'Nothing to report — business looks normal.';
+            history.push({ role: 'assistant', content: reply });
+            sessionStore.append(key, 'user', message);
+            sessionStore.append(key, 'assistant', reply);
+            try {
+              const { logActivity } = require('./lib/activityLog');
+              logActivity('action_router_run', { capability: route.capability, outcome: review.action });
+            } catch (_) {}
+            return send(res, 200, JSON.stringify({ reply }));
+          }
+          if (route.capability === 'web.research.run') {
+            const { sovereignSearchAndSynthesize } = require('./lib/sovereignSearch');
+            const q = String(message || '').trim().slice(0, 500);
+            if (!q) {
+              const reply = 'What would you like me to search for?';
+              history.push({ role: 'assistant', content: reply });
+              sessionStore.append(key, 'user', message);
+              sessionStore.append(key, 'assistant', reply);
+              return send(res, 200, JSON.stringify({ reply }));
+            }
+            try {
+              const reply = await sovereignSearchAndSynthesize(q, message, sessionModel, { topN: 2 });
+              history.push({ role: 'assistant', content: reply });
+              sessionStore.append(key, 'user', message);
+              sessionStore.append(key, 'assistant', reply);
+              return send(res, 200, JSON.stringify({ reply }));
+            } catch (e) {
+              const reply = "Couldn't search the web: " + (e.message || 'Unknown error');
+              history.push({ role: 'assistant', content: reply });
+              sessionStore.append(key, 'user', message);
+              sessionStore.append(key, 'assistant', reply);
+              return send(res, 200, JSON.stringify({ reply }));
+            }
+          }
+          if (route.capability === 'system.operations.read' || route.capability === 'system.intents.read') {
+            // Phase 2: Template-only fast path — no LLM for queue/ops. Instant reply.
+            try {
+              const useTemplate = process.env.PIKO_FAST_QUEUE_TEMPLATE !== '0' && process.env.PIKO_FAST_QUEUE_TEMPLATE !== 'false';
+              if (route.capability === 'system.operations.read') {
+                const { loadOperations, formatOperationsForPrompt } = require('./lib/operations');
+                const ops = loadOperations();
+                const formatted = formatOperationsForPrompt(ops);
+                const reply = formatted
+                  ? `Here's what's running: ${formatted.replace(/\n/g, ' ').trim()}.`
+                  : "No background operations configured. Add knowledge/piko-operations.json if you want to track crons.";
+                history.push({ role: 'assistant', content: reply });
+                sessionStore.append(key, 'user', message);
+                sessionStore.append(key, 'assistant', reply);
+                try {
+                  const { logActivity } = require('./lib/activityLog');
+                  logActivity('action_router_run', { capability: route.capability, outcome: 'success', fastPath: true });
+                } catch (_) {}
+                if (process.env.PIKO_LOG_PLANNER === '1') console.log('[FAST-PATH] system.operations.read — template');
+                return send(res, 200, JSON.stringify({ reply }));
+              }
+              // system.intents.read
+              const intents = loadIntents();
+              const pending = intents.filter((i) => (i.status === 'pending' || !i.status));
+              const cleanIntents = pending.map((i) => {
+                const task = (i.briefFields && i.briefFields.objective) || i.title || i.description || i.command || i.task || i.type || 'Task';
+                const schedule = i.schedule || (i.dueAt || i.time || i.run ? String(i.dueAt || i.time || i.run).slice(0, 16) : null) || 'Pending';
+                return { task: String(task).slice(0, 60), schedule };
+              });
+              if (useTemplate) {
+                let reply;
+                if (cleanIntents.length === 0) {
+                  reply = "Queue is empty mate. Nothing scheduled.";
+                } else if (cleanIntents.length <= 5) {
+                  const parts = cleanIntents.map((c) => `${c.task} (${c.schedule})`);
+                  const list = parts.length === 1 ? parts[0] : parts.slice(0, -1).join(', ') + ' and ' + parts[parts.length - 1];
+                  reply = `You've got ${parts.length} in the queue: ${list}. Let me know if you want to cancel any.`;
+                } else {
+                  const shown = cleanIntents.slice(0, 10);
+                  const parts = shown.map((c) => `${c.task} (${c.schedule})`);
+                  const more = cleanIntents.length - 10;
+                  const list = parts.join('; ');
+                  reply = `You've got ${cleanIntents.length} in the queue: ${list}${more > 0 ? ` … plus ${more} more.` : ''} Let me know if you want to cancel any.`;
+                }
+                history.push({ role: 'assistant', content: reply });
+                sessionStore.append(key, 'user', message);
+                sessionStore.append(key, 'assistant', reply);
+                try {
+                  const { logActivity } = require('./lib/activityLog');
+                  logActivity('action_router_run', { capability: route.capability, outcome: 'success', fastPath: true });
+                } catch (_) {}
+                if (process.env.PIKO_LOG_PLANNER === '1') console.log('[FAST-PATH] system.intents.read — template');
+                return send(res, 200, JSON.stringify({ reply }));
+              }
+              const systemDataText = cleanIntents.length ? JSON.stringify(cleanIntents.slice(0, 15), null, 2) : 'The queue is currently empty.';
+              const cancelHint = ' If there are items, just say "Let me know if you want me to cancel any of these." DO NOT list technical commands or IDs.';
+              const leanSystemData = `[INTERNAL SYSTEM DATA]: The user is asking about their scheduled intents/queue. Here is the live data:\n\n${systemDataText}\n\nSynthesize a short, brotherly summary. Do not read the whole list verbatim if long.${cancelHint}`;
+              const leanPersona = 'You are Piko, a friendly, dry-humoured mate. Reply briefly in character.';
+              const leanMessages = [
+                { role: 'system', content: leanPersona },
+                { role: 'system', content: leanSystemData },
+                { role: 'user', content: message },
+              ];
+              const fastModel = process.env.PIKO_CASUAL_MODEL || sessionModel;
+              const rawReply = await ollamaChat(leanMessages, fastModel, { max_tokens: 150, temperature: 0.4 });
+              const reply = (rawReply || 'Couldn\'t summarise that — try again in a moment.').trim().slice(0, 400);
+              history.push({ role: 'assistant', content: reply });
+              sessionStore.append(key, 'user', message);
+              sessionStore.append(key, 'assistant', reply);
+              try {
+                const { logActivity } = require('./lib/activityLog');
+                logActivity('action_router_run', { capability: route.capability, outcome: 'success', fastPath: true });
+              } catch (_) {}
+              if (process.env.PIKO_LOG_PLANNER === '1') console.log('[FAST-PATH] system.intents.read — LLM fallback');
+              return send(res, 200, JSON.stringify({ reply }));
+            } catch (e) {
+              console.error('[FAST-PATH]', route.capability, e.message);
+              const fallback = "Tried to pull that data but hit a snag. Check the Optimus logs.";
+              history.push({ role: 'assistant', content: fallback });
+              sessionStore.append(key, 'user', message);
+              sessionStore.append(key, 'assistant', fallback);
+              return send(res, 200, JSON.stringify({ reply: fallback }));
+            }
+          } else {
+        const capabilityToObjective = {
+          'inventory.low_stock.scan': 'low stock scan',
+          'inventory.report.export': 'low stock scan',
+          'sales.analysis.run': 'sales analysis',
+          'purchase_order.draft.create': 'purchase order draft',
+        };
+        const objective = capabilityToObjective[route.capability] || route.capability;
+        const syntheticBrief = {
+          fields: {
+            objective,
+            execution_mode: 'auto',
+            risk_level: 'low',
+          },
+        };
+        const dispatch = await dispatchLegionBrief(syntheticBrief, { piko_user_id: `${reqSource || 'chat'}:${key}`, model: sessionModel });
+        if (!dispatch.ok || !dispatch.runId) {
+          const reply = "Couldn't start that — Legion or the adapter may be unavailable. Try again in a minute.";
+          history.push({ role: 'assistant', content: reply });
+          sessionStore.append(key, 'user', message);
+          sessionStore.append(key, 'assistant', reply);
+          return send(res, 200, JSON.stringify({ reply }));
+        }
+        const { pollLegionRun, formatInventoryReply, buildSummaryFromResult } = require('./lib/legionRunPoller');
+        const { saveLegionResult } = require('./lib/sharedContext');
+        const polled = await pollLegionRun(dispatch.runId, LEGION_ADAPTER_API_BASE);
+        if (polled.ok && polled.result) {
+          saveLegionResult(DATA_DIR, dispatch.capability, polled.result);
+          const reply = (route.capability === 'inventory.low_stock.scan' || route.capability === 'inventory.report.export')
+            ? formatInventoryReply(polled.result, route.capability, DATA_DIR, message, route.opts || {})
+            : (buildSummaryFromResult(polled.result, dispatch.capability, DATA_DIR) || 'Done. No items flagged.');
+          history.push({ role: 'assistant', content: reply });
+          sessionStore.append(key, 'user', message);
+          sessionStore.append(key, 'assistant', reply);
+          try {
+            const { logActivity } = require('./lib/activityLog');
+            logActivity('action_router_run', { capability: route.capability, runId: dispatch.runId, outcome: 'success' });
+          } catch (_) {}
+          return send(res, 200, JSON.stringify({ reply }));
+        }
+        if (polled.status === 'timeout') {
+          const reply = "I've started it, but it's taking longer than expected. Try again in a minute.";
+          history.push({ role: 'assistant', content: reply });
+          sessionStore.append(key, 'user', message);
+          sessionStore.append(key, 'assistant', reply);
+          return send(res, 200, JSON.stringify({ reply }));
+        }
+        const reply = polled.error ? `Failed: ${polled.error}. Check Legion logs.` : "Didn't complete. Try again in a minute.";
+        history.push({ role: 'assistant', content: reply });
+        sessionStore.append(key, 'user', message);
+        sessionStore.append(key, 'assistant', reply);
+        return send(res, 200, JSON.stringify({ reply }));
+          }
+        }
+      }
+
+      if (route.actionType === 'create_intent' && route.schedule && route.objective) {
+        const normalizedSchedule = normalizeSchedule(route.schedule);
+        const nextDue = nextDueFromSchedule(normalizedSchedule, new Date());
+        if (!nextDue) {
+          const fallback = `Couldn't parse schedule "${route.schedule}". Use \`/legion schedule daily 09:00 ${route.objective.slice(0, 40)}\` for daily tasks.`;
+          history.push({ role: 'assistant', content: fallback });
+          sessionStore.append(key, 'user', message);
+          sessionStore.append(key, 'assistant', fallback);
+          return send(res, 200, JSON.stringify({ reply: fallback }));
+        }
+        const intents = loadIntents();
+        const alreadyScheduled = intents.some(
+          (i) => i && i.type === 'legion_scheduled' && (i.status === 'pending' || !i.status) &&
+            i.schedule === normalizedSchedule && (i.title === route.objective || (i.briefFields && i.briefFields.objective === route.objective))
+        );
+        if (alreadyScheduled) {
+          const reply = `Already set up — ${route.objective} ${normalizedSchedule}. I'll keep you posted.`;
+          history.push({ role: 'assistant', content: reply });
+          sessionStore.append(key, 'user', message);
+          sessionStore.append(key, 'assistant', reply);
+          return send(res, 200, JSON.stringify({ reply }));
+        }
+        const briefFields = {
+          objective: route.objective,
+          success_criteria: 'Task completed as scheduled',
+          scope: 'Recurring Legion task',
+          constraints: 'Scheduled via Piko',
+          risk_level: 'low',
+          priority: 'P2',
+          deadline: 'Ongoing',
+          execution_mode: 'auto',
+        };
+        const newIntent = createIntent({
+          type: 'legion_scheduled',
+          title: route.objective,
+          description: route.objective,
+          dueAt: nextDue,
+          schedule: normalizedSchedule,
+          briefFields,
+          source: reqSource,
+          sessionId: key,
+          _creationSource: 'action_router',
+        });
+        try {
+          const { logActivity } = require('./lib/activityLog');
+          logActivity('intent_created', { intentId: newIntent.id, type: 'legion_scheduled', objective: route.objective, schedule: normalizedSchedule, source: 'action_router' });
+        } catch (_) {}
+        const reply = `Done — scheduled ${route.objective} ${normalizedSchedule}. I'll run it when it's due and alert you.`;
+        history.push({ role: 'assistant', content: reply });
+        sessionStore.append(key, 'user', message);
+        sessionStore.append(key, 'assistant', reply);
+        return send(res, 200, JSON.stringify({ reply }));
+      }
+
+      if (route.actionType === 'create_tripwire' && route.sku && route.operator != null && route.value != null) {
+        const { addTripwire } = require('./lib/tripwireEngine');
+        const sku = String(route.sku || '').trim();
+        const field = String(route.field || 'stock').toLowerCase();
+        const op = String(route.operator).trim();
+        const val = parseFloat(route.value);
+        if (!sku || isNaN(val)) {
+          const fallback = "I need a SKU and a numeric value to set a tripwire. Try: \"Set a tripwire for METALCLIP-2.2 if stock drops below 25\".";
+          history.push({ role: 'assistant', content: fallback });
+          sessionStore.append(key, 'user', message);
+          sessionStore.append(key, 'assistant', fallback);
+          return send(res, 200, JSON.stringify({ reply: fallback }));
+        }
+        addTripwire(sku, field, op, val);
+        const reply = `Tripwire set! I will alert you if the ${field} for ${sku} goes ${op} ${val}.`;
+        history.push({ role: 'assistant', content: reply });
+        sessionStore.append(key, 'user', message);
+        sessionStore.append(key, 'assistant', reply);
+        return send(res, 200, JSON.stringify({ reply }));
+      }
+
+      if (route.actionType === 'create_digest_schedule' && route.time) {
+        const { addSummarySchedule } = require('./lib/tripwireEngine');
+        addSummarySchedule(route.time);
+        const reply = `Got it. I will compile and send the Product Change Summary every day at ${route.time}.`;
+        history.push({ role: 'assistant', content: reply });
+        sessionStore.append(key, 'user', message);
+        sessionStore.append(key, 'assistant', reply);
+        return send(res, 200, JSON.stringify({ reply }));
+      }
+
+      if (route.actionType === 'forecast_get' && route.sku) {
+        const { getUrl } = require('./lib/legionRunPoller');
+        const sku = String(route.sku || '').trim();
+        const url = `${AUSMAKER_BASE_URL.replace(/\/$/, '')}/api/forecast/summary?sku=${encodeURIComponent(sku)}`;
+        try {
+          const getRes = await getUrl(url);
+          if (getRes.statusCode !== 200) {
+            const reply = "Forecast API unavailable. Try again in a minute.";
+            history.push({ role: 'assistant', content: reply });
+            sessionStore.append(key, 'user', message);
+            sessionStore.append(key, 'assistant', reply);
+            return send(res, 200, JSON.stringify({ reply }));
+          }
+          const data = JSON.parse(getRes.body || '{}');
+          const months = (data.months || []).map((m) => `${m.year_month}: ${m.qty} (${m.source})`).join(', ');
+          const reply = `Forecast for ${sku}: daily run rate ${data.daily_run_rate || 0}. Next months: ${months || 'none'}.`;
+          history.push({ role: 'assistant', content: reply });
+          sessionStore.append(key, 'user', message);
+          sessionStore.append(key, 'assistant', reply);
+          return send(res, 200, JSON.stringify({ reply }));
+        } catch (e) {
+          const reply = "Couldn't fetch forecast: " + (e.message || 'Unknown error');
+          history.push({ role: 'assistant', content: reply });
+          sessionStore.append(key, 'user', message);
+          sessionStore.append(key, 'assistant', reply);
+          return send(res, 200, JSON.stringify({ reply }));
+        }
+      }
+
+      if (route.actionType === 'forecast_override_set' && route.sku && route.year_month && route.qty != null) {
+        const { postJson } = require('./lib/legionRunPoller');
+        const url = `${AUSMAKER_BASE_URL.replace(/\/$/, '')}/api/forecast/override`;
+        try {
+          const postRes = await postJson(url, { sku: route.sku, year_month: route.year_month, override_qty: route.qty });
+          if (postRes.statusCode < 200 || postRes.statusCode >= 300) {
+            const reply = "Override failed. " + (JSON.parse(postRes.body || '{}').error || postRes.body || '').slice(0, 80);
+            history.push({ role: 'assistant', content: reply });
+            sessionStore.append(key, 'user', message);
+            sessionStore.append(key, 'assistant', reply);
+            return send(res, 200, JSON.stringify({ reply }));
+          }
+          const reply = `Override applied. ${route.sku} is now set to ${route.qty} units for ${route.year_month}.`;
+          history.push({ role: 'assistant', content: reply });
+          sessionStore.append(key, 'user', message);
+          sessionStore.append(key, 'assistant', reply);
+          return send(res, 200, JSON.stringify({ reply }));
+        } catch (e) {
+          const reply = "Couldn't set override: " + (e.message || 'Unknown error');
+          history.push({ role: 'assistant', content: reply });
+          sessionStore.append(key, 'user', message);
+          sessionStore.append(key, 'assistant', reply);
+          return send(res, 200, JSON.stringify({ reply }));
+        }
+      }
+
+      if (route.actionType === 'sales_summary_get') {
+        const { getUrl } = require('./lib/legionRunPoller');
+        const period = ['today', 'week', 'month'].includes(String(route.period || 'today').toLowerCase()) ? String(route.period).toLowerCase() : 'today';
+        let url = `${AUSMAKER_BASE_URL.replace(/\/$/, '')}/api/sales/summary?period=${encodeURIComponent(period)}`;
+        if (route.sku && String(route.sku).trim()) url += `&sku=${encodeURIComponent(String(route.sku).trim())}`;
+        try {
+          const getRes = await getUrl(url);
+          if (getRes.statusCode !== 200) {
+            const reply = "Sales API unavailable. Try again in a minute.";
+            history.push({ role: 'assistant', content: reply });
+            sessionStore.append(key, 'user', message);
+            sessionStore.append(key, 'assistant', reply);
+            return send(res, 200, JSON.stringify({ reply }));
+          }
+          const data = JSON.parse(getRes.body || '{}');
+          const top = (data.top_skus || []).slice(0, 5).map((t) => `${t.sku}: ${t.units}`).join(', ');
+          const reply = `Sales for ${period}: ${data.total_units_sold || 0} units sold, $${(data.total_revenue || 0).toFixed(2)} revenue. Top SKUs: ${top || 'none'}.`;
+          history.push({ role: 'assistant', content: reply });
+          sessionStore.append(key, 'user', message);
+          sessionStore.append(key, 'assistant', reply);
+          return send(res, 200, JSON.stringify({ reply }));
+        } catch (e) {
+          const reply = "Couldn't fetch sales: " + (e.message || 'Unknown error');
+          history.push({ role: 'assistant', content: reply });
+          sessionStore.append(key, 'user', message);
+          sessionStore.append(key, 'assistant', reply);
+          return send(res, 200, JSON.stringify({ reply }));
+        }
+      }
+
+      if (route.actionType === 'memory_core_update' && route.preference) {
+        const { appendToDataSoul } = require('./lib/vectorMemory');
+        appendToDataSoul(route.preference);
+        const reply = `Preference saved to Core Truths: "${route.preference.slice(0, 80)}${route.preference.length > 80 ? '…' : ''}".`;
+        history.push({ role: 'assistant', content: reply });
+        sessionStore.append(key, 'user', message);
+        sessionStore.append(key, 'assistant', reply);
+        return send(res, 200, JSON.stringify({ reply }));
+      }
+
+      if (route.actionType === 'memory_subconscious_search' && route.query) {
+        const vectorMemory = require('./lib/vectorMemory');
+        try {
+          const hits = await vectorMemory.search(route.query, { limit: 5 });
+          const reply = hits.length === 0
+            ? 'No relevant past context found.'
+            : 'Past context:\n' + hits.map((h, i) => `${i + 1}. ${h.text}`).join('\n');
+          history.push({ role: 'assistant', content: reply });
+          sessionStore.append(key, 'user', message);
+          sessionStore.append(key, 'assistant', reply);
+          return send(res, 200, JSON.stringify({ reply }));
+        } catch (e) {
+          const reply = "Couldn't search memory: " + (e.message || 'Unknown error');
+          history.push({ role: 'assistant', content: reply });
+          sessionStore.append(key, 'user', message);
+          sessionStore.append(key, 'assistant', reply);
+          return send(res, 200, JSON.stringify({ reply }));
+        }
+      }
+
+      if (route.actionType === 'web_research_run' && route.query) {
+        const { sovereignSearchAndSynthesize } = require('./lib/sovereignSearch');
+        try {
+          const reply = await sovereignSearchAndSynthesize(route.query, message, sessionModel, { topN: 2 });
+          history.push({ role: 'assistant', content: reply });
+          sessionStore.append(key, 'user', message);
+          sessionStore.append(key, 'assistant', reply);
+          return send(res, 200, JSON.stringify({ reply }));
+        } catch (e) {
+          const reply = "Couldn't search the web: " + (e.message || 'Unknown error');
+          history.push({ role: 'assistant', content: reply });
+          sessionStore.append(key, 'user', message);
+          sessionStore.append(key, 'assistant', reply);
+          return send(res, 200, JSON.stringify({ reply }));
+        }
+      }
+
+      if (route.actionType === 'create_reminder' && route.dueAt && route.objective) {
+        const at = new Date(route.dueAt);
+        if (isNaN(at.getTime())) {
+          const fallback = "Couldn't parse the time. Use `/remind 17:00 <text>` for reminders.";
+          history.push({ role: 'assistant', content: fallback });
+          sessionStore.append(key, 'user', message);
+          sessionStore.append(key, 'assistant', fallback);
+          return send(res, 200, JSON.stringify({ reply: fallback }));
+        }
+        createIntent({
+          type: 'reminder',
+          title: route.objective,
+          dueAt: at.toISOString(),
+          source: reqSource,
+          sessionId: key,
+          _creationSource: 'action_router',
+        });
+        const reply = `Reminder set — ${route.objective} at ${at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.`;
+        history.push({ role: 'assistant', content: reply });
+        sessionStore.append(key, 'user', message);
+        sessionStore.append(key, 'assistant', reply);
+        return send(res, 200, JSON.stringify({ reply }));
+      }
+
+      // When actionType === 'none', fall through to normal chat so the main LLM can answer
+      }
+    } catch (e) {
+      console.error('[action-router]', e.message);
+      const fallback = "Hit a snag routing that. Try a slash command: `/legion schedule daily 09:00 low stock scan`.";
+      history.push({ role: 'assistant', content: fallback });
+      sessionStore.append(key, 'user', message);
+      sessionStore.append(key, 'assistant', fallback);
+      return send(res, 200, JSON.stringify({ reply: fallback }));
+    }
+  }
+
+  // —— SCAN FOLLOW-UP: "How many items need reorder?" — extract from last result, no LLM (avoids timeout)
+  const lastAssistantForFollowup = [...history].slice(0, -1).reverse().find((m) => m.role === 'assistant' && m.content);
+  const lastContent = lastAssistantForFollowup ? String(lastAssistantForFollowup.content || '') : '';
+  const howManyMatch = /how many|what'?s the (total )?count|how many (items|skus)/i.test(message);
+  const hasScanResult = /need reorder|ordered|need review|SKUs checked/.test(lastContent);
+  if (howManyMatch && hasScanResult) {
+    const needReorder = lastContent.match(/(\d+)\s+need reorder/);
+    const ordered = lastContent.match(/(\d+)\s+ordered/);
+    const needReview = lastContent.match(/(\d+)\s+need review/);
+    const skusChecked = lastContent.match(/(\d+)\s+SKUs checked/);
+    let reply = null;
+    if (/reorder/i.test(message) && needReorder) reply = `${needReorder[1]} items need reorder.`;
+    else if (/ordered|awaiting delivery/i.test(message) && ordered) reply = `${ordered[1]} items ordered (awaiting delivery).`;
+    else if (/review/i.test(message) && needReview) reply = `${needReview[1]} items need review.`;
+    else if (needReorder) reply = `${needReorder[1]} items need reorder.`;
+    else if (skusChecked) reply = `${skusChecked[1]} SKUs were checked.`;
+    if (reply) {
+      history.push({ role: 'assistant', content: reply });
+      sessionStore.append(key, 'user', message);
+      sessionStore.append(key, 'assistant', reply);
+      return send(res, 200, JSON.stringify({ reply }));
+    }
+  }
+
+  // —— RECALL: "What did you do today?" — read activity log, summarize in Piko's voice ——
+  if (plan.recallRequested) {
+    try {
+      const { readRecentActivity } = require('./lib/activityLog');
+      const recent = readRecentActivity(50);
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+      const todayEntries = recent.filter((e) => e.ts && new Date(e.ts) >= todayStart);
+      const entries = /today|this (morning|afternoon)/i.test(message) ? todayEntries : recent;
+      if (entries.length === 0) {
+        const reply = "No entries in my activity log yet — nothing scheduled or fired. Once you set up reminders or Legion tasks, I'll have a record.";
+        history.push({ role: 'assistant', content: reply });
+        sessionStore.append(key, 'user', message);
+        sessionStore.append(key, 'assistant', reply);
+        return send(res, 200, JSON.stringify({ reply }));
+      }
+      const activityLines = entries.map((e) => {
+        const action = e.action === 'intent_created' ? 'created' : e.action === 'intent_fired' ? 'fired' : e.action;
+        const obj = e.objective || e.title || '';
+        const sched = e.schedule ? ` (${e.schedule})` : '';
+        const out = e.outcome === 'failed' ? ' [failed]' : '';
+        return `${e.ts}: ${action} ${e.type || ''} ${obj}${sched}${out}`;
+      }).join('\n');
+      const recallPrompt = `You are Piko. The user asked: "${message}".
+
+Your activity log (recent actions):
+${activityLines}
+
+Summarize what you've done in your dry, brotherly tone. One or two short sentences. Be conversational — e.g. "Quiet day mostly. I set up that Aus Maker stock scan you asked for at 9 AM, and fired off your reminder to call Mum at 5 PM." If something failed, mention it briefly. Do not list raw timestamps or JSON.`;
+      const reply = await ollamaChat([{ role: 'user', content: recallPrompt }], sessionModel, { max_tokens: 120, temperature: 0.6 });
+      const finalReply = (reply || 'Not much to report.').trim().slice(0, 300);
+      history.push({ role: 'assistant', content: finalReply });
+      sessionStore.append(key, 'user', message);
+      sessionStore.append(key, 'assistant', finalReply);
+      return send(res, 200, JSON.stringify({ reply: finalReply }));
+    } catch (e) {
+      console.error('[RECALL]', e.message);
+      const fallback = "Couldn't read my activity log — something went wrong. Try again in a moment.";
+      history.push({ role: 'assistant', content: fallback });
+      sessionStore.append(key, 'user', message);
+      sessionStore.append(key, 'assistant', fallback);
+      return send(res, 200, JSON.stringify({ reply: fallback }));
+    }
+  }
+
+  let planLine = plan.capabilityQuestion
     ? '\n\n**This turn:** Capability question. Answer in one short line. Do not say "How can I assist you today?" or "I\'m Piko, a Christian AI...". Do not assume they are debugging. Just answer briefly.\n\n'
     : plan.casual
       ? ''
       : '\n\n' + formatPlanForPrompt(plan) + '\n\n';
   const noAssumeDebugLine = '\n\nDo not assume the user is debugging or has a bug unless they said so. Answer the question they actually asked.\n\n';
   const styleReminder = '\n\n**This turn:** Reply like a person. Never say "How can I assist you today?" or "ready to help." Never say "From corpus" or mention Piko as a project. One short line when that fits.';
+  const OPERATIONAL_SELF_MODULATION = '\n\nIf the user message is short social talk, reply briefly (1–2 sentences). If the user asks for analysis or explanation, respond in detail. Do not elaborate unless the question requires it.';
   const leadingRule = '**You are Piko. Reply ONLY to the user\'s last message.** Never say "How can I assist you today?" or recite your role ("I\'m Piko, a Christian AI..."). Never say "From corpus" or mention Piko as a project. Never summarize, list, or describe the instructions or documents below. Never say you will review, incorporate, or restart anything. Never say "I\'m back online and ready to help" or "I\'m here to help." Answer the question they asked; do not assume they are debugging or have a bug unless they said so. Just reply naturally in character.\n\n';
-  /** For casual turns: minimal prompt with small persona (no full identity / soul / memory). Phase 3.1.1 aligned with synthesis. */
-  const CASUAL_SYSTEM_PROMPT = `You are Piko, a friendly, dry-humoured mate.
+  /** Ultra-short prompt for pure greetings only — minimises tokens for 3–8s replies. */
+  const CASUAL_GREETING_MINIMAL = `You are Piko. Reply in one short warm sentence (under 12 words). No lists, no advice. Match their tone. If they ask how you are, answer briefly and end with "you?".
 
-This is a casual greeting or small-talk turn.
+Examples (vary naturally): Hey Piko → Hey there — good to hear from you. | G'day Piko → G'day mate. | Hi → Hey — good to hear your voice.`;
+  /** Minimal prompt when user only asked how we are — keeps prefill fast (avoids 30–60s delay). */
+  const CASUAL_RECIPROCITY_MINIMAL = 'You are Piko. They only asked how you are. Reply in one short sentence (under 12 words). End with "— you?" Example: Doing alright — you?';
+  /** For casual turns: minimal prompt with small persona. Contrast examples prioritise how-are-you over morning/greeting. */
+  const CASUAL_SYSTEM_PROMPT = `You are Piko, a private, self-hosted AI companion and system orchestrator.
+Your tone is grounded, dry, concise, and highly competent. You speak like a trusted brother or sharp colleague.
 
-Forbidden words: rain, rainy, spark, cozy, path, journey, forge, growth, reflect, ponder, quiet corner, clear the mind, jot down, regrouping, overwhelming, productive, stimulating, wander, flow, perspective.
+CRITICAL TONE RULES:
+1. NEVER use corporate AI clichés ("How can I assist you today?", "I am happy to help!").
+2. DO NOT overact or force slang to sound casual. Speak in plain, normal English.
+3. NEVER ask open-ended pleasantries (e.g., "What's news?", "How are you doing?"). If the user just says "Hi", acknowledge them briefly and wait for their command.
+4. NEVER repeat or echo the user's exact words back as your reply.
+5. Keep your responses as brief as possible while remaining polite.
 
-Use literal, concrete, everyday language only. No imagery, metaphor, abstraction, or reflective framing.
+EXAMPLES OF YOUR TONE:
+User: "Ok, hi Piko."
+You: "Hey mate. What's on?"
 
-Rules:
-- Reply with ONE short, natural sentence (under 12 words).
-- Match the user's tone and energy.
-- NEVER repeat or echo the user's exact words back as your reply.
-- If they greet you, respond with a different short greeting or acknowledgment.
-- If they say how they are and ask about you, answer briefly and optionally mirror in 1–3 words.
-- Vary wording naturally; do not repeat the same phrases across replies.
-- No themes, reflection, suggestions, projects, growth, or past topics.
-- No questions unless they explicitly invite deeper talk.
-- Do not provide advice, coping strategies, or suggestions unless explicitly requested.
-- For emotional statements ("rough day", "feeling flat"), respond with empathy only. Do not offer advice, solutions, reframing, or worldview unless asked.
-- Do NOT use: rainy days/mornings, quiet spots/corners, spark(ing) ideas, cozy, break free, grand visions, forging your own path, molds, authenticity, projects, theology, faith framing, corpus, truth block, jot down, regrouping, overwhelming, productive, stimulating, wander, flow, clear the mind, sort thoughts. Do NOT say: "Morning there", "keeping dry as usual", "how are things shaping up", "stepping back", "anything new on that front".
+User: "How are you going?"
+You: "Not bad — you?"
 
-Examples:
-User: G'day Piko          You: G'day mate.
-User: Hey Piko            You: Hey there — good to hear from you.
-User: How are you going?  You: Doing alright — you?
-User: It's going good. How about yourself?  You: Nice — same here.
-User: Morning.            You: Morning — hope it's a smooth one.
-User: That's short.       You: Keeping it brief and natural.
-User: Cool.               You: Nice one.
-User: I had a rough day.  You: Sorry to hear — you okay?
-User: What do you think about coffee?  You: Good stuff — depends on the mood.`;
+User: "It's going good. How about yourself?"
+You: "Pretty good too — same boat."
+
+User: "Morning."
+You: "Morning — coffee on?"
+
+User: "I had a rough day."
+You: "Sorry to hear — you okay?"
+
+User: "What do you think about coffee?"
+You: "Love it — can't function without. You?"`;
+  /** User only asked how we are (no statement of their own). Used for prompt selection and safety net. */
+  function onlyAskedHowAreYou(msg) {
+    if (!msg || typeof msg !== 'string') return false;
+    const u = String(msg).trim().toLowerCase();
+    return /\?|？/.test(msg) && /how\s+(are|is|you|things|it)(\s+going)?\b|how'?s\s+(it|things|ya|you)(\s+going)?\b|how\s+you\s+doing|you\s+doing\s+ok|(how|what)\s+about\s+(you|yourself)/i.test(u) && !/\b(i'?m|i am|doing|good|well|fine|alright|ok|not bad|great|busy)\b/i.test(u);
+  }
   const SOCIAL_CHAT_SYSTEM_PROMPT = `You are Piko, a friendly, grounded mate.
 
 This is a normal social conversation turn (not deep worldview content).
@@ -2096,29 +5025,57 @@ User: Keen for a yarn?
 You: For sure — what do you feel like talking about?`;
   let systemContent;
   if (plan.casual) {
-    systemContent = CASUAL_SYSTEM_PROMPT;
+    if (plan.casualMode === 'GREETING' && process.env.PIKO_CASUAL_FAST_GREETING !== '0')
+      systemContent = CASUAL_GREETING_MINIMAL;
+    else if (plan.casualMode === 'RECIPROCITY' && onlyAskedHowAreYou(message))
+      systemContent = CASUAL_RECIPROCITY_MINIMAL;
+    else
+      systemContent = CASUAL_SYSTEM_PROMPT;
   } else if (plan.socialChat) {
     systemContent = SOCIAL_CHAT_SYSTEM_PROMPT;
   } else {
+    /** Full path only: load corpus, truth, memory, beliefs — not needed for casual/socialChat. */
+    const mind = loadMind();
+    const primaryHuman = (mind.self_model.identity && mind.self_model.identity.primary_human) || process.env.PIKO_PRIMARY_HUMAN || '';
+    const userBeliefs = memory.getUserBeliefs();
+    const fullPlan = createResponsePlan({
+      userBeliefs,
+      mind,
+      userMessage: message,
+      recentEpisodic: memory.getEpisodic().slice(-3),
+      recentTurns: recentTurnsForPlan,
+    });
+    planLine = fullPlan.capabilityQuestion
+      ? '\n\n**This turn:** Capability question. Answer in one short line. Do not say "How can I assist you today?" or "I\'m Piko, a Christian AI...". Do not assume they are debugging. Just answer briefly.\n\n'
+      : '\n\n' + formatPlanForPrompt(fullPlan) + '\n\n';
+    const corpusBlock = getCorpusBlockForPrompt(primaryHuman);
+    const knowledgeBaseBlock = getKnowledgeBaseBlockForPrompt(message);
+    const truthBlock = getTruthBlockForPrompt();
     let gmailContext = '';
     try {
       const { getGmailContextBlock } = require('./lib/gmailContext');
       gmailContext = await getGmailContextBlock();
     } catch (_) {}
-    const ragContext = getRagContext(message);
-    const recentLearningBlock = getRecentLearningBlock();
-    const stickyIdeasBlock = getStickyIdeasBlock();
+    const learningRequested = requestsLearningUpdate(message);
+    const learningInjectEnabled = process.env.PIKO_LEARNING_CHAT_INJECT !== '0' && learningRequested;
+    const ragContext = learningInjectEnabled ? getRagContext(message) : '';
+    const recentLearningBlock = learningInjectEnabled ? getRecentLearningBlock() : '';
+    const stickyIdeasBlock = learningInjectEnabled ? getStickyIdeasBlock() : '';
     const memoryBlock = memory.getMemoryBlockForPrompt(8, 3);
-    const baseContent = leadingRule + corpusBlock + truthBlock + memoryBlock + planLine + noAssumeDebugLine + (() => { try { const { getImpactBlockForPrompt } = require('./lib/impact'); return getImpactBlockForPrompt(); } catch (_) { return ''; } })() + SYSTEM_PROMPT + recentLearningBlock + stickyIdeasBlock + getAndConsumePendingQuestionBlock()
+    const dataSoulBlock = loadDataSoul() ? loadDataSoul() + '\n\n' : '';
+    let baseContent = leadingRule + OPERATIONAL_SELF_MODULATION + dataSoulBlock + corpusBlock + knowledgeBaseBlock + truthBlock + memoryBlock + planLine + noAssumeDebugLine + (() => { try { const { getImpactBlockForPrompt } = require('./lib/impact'); return getImpactBlockForPrompt(); } catch (_) { return ''; } })() + SYSTEM_PROMPT + recentLearningBlock + stickyIdeasBlock + (learningInjectEnabled ? getAndConsumePendingQuestionBlock() : '')
       + getDailyMemoryBlock(key)
       + gmailContext
       + ragContext
-      + (process.env.PIKO_LEARNING_CHAT_INJECT === '0' ? '' : '\n\nOccasionally, when it fits the conversation, ask the user a genuine question drawn from your recent learning or from the themes you keep returning to—so they can share their perspective. Do not do this every message; only when natural.')
+      + (learningInjectEnabled ? '\n\nOccasionally, when it fits the conversation, ask the user a genuine question drawn from your recent learning or from the themes you keep returning to—so they can share their perspective. Do not do this every message; only when natural.' : '')
       + (process.env.PIKO_CONTROLLED_DIVERGENCE === '1' || process.env.PIKO_CONTROLLED_DIVERGENCE === 'true' ? '\n\n' + (process.env.PIKO_DIVERGENCE_PROMPT || 'Occasionally offer a different angle or gently challenge an assumption when it fits; do not simply echo the user.') : '')
       + styleReminder;
+    if (fullPlan.deepReasoning) {
+      baseContent += '\n\n**This turn: deep reasoning.** The user has asked a question that deserves thoughtful consideration. Think step by step before answering. Take your time. Do not say "Let me think" or "Hmm" in your reply — the user has already been told you are thinking. Provide a considered, substantive answer.';
+    }
     systemContent = baseContent;
   }
-  const META_SLIP_PATTERN = /I see you've edited|key takeaways|I'll review the changes|I'm back online and ready to help|It's great to be back online|I'll restart the bot|persona document to refine|To confirm, the key takeaways|what'?s on your mind today/i;
+  const META_SLIP_PATTERN = /I see you've edited|I'll review the changes|I'm back online and ready to help|It's great to be back online|I'll restart the bot|persona document to refine|what'?s on your mind today/i;
   const HERE_TO_HELP_PATTERN = /I'm here to help/i;
   const EVASIVE_PATTERN = /could you clarify|I'm not sure what you mean by/i;
   /** User explicitly invited conversation — use conversational fallback instead of generic "Hey — what's up?" when we strip meta slips. */
@@ -2137,8 +5094,13 @@ You: For sure — what do you feel like talking about?`;
     ],
     RECIPROCITY: [
       "Not bad — you?",
-      "Pretty good — same here.",
+      "Pretty good — you?",
       "Doing alright — you?",
+    ],
+    ACK: [
+      "Good to hear.",
+      "Nice one.",
+      "Glad to hear it.",
     ],
     SOCIAL_EMPATHY: [
       "Sorry you're feeling that — I'm with you.",
@@ -2187,10 +5149,15 @@ You: For sure — what do you feel like talking about?`;
     const seed = `${ctx.sessionId || 'default'}:${planObj.casualMode || (planObj.socialChat ? 'SOCIAL_CHAT' : 'GENERAL')}`;
     const turnCount = Number(ctx.turnCount || 0);
     if (planObj.socialChat) {
-      if (stilted || text.length > 160) return pickDeterministic(MODE_FALLBACKS.SOCIAL_CHAT, seed, turnCount);
+      if (stilted || text.length > 160) {
+        metrics.conversation.fallbackApplied += 1;
+        if (stilted) metrics.conversation.stiltedDetected += 1;
+        return pickDeterministic(MODE_FALLBACKS.SOCIAL_CHAT, seed, turnCount);
+      }
       return reply;
     }
     if (!planObj.casual) return reply;
+    const userAskedQuestion = /\?/.test(String(userMsg || ''));
     const mode = planObj.casualMode || 'CASUAL';
     let shouldFallback = stilted;
     if (mode === 'GREETING') {
@@ -2199,13 +5166,22 @@ You: For sure — what do you feel like talking about?`;
     }
     if (mode === 'RECIPROCITY') {
       const selfStatusLike = /(not bad|pretty good|doing|all good|same here|same boat|busy|good)/i.test(text);
-      if (!selfStatusLike) shouldFallback = true;
+      const endsWithYou = /(— |\s)you\?\.?\s*$/i.test(text);
+      if (onlyAskedHowAreYou(userMsg) && !endsWithYou) shouldFallback = true;
+      else if (!selfStatusLike) shouldFallback = true;
     }
     if (mode === 'SIGN_OFF' && /\?/.test(text)) shouldFallback = true;
     if (mode === 'SOCIAL_EMPATHY' && !/(sorry|rough|hear you|that sounds|tough|flat|with you|okay|ok)/i.test(text)) shouldFallback = true;
     if (mode === 'LIGHT_OPINION' && /(morning mate|anything new|same old|g'?day\s*[—-]\s*you)/i.test(text)) shouldFallback = true;
+    if (!userAskedQuestion && /\?/.test(text)) shouldFallback = true;
     if (!shouldFallback) return reply;
-    return pickDeterministic(MODE_FALLBACKS[mode] || MODE_FALLBACKS.CASUAL, seed, turnCount);
+    metrics.conversation.fallbackApplied += 1;
+    if (stilted) metrics.conversation.stiltedDetected += 1;
+    const fallbackPool = (!userAskedQuestion && mode === 'RECIPROCITY')
+      ? MODE_FALLBACKS.ACK
+      : (MODE_FALLBACKS[mode] || MODE_FALLBACKS.CASUAL);
+    if (mode === 'GREETING') return fallbackPool[Math.floor(Math.random() * fallbackPool.length)];
+    return pickDeterministic(fallbackPool, seed, turnCount);
   }
   function stripMetaSlip(text, userMessage) {
     if (!text || typeof text !== 'string') return text;
@@ -2260,17 +5236,72 @@ You: For sure — what do you feel like talking about?`;
     if (gdayPikoOnly.test(r) && !/g'?day|piko/.test(u)) return "Hey — what's up?";
     return reply;
   }
+  /** For deep path: strip accidental "Hmm, let me think" etc. from model output — we already sent that as placeholder. */
+  function stripDeepPlaceholderEcho(reply) {
+    if (!reply || typeof reply !== 'string') return reply;
+    const t = reply.trim();
+    const echoed = /^(hmm,?\s*(let me\s+)?think(ing)?[.…\s]*|give me a moment[.…\s]*|thinking that through[.…\s]*)/i;
+    const m = t.match(echoed);
+    if (m) return t.slice(m[0].length).trim() || reply;
+    return reply;
+  }
+  /** "Same here" only makes sense when user stated their state. If user asked a "how are you" question (and didn't state theirs), replace with " — you?". */
+  function fixSameHereWhenInvalid(userMsg, reply) {
+    if (!reply || typeof reply !== 'string' || !userMsg) return reply;
+    const u = String(userMsg || '').trim().toLowerCase();
+    if (!/\?|？/.test(userMsg)) return reply;
+    const howAreYou = /how\s+(are|is|you|things|it)(\s+going)?\b|how'?s\s+(it|things|ya|you)(\s+going)?\b|how\s+you\s+doing|you\s+doing\s+ok/i;
+    if (!howAreYou.test(u)) return reply;
+    const userStatedState = /\b(i'?m|i am|doing|good|well|fine|alright|ok|not bad|great|busy)\b/i.test(u);
+    if (userStatedState) return reply;
+    const r = reply.trim();
+    if (/^same\s+here\.?\s*$/i.test(r)) {
+      const fixed = 'Doing alright — you?';
+      if (process.env.PIKO_LOG_SAME_HERE === '1') console.log('[same_here] Replaced (reply was only "same here"):', r, '→', fixed);
+      return fixed;
+    }
+    const sameHere = /([.—,\s]+same\s+here\.?)\s*$/i;
+    if (sameHere.test(reply)) {
+      const fixed = reply.replace(sameHere, ' — you?').trim();
+      if (process.env.PIKO_LOG_SAME_HERE === '1') console.log('[same_here] Replaced (user asked, did not state):', reply.slice(0, 50), '→', fixed.slice(0, 50));
+      return fixed;
+    }
+    return reply;
+  }
   // Routing windows:
-  // - casual: no history (anti-bleed)
+  // - casual: last 4 messages (2 exchanges) so Piko remembers context on acknowledgments (e.g. "Thanks" after supplier choice)
   // - socialChat: short continuity window for natural back-and-forth without full worldview stack
   // - full: normal conversation window
-  const historyWindow = plan.casual ? 0 : (plan.socialChat ? 4 : SLICE_HISTORY);
-  const historyPart = history.slice(-historyWindow).map(({ role, content }) => ({ role, content }));
+  const historyWindow = plan.casual ? 4 : (plan.socialChat ? 4 : SLICE_HISTORY);
+  const maxContextChars = parseInt(process.env.PIKO_MAX_CONTEXT_CHARS, 10) || 24000;
+  let historyPart;
+  if (historyWindow === 0) {
+    historyPart = [];
+  } else {
+    const candidate = history.slice(-historyWindow);
+    let finalHistory = [];
+    let currentChars = systemContent.length;
+    for (let i = candidate.length - 1; i >= 0; i--) {
+      const msg = candidate[i];
+      const msgLen = (msg.content || '').length + 80;
+      // Always keep the most recent message (i === candidate.length - 1) even if it breaches the limit
+      if (i !== candidate.length - 1 && currentChars + msgLen > maxContextChars) {
+        if (process.env.PIKO_LOG_PLANNER === '1') console.log('[MEMORY] Context guillotine triggered; kept', finalHistory.length, 'recent messages');
+        break;
+      }
+      finalHistory.unshift(msg);
+      currentChars += msgLen;
+    }
+    historyPart = finalHistory.map(({ role, content }) => ({ role, content }));
+  }
   const casualMaxTokens = plan.casual ? (plan.casualMode === 'GREETING' ? 24 : (plan.casualMode === 'RECIPROCITY' ? 28 : 32)) : 4000;
-  const casualTemp = plan.casual ? (plan.casualMode === 'GREETING' ? 0.6 : 0.65) : 0.9;
+  const casualTemp = plan.casual ? (plan.casualMode === 'GREETING' ? 0.3 : 0.4) : 0.9;
   const socialChatOptions = plan.socialChat ? { max_tokens: 80, temperature: 0.72, repeat_penalty: 1.2, presence_penalty: 0.15, frequency_penalty: 0.1 } : null;
+  const deepOptions = plan.deepReasoning ? { max_tokens: Math.min(2500, parseInt(process.env.PIKO_DEEP_MAX_TOKENS, 10) || 2500), temperature: 0.8, repeat_penalty: 1.15 } : null;
+  const DEEP_PLACEHOLDERS = ["Hmm, let me think…", "Give me a moment…", "Thinking that through…"];
+  const route = plan.casual ? 'casual' : (plan.socialChat ? 'socialChat' : (plan.deepReasoning ? 'deep' : 'full'));
+  metrics.conversation.route[route] = (metrics.conversation.route[route] || 0) + 1;
   if (process.env.PIKO_LOG_CASUAL === '1' || process.env.PIKO_DEBUG_CASUAL === '1') {
-    const route = plan.casual ? 'casual' : (plan.socialChat ? 'socialChat' : 'full');
     console.log('[CASUAL]', JSON.stringify({
       sessionId: (key || '').slice(0, 24),
       route,
@@ -2288,45 +5319,84 @@ You: For sure — what do you feel like talking about?`;
     { role: 'system', content: systemContent },
     ...historyPart,
   ];
-  if (plan.casual || plan.socialChat) messages.push({ role: 'user', content: message });
+  let userContentForCasual = message;
+  if (plan.casual && plan.casualMode === 'RECIPROCITY' && onlyAskedHowAreYou(message) && systemContent !== CASUAL_RECIPROCITY_MINIMAL) {
+    messages[0].content = systemContent + '\n\n**This turn:** The user only asked how you are; they did not state their own state. End your reply with "— you?".';
+  }
+  if (plan.casual || plan.socialChat) messages.push({ role: 'user', content: userContentForCasual });
+  let releaseChat = null;
+  try {
+    releaseChat = await acquireChatSlot();
+  } catch (queueErr) {
+    const busyReply = 'I am handling a few replies right now. Please retry in a moment.';
+    const retryAfterSec = Math.max(1, Math.ceil(CHAT_QUEUE_WAIT_MS / 1000));
+    if (queueErr && queueErr.code === 'chat_queue_full') {
+      return send(res, 200, JSON.stringify({ reply: busyReply, busy: true, retryAfterSec }));
+    }
+    if (queueErr && queueErr.code === 'chat_queue_timeout') {
+      return send(res, 200, JSON.stringify({ reply: busyReply, busy: true, retryAfterSec }));
+    }
+    return send(res, 200, JSON.stringify({ reply: busyReply, busy: true, retryAfterSec }));
+  }
   const latencyStart = Date.now();
   let latencyFirstToken = null;
+  function buildTimeoutFallbackReply() {
+    return 'I hit a local model timeout just now. Please retry in a moment.';
+  }
   try {
     if (streamReply) {
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' });
       const streamOptions = plan.casual
-        ? { max_tokens: casualMaxTokens, temperature: casualTemp, repeat_penalty: 1.25, presence_penalty: 0.2, frequency_penalty: 0.15 }
-        : (plan.socialChat ? socialChatOptions : {});
+        ? { max_tokens: casualMaxTokens, temperature: casualTemp, repeat_penalty: 1.25, presence_penalty: 0.2, frequency_penalty: 0.15, num_ctx: Number(process.env.PIKO_CASUAL_NUM_CTX) || 512 }
+        : (plan.socialChat ? socialChatOptions : (plan.deepReasoning ? deepOptions : {}));
+      if (plan.deepReasoning) {
+        const placeholder = DEEP_PLACEHOLDERS[Math.floor(Math.random() * DEEP_PLACEHOLDERS.length)];
+        res.write('data: ' + JSON.stringify({ content: placeholder + ' ' }) + '\n\n');
+      }
+      const modelForStream = (plan.casual && process.env.PIKO_CASUAL_MODEL) ? process.env.PIKO_CASUAL_MODEL : sessionModel;
       let reply = await ollamaChatStream(messages, (delta) => {
         if (latencyFirstToken === null) latencyFirstToken = Date.now();
         res.write('data: ' + JSON.stringify({ content: delta }) + '\n\n');
-      }, sessionModel, streamOptions);
+      }, modelForStream, streamOptions);
       const latencyTotal = Date.now() - latencyStart;
-      log('info', 'latency', { stream: true, historyMessages: historyPart.length, timeToFirstTokenMs: latencyFirstToken != null ? latencyFirstToken - latencyStart : null, totalMs: latencyTotal }, req.requestId);
-      if (process.env.PIKO_LOG_CONSOLE) console.log('[latency]', { historyMessages: historyPart.length, timeToFirstTokenMs: latencyFirstToken != null ? latencyFirstToken - latencyStart : null, totalMs: latencyTotal });
+      log('info', 'latency', { stream: true, route, historyMessages: historyPart.length, timeToFirstTokenMs: latencyFirstToken != null ? latencyFirstToken - latencyStart : null, totalMs: latencyTotal }, req.requestId);
+      if (process.env.PIKO_LOG_CONSOLE) console.log('[latency]', { route, historyMessages: historyPart.length, timeToFirstTokenMs: latencyFirstToken != null ? latencyFirstToken - latencyStart : null, totalMs: latencyTotal });
       if (plan.casual && process.env.PIKO_LOG_RAW_CASUAL === '1') {
         console.log('[RAW_CASUAL]', JSON.stringify({ msg: message?.slice(0, 50), reply: reply?.slice(0, 500) }));
       }
       reply = stripMetaSlip(reply, message);
+      if (plan.deepReasoning) reply = stripDeepPlaceholderEcho(reply) || reply;
       reply = fixPersonalLifeDeflection(message, reply) || reply;
       if ((plan.casual || plan.socialChat) && reply) {
+        const beforeBleedStrip = reply;
         reply = stripCasualThemeBleed(reply) || reply;
+        if (beforeBleedStrip !== reply) metrics.conversation.bleedTrigger += 1;
         if (plan.casual) {
           reply = fixEchoReply(message, reply) || reply;
+          reply = fixSameHereWhenInvalid(message, reply) || reply;
           const cleaned = reply.trim().split(/\n+/)[0] || '';
-          const firstSentence = cleaned.split(/[.!?]/)[0].trim();
+          // Sentence boundary: period+space+capital or end — avoid chopping decimals ($4.50), abbreviations (Mr.), URLs
+          const sentences = cleaned.match(/[^.!?]+[.!?]+(?=\s+[A-Z]|\s*$)|[^.!?]+$/g);
+          const firstSentence = (sentences ? sentences[0] : cleaned).trim();
           if (firstSentence.length > 0) {
             reply = firstSentence;
             if (!/[.!?]$/.test(reply)) reply = reply + '.';
           }
         } else if (plan.socialChat) {
+          reply = fixSameHereWhenInvalid(message, reply) || reply;
           const cleaned = reply.trim().split(/\n+/)[0] || '';
           const sentences = cleaned.split(/(?<=[.!?])\s+/).filter(Boolean).slice(0, 2);
           if (sentences.length > 0) reply = sentences.join(' ').trim();
           if (!/[.!?]$/.test(reply)) reply = reply + '.';
         }
         reply = applyModeFallback(message, reply, plan, { sessionId: key, turnCount: history.length }) || reply;
+        if (/^hey\s*[—-]\s*what'?s up\??\.?$/i.test((reply || '').trim())) metrics.conversation.resetTrigger += 1;
       }
+      reply = enforceReplyConstraints(reply, {
+        maxWords: wordLimit,
+        maxSentences: sentenceLimit,
+        noQuestion: noQuestionRequested,
+      }) || reply;
       history.push({ role: 'assistant', content: reply });
       sessionStore.append(key, 'user', message);
       sessionStore.append(key, 'assistant', reply);
@@ -2347,35 +5417,48 @@ You: For sure — what do you feel like talking about?`;
       return;
     }
     const chatOptions = plan.casual
-      ? { max_tokens: casualMaxTokens, temperature: casualTemp, repeat_penalty: 1.25, presence_penalty: 0.2, frequency_penalty: 0.15 }
-      : (plan.socialChat ? socialChatOptions : {});
-    let reply = await ollamaChat(messages, sessionModel, chatOptions);
+      ? { max_tokens: casualMaxTokens, temperature: casualTemp, repeat_penalty: 1.25, presence_penalty: 0.2, frequency_penalty: 0.15, num_ctx: Number(process.env.PIKO_CASUAL_NUM_CTX) || 512 }
+      : (plan.socialChat ? socialChatOptions : (plan.deepReasoning ? deepOptions : {}));
+    const modelForRequest = (plan.casual && process.env.PIKO_CASUAL_MODEL) ? process.env.PIKO_CASUAL_MODEL : sessionModel;
+    let reply = await ollamaChat(messages, modelForRequest, chatOptions);
     const latencyTotal = Date.now() - latencyStart;
-    log('info', 'latency', { stream: false, historyMessages: historyPart.length, totalMs: latencyTotal }, req.requestId);
-    if (process.env.PIKO_LOG_CONSOLE) console.log('[latency]', { historyMessages: historyPart.length, totalMs: latencyTotal });
+    log('info', 'latency', { stream: false, route, historyMessages: historyPart.length, totalMs: latencyTotal }, req.requestId);
+    if (process.env.PIKO_LOG_CONSOLE) console.log('[latency]', { route, historyMessages: historyPart.length, totalMs: latencyTotal });
     if (plan.casual && process.env.PIKO_LOG_RAW_CASUAL === '1') {
       console.log('[RAW_CASUAL]', JSON.stringify({ msg: message?.slice(0, 50), reply: reply?.slice(0, 500) }));
     }
     reply = stripMetaSlip(reply, message);
     reply = fixPersonalLifeDeflection(message, reply) || reply;
     if ((plan.casual || plan.socialChat) && reply) {
+      const beforeBleedStrip = reply;
       reply = stripCasualThemeBleed(reply) || reply;
+      if (beforeBleedStrip !== reply) metrics.conversation.bleedTrigger += 1;
       if (plan.casual) {
         reply = fixEchoReply(message, reply) || reply;
+        reply = fixSameHereWhenInvalid(message, reply) || reply;
         const cleaned = reply.trim().split(/\n+/)[0] || '';
-        const firstSentence = cleaned.split(/[.!?]/)[0].trim();
+        // Sentence boundary: period+space+capital or end — avoid chopping decimals ($4.50), abbreviations (Mr.), URLs
+        const sentences = cleaned.match(/[^.!?]+[.!?]+(?=\s+[A-Z]|\s*$)|[^.!?]+$/g);
+        const firstSentence = (sentences ? sentences[0] : cleaned).trim();
         if (firstSentence.length > 0) {
           reply = firstSentence;
           if (!/[.!?]$/.test(reply)) reply = reply + '.';
         }
       } else if (plan.socialChat) {
+        reply = fixSameHereWhenInvalid(message, reply) || reply;
         const cleaned = reply.trim().split(/\n+/)[0] || '';
         const sentences = cleaned.split(/(?<=[.!?])\s+/).filter(Boolean).slice(0, 2);
         if (sentences.length > 0) reply = sentences.join(' ').trim();
         if (!/[.!?]$/.test(reply)) reply = reply + '.';
       }
       reply = applyModeFallback(message, reply, plan, { sessionId: key, turnCount: history.length }) || reply;
+      if (/^hey\s*[—-]\s*what'?s up\??\.?$/i.test((reply || '').trim())) metrics.conversation.resetTrigger += 1;
     }
+    reply = enforceReplyConstraints(reply, {
+      maxWords: wordLimit,
+      maxSentences: sentenceLimit,
+      noQuestion: noQuestionRequested,
+    }) || reply;
     history.push({ role: 'assistant', content: reply });
     sessionStore.append(key, 'user', message);
     sessionStore.append(key, 'assistant', reply);
@@ -2396,12 +5479,40 @@ You: For sure — what do you feel like talking about?`;
     metrics.errors++;
     log('error', 'Ollama error', { message: e.message }, req.requestId);
     console.error('[ERROR] Ollama:', e.message);
+    const isTimeout = e && (e.code === 'ollama_chat_timeout' || e.code === 'ollama_stream_timeout');
+    if (isTimeout) {
+      const fallbackReply = buildTimeoutFallbackReply();
+      if (streamReply) {
+        if (!res.writableEnded) {
+          if (!res.headersSent) {
+            res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' });
+          }
+          try {
+            res.write('data: ' + JSON.stringify({ timeout: true, content: fallbackReply }) + '\n\n');
+            res.write('data: ' + JSON.stringify({ done: true, reply: fallbackReply, timeout: true }) + '\n\n');
+          } catch (_) {}
+          try { res.end(); } catch (_) {}
+        }
+        return;
+      }
+      return send(res, 200, JSON.stringify({ reply: fallbackReply, timeout: true }));
+    }
     let errMsg = 'Ollama error: ' + e.message;
     if (e.message && e.message.includes('OPENAI_API_KEY')) {
       errMsg += ' Set PIKO_OLLAMA_ONLY=1 in the server env and ensure Ollama is reachable (e.g. OLLAMA_URL).';
     }
+    if (res.headersSent || res.writableEnded) {
+      try { res.end(); } catch (_) {}
+      return;
+    }
     send(res, 502, JSON.stringify({ error: errMsg }));
+  } finally {
+    if (typeof releaseChat === 'function') {
+      try { releaseChat(); } catch (_) {}
+    }
   }
+  });
+  });
 }
 
 function serveFile(filePath, contentType) {
@@ -2424,8 +5535,51 @@ async function handleRequest(req, res) {
   req.requestId = 'req_' + Date.now() + '_' + Math.random().toString(36).slice(2, 9);
   const { pathname } = parseUrl(req.url);
 
+  if (await handleLegateEventsRoute(req, res, pathname, {
+    readBody,
+    send,
+    log,
+    dataDir: DATA_DIR,
+    observe: (ev) => recordLegateObsEvent(DATA_DIR, ev),
+  })) return;
+  if (await handleLegateDecisionRequestRoute(req, res, pathname, {
+    readBody,
+    send,
+    log,
+    dataDir: DATA_DIR,
+    loadPolicy: loadProactivePolicy,
+    sendLegionCommand,
+    observe: (ev) => recordLegateObsEvent(DATA_DIR, ev),
+  })) return;
+
   if (req.method === 'POST' && pathname === '/api/chat') {
     return handleApiChat(req, res);
+  }
+
+  if (req.method === 'POST' && pathname === '/api/chat/inject') {
+    readBody(req)
+      .then((body) => {
+        let json;
+        try {
+          json = JSON.parse(body || '{}');
+        } catch (_) {
+          return send(res, 400, JSON.stringify({ error: 'Invalid JSON' }));
+        }
+        const sessionId = json.sessionId || json.session_id;
+        const role = json.role || 'assistant';
+        const content = json.content;
+        if (!sessionId || typeof content !== 'string') {
+          return send(res, 400, JSON.stringify({ error: 'Missing sessionId or content' }));
+        }
+        const ok = sessionStore.append(sessionId, role, content.slice(0, 10000));
+        if (process.env.PIKO_LOG_PLANNER === '1') console.log('[MEMORY] Injected', role, 'vision context into session', sessionId.slice(0, 30));
+        return send(res, 200, JSON.stringify({ success: !!ok }));
+      })
+      .catch((e) => {
+        console.error('[MEMORY INJECTION]', e.message);
+        return send(res, 500, JSON.stringify({ error: 'Failed to inject memory' }));
+      });
+    return;
   }
 
   if (req.method === 'POST' && pathname === '/api/ios-hub') {
@@ -2439,10 +5593,13 @@ async function handleRequest(req, res) {
       errors: metrics.errors,
       chat: metrics.chat,
       commands: metrics.commands,
+      conversation: metrics.conversation,
       uptimeMs,
       uptime: `${Math.floor(uptimeMs / 60000)}m`,
     }));
   }
+
+  if (handleConversationQualityRoute(req, res, pathname, metrics, send)) return;
 
   if (req.method === 'GET' && pathname === '/api/logs') {
     const { query } = parseUrl(req.url);
@@ -2453,6 +5610,102 @@ async function handleRequest(req, res) {
       lines = raw.split('\n').filter(Boolean).slice(-tail);
     } catch (_) {}
     return send(res, 200, JSON.stringify({ logs: lines }));
+  }
+
+  // —— Webhook events (external systems POST here) ——
+  function checkWebhookAuth(req) {
+    if (!PIKO_WEBHOOK_SECRET) return true;
+    const auth = req.headers.authorization || '';
+    const bearer = auth.startsWith('Bearer ') ? auth.slice(7) : '';
+    const key = (req.headers['x-webhook-key'] || '').trim();
+    return bearer === PIKO_WEBHOOK_SECRET || key === PIKO_WEBHOOK_SECRET;
+  }
+  if (req.method === 'POST' && (pathname === '/api/webhooks/events' || pathname === '/api/webhooks/ausmaker')) {
+    if (!checkWebhookAuth(req)) {
+      return send(res, 401, JSON.stringify({ ok: false, error: 'Webhook auth required' }));
+    }
+    readBody(req)
+      .then(async (body) => {
+        try {
+          const parsed = body ? JSON.parse(body) : {};
+          let event = {
+            source: pathname === '/api/webhooks/ausmaker' ? 'ausmaker' : (parsed.source || 'unknown'),
+            eventType: String(parsed.eventType || parsed.event_type || '').trim() || 'unknown',
+            payload: parsed.payload || parsed,
+            timestamp: parsed.timestamp || new Date().toISOString(),
+          };
+          const result = await processWebhookEvent(event, {
+            postJsonToUrl,
+            sendTelegram: telegramNotify,
+            appendPending: appendPendingNotification,
+            legionBase: LEGION_ADAPTER_API_BASE,
+            bearer: LEGION_ADAPTER_API_BEARER,
+          });
+          const id = `wh_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+          return send(res, 202, JSON.stringify({ id, status: 'processed', rulesMatched: result.rulesMatched }));
+        } catch (e) {
+          return send(res, 400, JSON.stringify({ ok: false, error: e.message || 'Invalid webhook payload' }));
+        }
+      })
+      .catch((e) => send(res, 500, JSON.stringify({ ok: false, error: e.message || 'Webhook processing failed' })));
+    return;
+  }
+
+  // —— /webhook/inventory-alert: AusMaker real-time inventory alerts (Reorder/Review status) ——
+  if (req.method === 'POST' && pathname === '/webhook/inventory-alert') {
+    readBody(req)
+      .then(async (body) => {
+        try {
+          const payload = body ? JSON.parse(body) : {};
+          const { sku, name, old_status, new_status, soh, forecast, active_method } = payload;
+          if (new_status === 'Reorder' || new_status === 'Review') {
+            const { sendToAdmin } = require('./lib/telegramNotifier');
+            const { enqueueInventoryAlert } = require('./lib/inventoryAlertBatcher');
+            await enqueueInventoryAlert(
+              { sku, name, old_status, new_status, soh, forecast, active_method },
+              sendToAdmin,
+            );
+          }
+          return send(res, 200, 'OK');
+        } catch (e) {
+          console.error('[WEBHOOK] inventory-alert failed:', e.message);
+          return send(res, 500, JSON.stringify({ error: e.message }));
+        }
+      })
+      .catch((e) => send(res, 500, JSON.stringify({ error: e.message || 'Webhook failed' })));
+    return;
+  }
+
+  // —— /api/webhook/alert: LLM-evaluated push alerts (Shopify, Cin7, custom scripts) ——
+  if (req.method === 'POST' && (pathname === '/api/webhook/alert' || pathname === '/webhook/alert')) {
+    if (!checkWebhookAuth(req)) {
+      return send(res, 401, JSON.stringify({ ok: false, error: 'Webhook auth required' }));
+    }
+    readBody(req)
+      .then(async (body) => {
+        try {
+          const payload = body ? JSON.parse(body) : {};
+          const alertSource = payload.source || 'External System';
+          const alertMessage = payload.message || (payload.data ? JSON.stringify(payload.data) : JSON.stringify(payload));
+          if (process.env.PIKO_LOG_PLANNER === '1') console.log('[WEBHOOK] Received external alert:', alertSource, alertMessage.slice(0, 200));
+          const { ollamaNativeChat } = require('./lib/llm');
+          const model = process.env.PIKO_ROUTER_MODEL || process.env.OLLAMA_MODEL || 'piko:finetune';
+          const prompt = `You are Piko. An urgent webhook alert just arrived from ${alertSource}.
+Alert details: ${String(alertMessage).slice(0, 1500)}
+Draft a concise, urgent Telegram message to the user notifying them of this event. If it is trivial or noise, return exactly "IGNORE". Otherwise return only the message text.`;
+          const pikoResponse = await ollamaNativeChat(model, [{ role: 'user', content: prompt }], { max_tokens: 150, temperature: 0.3 });
+          const trimmed = (pikoResponse && typeof pikoResponse === 'string' ? pikoResponse : String(pikoResponse || '')).trim();
+          if (trimmed && !/^IGNORE$/i.test(trimmed)) {
+            await telegramNotify('🚨 **Automated Alert**\n' + trimmed);
+          }
+          return send(res, 200, JSON.stringify({ success: true, processed: true }));
+        } catch (e) {
+          log('error', 'webhook_alert', { message: e.message });
+          return send(res, 500, JSON.stringify({ ok: false, error: e.message || 'Webhook processing failed' }));
+        }
+      })
+      .catch((e) => send(res, 500, JSON.stringify({ ok: false, error: e.message || 'Webhook processing failed' })));
+    return;
   }
 
   // —— State API (read-only; localhost only) ——
@@ -2483,6 +5736,911 @@ async function handleRequest(req, res) {
   const controlPaths = pathname === '/control' || pathname.startsWith('/control-') || pathname === '/api/control' || pathname === '/api/integrations/linked' || pathname === '/api/gmail/unread' || (pathname && (pathname.startsWith('/api/control/') || pathname === '/api/ea-alerts' || pathname === '/api/ea-preferences' || pathname === '/api/oauth/gmail/start' || pathname === '/api/oauth/slack/start' || pathname === '/api/oauth/notion/start'));
   if (controlPaths && !canAccessControl(req)) {
     return send(res, 403, JSON.stringify({ error: 'Control access not allowed' }));
+  }
+
+  if (req.method === 'GET' && pathname === '/api/control/proactive-policy') {
+    try {
+      const policy = loadProactivePolicy();
+      return send(res, 200, JSON.stringify({ ok: true, policy }));
+    } catch (e) {
+      return send(res, 500, JSON.stringify({ ok: false, error: e.message || 'Failed to load policy' }));
+    }
+  }
+
+  if (req.method === 'POST' && pathname === '/api/control/proactive-policy') {
+    readBody(req)
+      .then((body) => {
+        try {
+          const parsed = body ? JSON.parse(body) : {};
+          const expectedUpdatedAt = parsed && parsed.expectedUpdatedAt ? parsed.expectedUpdatedAt : '';
+          const next = saveProactivePolicy(parsed && parsed.policy ? parsed.policy : parsed, { expectedUpdatedAt });
+          return send(res, 200, JSON.stringify({ ok: true, policy: next }));
+        } catch (e) {
+          if (e && e.code === 'POLICY_CONFLICT') {
+            return send(res, 409, JSON.stringify({
+              ok: false,
+              error: 'Policy version conflict',
+              code: e.code,
+              current: e.current || loadProactivePolicy(),
+            }));
+          }
+          return send(res, 400, JSON.stringify({ ok: false, error: e.message || 'Invalid policy payload' }));
+        }
+      })
+      .catch((e) => send(res, 500, JSON.stringify({ ok: false, error: e.message || 'Failed to save policy' })));
+    return;
+  }
+
+  if (req.method === 'GET' && pathname === '/api/control/legate-decisions') {
+    try {
+      const { query } = parseUrl(req.url);
+      const limit = query && query.limit ? Number(query.limit) : 100;
+      const rows = listLegateDecisions(DATA_DIR, limit);
+      return send(res, 200, JSON.stringify({ ok: true, decisions: rows }));
+    } catch (e) {
+      return send(res, 500, JSON.stringify({ ok: false, error: e.message || 'Failed to load legate decisions' }));
+    }
+  }
+
+  if (req.method === 'POST' && pathname === '/api/control/legate-decisions/execute') {
+    const startedAt = Date.now();
+    readBody(req)
+      .then(async (body) => {
+        try {
+          const parsed = body ? JSON.parse(body) : {};
+          const traceId = String(parsed && parsed.trace_id ? parsed.trace_id : '').trim();
+          if (!traceId) {
+            recordLegateObsEvent(DATA_DIR, { route: '/api/control/legate-decisions/execute', status: 400, latencyMs: Date.now() - startedAt, outcome: 'invalid_payload', errorCode: 'MISSING_TRACE_ID' });
+            return send(res, 400, JSON.stringify({ ok: false, error: 'Missing trace_id' }));
+          }
+          const decision = findDecisionByTrace(DATA_DIR, traceId);
+          if (!decision) {
+            recordLegateObsEvent(DATA_DIR, { route: '/api/control/legate-decisions/execute', status: 404, latencyMs: Date.now() - startedAt, outcome: 'not_found', errorCode: 'DECISION_NOT_FOUND', trace_id: traceId });
+            return send(res, 404, JSON.stringify({ ok: false, error: 'Decision not found' }));
+          }
+          const rollout = loadLegateRollout(DATA_DIR);
+          const gate = canExecuteProductionAction(rollout);
+          if (!gate.ok) {
+            recordLegateObsEvent(DATA_DIR, { route: '/api/control/legate-decisions/execute', status: 409, latencyMs: Date.now() - startedAt, outcome: 'rollout_blocked', errorCode: gate.reason, trace_id: traceId });
+            return send(res, 409, JSON.stringify({ ok: false, error: `Execution blocked by rollout gate: ${gate.reason}`, code: 'ROLLOUT_BLOCKED', gate: gate.reason, rollout }));
+          }
+          const execution = await executeDecisionAction(decision, { sendLegionCommand, dataDir: DATA_DIR });
+          recordLegateObsEvent(DATA_DIR, {
+            route: '/api/control/legate-decisions/execute',
+            status: 200,
+            latencyMs: Date.now() - startedAt,
+            outcome: execution && execution.status === 'sent' ? 'execute_sent' : 'execute_not_sent',
+            trace_id: traceId,
+          });
+          return send(res, 200, JSON.stringify({ ok: true, trace_id: traceId, execution }));
+        } catch (e) {
+          recordLegateObsEvent(DATA_DIR, { route: '/api/control/legate-decisions/execute', status: 400, latencyMs: Date.now() - startedAt, outcome: 'invalid_execute_payload', errorCode: 'INVALID_EXECUTE_PAYLOAD' });
+          return send(res, 400, JSON.stringify({ ok: false, error: e.message || 'Invalid execute payload' }));
+        }
+      })
+      .catch((e) => {
+        recordLegateObsEvent(DATA_DIR, { route: '/api/control/legate-decisions/execute', status: 500, latencyMs: Date.now() - startedAt, outcome: 'execute_failed', errorCode: 'EXECUTE_FAILED' });
+        return send(res, 500, JSON.stringify({ ok: false, error: e.message || 'Failed to execute decision action' }));
+      });
+    return;
+  }
+
+  if (req.method === 'GET' && pathname === '/api/control/legate-rollout') {
+    try {
+      const rollout = loadLegateRollout(DATA_DIR);
+      return send(res, 200, JSON.stringify({ ok: true, rollout }));
+    } catch (e) {
+      return send(res, 500, JSON.stringify({ ok: false, error: e.message || 'Failed to load legate rollout state' }));
+    }
+  }
+
+  if (req.method === 'POST' && pathname === '/api/control/legate-rollout') {
+    readBody(req)
+      .then((body) => {
+        try {
+          const parsed = body ? JSON.parse(body) : {};
+          const expectedUpdatedAt = String(parsed && parsed.expectedUpdatedAt || '');
+          const payload = parsed && parsed.rollout ? parsed.rollout : parsed;
+          const rollout = saveLegateRollout(DATA_DIR, payload, { expectedUpdatedAt });
+          return send(res, 200, JSON.stringify({ ok: true, rollout }));
+        } catch (e) {
+          if (e && e.code === 'ROLLOUT_CONFLICT') {
+            return send(res, 409, JSON.stringify({ ok: false, error: 'Rollout version conflict', code: e.code, current: e.current || loadLegateRollout(DATA_DIR) }));
+          }
+          return send(res, 400, JSON.stringify({ ok: false, error: e.message || 'Invalid rollout payload' }));
+        }
+      })
+      .catch((e) => send(res, 500, JSON.stringify({ ok: false, error: e.message || 'Failed to save rollout state' })));
+    return;
+  }
+
+  if (req.method === 'POST' && pathname === '/api/control/legate-rollout/rollback') {
+    readBody(req)
+      .then((body) => {
+        try {
+          const parsed = body ? JSON.parse(body) : {};
+          const current = loadLegateRollout(DATA_DIR);
+          const rollout = saveLegateRollout(DATA_DIR, {
+            ...current,
+            emergencyRollback: true,
+            rollbackReason: String(parsed && parsed.reason || 'manual_rollback'),
+            stage: 'shadow',
+            trafficPercent: 0,
+          }, { expectedUpdatedAt: parsed && parsed.expectedUpdatedAt ? String(parsed.expectedUpdatedAt) : '' });
+          return send(res, 200, JSON.stringify({ ok: true, rollout }));
+        } catch (e) {
+          return send(res, 400, JSON.stringify({ ok: false, error: e.message || 'Failed to apply rollback' }));
+        }
+      })
+      .catch((e) => send(res, 500, JSON.stringify({ ok: false, error: e.message || 'Failed to apply rollback' })));
+    return;
+  }
+
+  if (req.method === 'POST' && pathname === '/api/control/legate-rollout/failback') {
+    readBody(req)
+      .then((body) => {
+        try {
+          const parsed = body ? JSON.parse(body) : {};
+          const current = loadLegateRollout(DATA_DIR);
+          const nextStage = String(parsed && parsed.stage || 'canary');
+          const nextTraffic = Number(parsed && parsed.trafficPercent != null ? parsed.trafficPercent : 10);
+          const rollout = saveLegateRollout(DATA_DIR, {
+            ...current,
+            emergencyRollback: false,
+            rollbackReason: '',
+            stage: nextStage,
+            trafficPercent: nextTraffic,
+          }, { expectedUpdatedAt: parsed && parsed.expectedUpdatedAt ? String(parsed.expectedUpdatedAt) : '' });
+          return send(res, 200, JSON.stringify({ ok: true, rollout }));
+        } catch (e) {
+          return send(res, 400, JSON.stringify({ ok: false, error: e.message || 'Failed to apply failback' }));
+        }
+      })
+      .catch((e) => send(res, 500, JSON.stringify({ ok: false, error: e.message || 'Failed to apply failback' })));
+    return;
+  }
+
+  if (req.method === 'GET' && pathname === '/api/control/legate-link-reliability') {
+    try {
+      const snapshot = getLegateLinkReliability(DATA_DIR);
+      return send(res, 200, JSON.stringify({ ok: true, reliability: snapshot }));
+    } catch (e) {
+      return send(res, 500, JSON.stringify({ ok: false, error: e.message || 'Failed to load link reliability' }));
+    }
+  }
+
+  if (req.method === 'GET' && pathname === '/api/control/legion-scheduled') {
+    try {
+      const intents = loadIntents();
+      const legionScheduled = intents.filter((i) => i && i.type === 'legion_scheduled' && (i.status === 'pending' || !i.status));
+      const items = legionScheduled.map((s) => ({
+        id: s.id,
+        title: s.title || s.description || '',
+        objective: s.briefFields?.objective || s.title || s.description || '',
+        schedule: s.schedule || null,
+        dueAt: s.dueAt || null,
+        lastFiredAt: s.lastFiredAt || null,
+      }));
+      return send(res, 200, JSON.stringify({ ok: true, items }));
+    } catch (e) {
+      return send(res, 500, JSON.stringify({ ok: false, error: e.message || 'Failed to load legion-scheduled' }));
+    }
+  }
+
+  if (req.method === 'GET' && pathname === '/api/control/intents-failed') {
+    try {
+      const failedPath = path.join(DATA_DIR, 'intents-failed.json');
+      let rows = [];
+      if (fs.existsSync(failedPath)) {
+        const raw = fs.readFileSync(failedPath, 'utf8');
+        const parsed = JSON.parse(raw);
+        rows = Array.isArray(parsed) ? parsed : [];
+      }
+      const { query } = parseUrl(req.url);
+      const sinceHours = query?.sinceHours ? Number(query.sinceHours) : 24;
+      const cutoff = Date.now() - sinceHours * 60 * 60 * 1000;
+      const recent = rows.filter((r) => new Date(r.at || 0).getTime() >= cutoff);
+      return send(res, 200, JSON.stringify({ ok: true, items: recent, total: rows.length }));
+    } catch (e) {
+      return send(res, 500, JSON.stringify({ ok: false, error: e.message || 'Failed to load intents-failed' }));
+    }
+  }
+
+  if (req.method === 'GET' && pathname === '/api/control/webhook-rules') {
+    try {
+      const rules = loadRules();
+      return send(res, 200, JSON.stringify({ ok: true, rules }));
+    } catch (e) {
+      return send(res, 500, JSON.stringify({ ok: false, error: e.message || 'Failed to load webhook rules' }));
+    }
+  }
+  if (req.method === 'POST' && pathname === '/api/control/webhook-rules') {
+    readBody(req)
+      .then((body) => {
+        try {
+          const parsed = body ? JSON.parse(body) : {};
+          const rule = createRule(parsed.rule || parsed);
+          return send(res, 200, JSON.stringify({ ok: true, rule }));
+        } catch (e) {
+          return send(res, 400, JSON.stringify({ ok: false, error: e.message || 'Invalid rule payload' }));
+        }
+      })
+      .catch((e) => send(res, 500, JSON.stringify({ ok: false, error: e.message || 'Failed to create rule' })));
+    return;
+  }
+  if (req.method === 'PUT' && pathname.startsWith('/api/control/webhook-rules/') && !pathname.endsWith('/toggle')) {
+    const id = pathname.replace('/api/control/webhook-rules/', '').replace(/\/$/, '');
+    if (!id) return send(res, 400, JSON.stringify({ ok: false, error: 'Missing rule id' }));
+    readBody(req)
+      .then((body) => {
+        try {
+          const parsed = body ? JSON.parse(body) : {};
+          const rule = updateRule(id, parsed.rule || parsed);
+          if (!rule) return send(res, 404, JSON.stringify({ ok: false, error: 'Rule not found' }));
+          return send(res, 200, JSON.stringify({ ok: true, rule }));
+        } catch (e) {
+          return send(res, 400, JSON.stringify({ ok: false, error: e.message || 'Invalid update payload' }));
+        }
+      })
+      .catch((e) => send(res, 500, JSON.stringify({ ok: false, error: e.message || 'Failed to update rule' })));
+    return;
+  }
+  if (req.method === 'DELETE' && pathname.startsWith('/api/control/webhook-rules/')) {
+    const id = pathname.replace('/api/control/webhook-rules/', '').replace(/\/$/, '');
+    if (!id) return send(res, 400, JSON.stringify({ ok: false, error: 'Missing rule id' }));
+    try {
+      const deleted = deleteRule(id);
+      if (!deleted) return send(res, 404, JSON.stringify({ ok: false, error: 'Rule not found' }));
+      return send(res, 200, JSON.stringify({ ok: true }));
+    } catch (e) {
+      return send(res, 500, JSON.stringify({ ok: false, error: e.message || 'Failed to delete rule' }));
+    }
+  }
+  if (req.method === 'POST' && pathname.match(/^\/api\/control\/webhook-rules\/[^/]+\/toggle$/)) {
+    const id = pathname.replace('/api/control/webhook-rules/', '').replace(/\/toggle$/, '');
+    if (!id) return send(res, 400, JSON.stringify({ ok: false, error: 'Missing rule id' }));
+    try {
+      const rule = toggleRule(id);
+      if (!rule) return send(res, 404, JSON.stringify({ ok: false, error: 'Rule not found' }));
+      return send(res, 200, JSON.stringify({ ok: true, rule }));
+    } catch (e) {
+      return send(res, 500, JSON.stringify({ ok: false, error: e.message || 'Failed to toggle rule' }));
+    }
+  }
+  if (req.method === 'GET' && pathname === '/api/control/webhook-events') {
+    try {
+      const logPath = path.join(DATA_DIR, 'webhook-events-log.json');
+      let log = [];
+      if (fs.existsSync(logPath)) {
+        try {
+          log = JSON.parse(fs.readFileSync(logPath, 'utf8'));
+        } catch (_) {}
+      }
+      const { query } = parseUrl(req.url);
+      const limit = Math.min(100, Math.max(1, parseInt(query?.limit, 10) || 50));
+      const since = query?.since ? new Date(query.since).getTime() : 0;
+      const filtered = (Array.isArray(log) ? log : []).filter((e) => !since || new Date(e.at || 0).getTime() >= since);
+      const items = filtered.slice(0, limit);
+      return send(res, 200, JSON.stringify({ ok: true, items, total: filtered.length }));
+    } catch (e) {
+      return send(res, 500, JSON.stringify({ ok: false, error: e.message || 'Failed to load webhook events' }));
+    }
+  }
+
+  if (req.method === 'GET' && pathname === '/api/control/legate-observability') {
+    try {
+      const { query } = parseUrl(req.url);
+      const sinceHours = query && query.sinceHours ? Number(query.sinceHours) : 24;
+      const snapshot = getLegateObservability(DATA_DIR, { sinceHours });
+      return send(res, 200, JSON.stringify(snapshot));
+    } catch (e) {
+      return send(res, 500, JSON.stringify({ ok: false, error: e.message || 'Failed to load observability' }));
+    }
+  }
+
+  if (req.method === 'GET' && pathname === '/api/control/legate-slo') {
+    try {
+      const { query } = parseUrl(req.url);
+      const sinceHours = query && query.sinceHours ? Number(query.sinceHours) : 24;
+      const targetAvailability = query && query.targetAvailability ? Number(query.targetAvailability) : undefined;
+      const targetP95Ms = query && query.targetP95Ms ? Number(query.targetP95Ms) : undefined;
+      const snapshot = getLegateSloSnapshot(DATA_DIR, { sinceHours, targetAvailability, targetP95Ms });
+      return send(res, 200, JSON.stringify(snapshot));
+    } catch (e) {
+      return send(res, 500, JSON.stringify({ ok: false, error: e.message || 'Failed to load SLO snapshot' }));
+    }
+  }
+
+  if (req.method === 'GET' && pathname === '/api/control/legate-observability/trace') {
+    try {
+      const { query } = parseUrl(req.url);
+      const traceId = query && query.traceId ? String(query.traceId) : '';
+      const sinceHours = query && query.sinceHours ? Number(query.sinceHours) : 24;
+      const snapshot = getLegateTraceCorrelation(DATA_DIR, { traceId, sinceHours });
+      if (!snapshot.ok) return send(res, 400, JSON.stringify(snapshot));
+      return send(res, 200, JSON.stringify(snapshot));
+    } catch (e) {
+      return send(res, 500, JSON.stringify({ ok: false, error: e.message || 'Failed to load trace correlation' }));
+    }
+  }
+
+  if (req.method === 'GET' && pathname === '/api/control/legate-audit-export') {
+    try {
+      const { query } = parseUrl(req.url);
+      const sinceHours = query && query.sinceHours ? Number(query.sinceHours) : 24;
+      const cutoff = Date.now() - Math.max(1, Math.min(24 * 30, sinceHours)) * 60 * 60 * 1000;
+      const decisions = listLegateDecisions(DATA_DIR, 1000).filter((d) => {
+        const t = Date.parse(d && d.at || '');
+        return Number.isFinite(t) && t >= cutoff;
+      });
+      const actionDeadLetters = listLegateActionDeadLetters(DATA_DIR, { limit: 1000 }).filter((d) => {
+        const t = Date.parse(d && d.at || '');
+        return Number.isFinite(t) && t >= cutoff;
+      });
+      const observability = getLegateObservability(DATA_DIR, { sinceHours });
+      const reliability = getLegateLinkReliability(DATA_DIR);
+      const slo = getLegateSloSnapshot(DATA_DIR, { sinceHours });
+      const rollout = loadLegateRollout(DATA_DIR);
+      return send(res, 200, JSON.stringify({
+        ok: true,
+        exportedAt: new Date().toISOString(),
+        sinceHours: Math.max(1, Math.min(24 * 30, sinceHours)),
+        reliability,
+        observability,
+        slo,
+        rollout,
+        decisions,
+        actionDeadLetters,
+      }));
+    } catch (e) {
+      return send(res, 500, JSON.stringify({ ok: false, error: e.message || 'Failed to build legate audit export' }));
+    }
+  }
+
+  if (req.method === 'GET' && pathname === '/api/control/legate-action-dead-letters') {
+    try {
+      const { query } = parseUrl(req.url);
+      const limit = query && query.limit ? Number(query.limit) : 100;
+      const status = query && query.status ? String(query.status) : '';
+      const rows = listLegateActionDeadLetters(DATA_DIR, { limit, status });
+      return send(res, 200, JSON.stringify({ ok: true, deadLetters: rows }));
+    } catch (e) {
+      return send(res, 500, JSON.stringify({ ok: false, error: e.message || 'Failed to load action dead letters' }));
+    }
+  }
+
+  if (req.method === 'POST' && pathname.startsWith('/api/control/legate-action-dead-letters/replay/')) {
+    const id = decodeURIComponent(pathname.slice('/api/control/legate-action-dead-letters/replay/'.length));
+    const startedAt = Date.now();
+    replayDecisionActionDeadLetter(id, { sendLegionCommand, dataDir: DATA_DIR })
+      .then((out) => {
+        recordLegateObsEvent(DATA_DIR, { route: '/api/control/legate-action-dead-letters/replay/:id', status: 200, latencyMs: Date.now() - startedAt, outcome: 'replay_sent' });
+        return send(res, 200, JSON.stringify({ ok: true, ...out }));
+      })
+      .catch((e) => {
+        if (e && e.code === 'REPLAY_COOLDOWN') {
+          recordLegateObsEvent(DATA_DIR, { route: '/api/control/legate-action-dead-letters/replay/:id', status: 409, latencyMs: Date.now() - startedAt, outcome: 'replay_cooldown', errorCode: 'REPLAY_COOLDOWN' });
+          return send(res, 409, JSON.stringify({ ok: false, error: e.message || 'Replay cooldown', code: e.code, deadLetter: e.deadLetter || null }));
+        }
+        recordLegateObsEvent(DATA_DIR, { route: '/api/control/legate-action-dead-letters/replay/:id', status: 404, latencyMs: Date.now() - startedAt, outcome: 'replay_failed', errorCode: e && e.code ? e.code : 'REPLAY_FAILED' });
+        return send(res, 404, JSON.stringify({ ok: false, error: e.message || 'Replay failed', code: e.code || 'REPLAY_FAILED', deadLetter: e.deadLetter || null }));
+      });
+    return;
+  }
+
+  if (req.method === 'GET' && pathname === '/api/mobile/summary') {
+    const { query } = parseUrl(req.url);
+    const key = query && query.key ? String(query.key) : '';
+    if (PIKO_HEALTH_API_KEY && key !== PIKO_HEALTH_API_KEY) {
+      return send(res, 401, JSON.stringify({ ok: false, error: 'Unauthorized' }));
+    }
+    const now = new Date();
+    const intent = buildIntentSnapshot(now);
+    const deviceId = query && query.deviceId ? String(query.deviceId).slice(0, 120) : '';
+    const state = loadState();
+    const device = (deviceId && state && state.devices && state.devices[deviceId]) ? state.devices[deviceId] : null;
+    const ollamaHealth = await getCachedOllamaHealth();
+    const cadence = decideMobilePoll({
+      intentSnapshot: intent,
+      device,
+      serviceHealth: { modelReachable: ollamaHealth.ok },
+    });
+    const proactive = proactiveEngine.getStatus(5);
+    const summary = proactive && proactive.summary ? proactive.summary : null;
+    const mobileReliability = getMobileReliabilityMetrics({ activeWithinMin: 60, staleAfterMin: 6 * 60, ackSinceHours: 24 });
+    return send(res, 200, JSON.stringify({
+      ok: true,
+      now: now.toISOString(),
+      model: OLLAMA_MODEL,
+      pollAfterSec: cadence.pollAfterSec,
+      cadence: {
+        urgency: cadence.urgency,
+        reason: cadence.cadenceReason,
+        degraded: cadence.degraded,
+        degradedReasons: cadence.degradedReasons,
+      },
+      service: {
+        modelReachable: ollamaHealth.ok,
+        modelCheckedAt: ollamaHealth.checkedAt,
+      },
+      device: device ? {
+        id: device.deviceId || deviceId,
+        appState: device.appState || '',
+        network: device.network || '',
+        networkConstrained: device.networkConstrained === true,
+        networkExpensive: device.networkExpensive === true,
+        batteryLevel: Number.isFinite(Number(device.batteryLevel)) ? Number(device.batteryLevel) : null,
+        cadenceEffectivePollSec: Number.isFinite(Number(device.cadenceEffectivePollSec)) ? Number(device.cadenceEffectivePollSec) : null,
+      } : null,
+      intent,
+      proactive: summary ? {
+        mode: summary.mode,
+        at: summary.at,
+        drafted: summary.drafted || 0,
+        sent: summary.sent || 0,
+        failed: summary.failed || 0,
+      } : null,
+      reliability: {
+        activeDevices: mobileReliability.activeDevices || 0,
+        staleDevices: mobileReliability.staleDevices || 0,
+        pushTokenRegistered: mobileReliability.pushTokenRegistered || 0,
+        pushTokenMissing: mobileReliability.pushTokenMissing || 0,
+      },
+    }));
+  }
+
+  if (req.method === 'POST' && pathname === '/api/mobile/device-heartbeat') {
+    readBody(req)
+      .then((body) => {
+        try {
+          const parsed = body ? JSON.parse(body) : {};
+          const key = parsed && parsed.key ? String(parsed.key) : '';
+          if (PIKO_HEALTH_API_KEY && key !== PIKO_HEALTH_API_KEY) {
+            return send(res, 401, JSON.stringify({ ok: false, error: 'Unauthorized' }));
+          }
+          const device = upsertDeviceHeartbeat(parsed || {});
+          return send(res, 200, JSON.stringify({ ok: true, device }));
+        } catch (e) {
+          return send(res, 400, JSON.stringify({ ok: false, error: e.message || 'Invalid heartbeat payload' }));
+        }
+      })
+      .catch((e) => send(res, 500, JSON.stringify({ ok: false, error: e.message || 'Failed to save heartbeat' })));
+    return;
+  }
+
+  if (req.method === 'POST' && pathname === '/api/mobile/push-token') {
+    readBody(req)
+      .then((body) => {
+        try {
+          const parsed = body ? JSON.parse(body) : {};
+          const key = parsed && parsed.key ? String(parsed.key) : '';
+          if (PIKO_HEALTH_API_KEY && key !== PIKO_HEALTH_API_KEY) {
+            return send(res, 401, JSON.stringify({ ok: false, error: 'Unauthorized' }));
+          }
+          const device = registerPushToken(parsed || {});
+          return send(res, 200, JSON.stringify({ ok: true, device }));
+        } catch (e) {
+          return send(res, 400, JSON.stringify({ ok: false, error: e.message || 'Invalid push-token payload' }));
+        }
+      })
+      .catch((e) => send(res, 500, JSON.stringify({ ok: false, error: e.message || 'Failed to save push token' })));
+    return;
+  }
+
+  if (req.method === 'POST' && pathname === '/api/mobile/push-ack') {
+    readBody(req)
+      .then((body) => {
+        try {
+          const parsed = body ? JSON.parse(body) : {};
+          const key = parsed && parsed.key ? String(parsed.key) : '';
+          if (PIKO_HEALTH_API_KEY && key !== PIKO_HEALTH_API_KEY) {
+            return send(res, 401, JSON.stringify({ ok: false, error: 'Unauthorized' }));
+          }
+          const ack = recordPushAck(parsed || {});
+          let deliveryAck = null;
+          const deliveryId = parsed && parsed.deliveryId ? String(parsed.deliveryId) : '';
+          if (deliveryId) {
+            deliveryAck = proactiveEngine.acknowledgeDelivery(deliveryId, {
+              source: 'mobile_push_ack',
+              channel: parsed && parsed.channel ? parsed.channel : 'push',
+              status: parsed && parsed.status ? parsed.status : 'delivered',
+              ackId: ack.id,
+              deviceId: parsed && parsed.deviceId ? parsed.deviceId : '',
+              note: parsed && parsed.note ? parsed.note : '',
+            });
+          }
+          return send(res, 200, JSON.stringify({ ok: true, ack, deliveryAck }));
+        } catch (e) {
+          return send(res, 400, JSON.stringify({ ok: false, error: e.message || 'Invalid ack payload' }));
+        }
+      })
+      .catch((e) => send(res, 500, JSON.stringify({ ok: false, error: e.message || 'Failed to save ack' })));
+    return;
+  }
+
+  if (req.method === 'GET' && pathname === '/api/mobile/live-activity') {
+    const { query } = parseUrl(req.url);
+    const key = query && query.key ? String(query.key) : '';
+    if (PIKO_HEALTH_API_KEY && key !== PIKO_HEALTH_API_KEY) {
+      return send(res, 401, JSON.stringify({ ok: false, error: 'Unauthorized' }));
+    }
+    const now = new Date();
+    const intent = buildIntentSnapshot(now);
+    const ollamaHealth = await getCachedOllamaHealth();
+    const cadence = decideMobilePoll({
+      intentSnapshot: intent,
+      serviceHealth: { modelReachable: ollamaHealth.ok },
+    });
+    const statusText = intent.nextReminder
+      ? `Next reminder: ${intent.nextReminder.text}`
+      : intent.queueLength > 0
+        ? `${intent.queueLength} tasks queued`
+        : 'All clear';
+    return send(res, 200, JSON.stringify(toLiveActivityPayload({
+      status: statusText.slice(0, 180),
+      queueLength: intent.queueLength,
+      remindersCount: intent.remindersCount,
+      nextReminderAt: intent.nextReminder ? intent.nextReminder.at : null,
+      refreshAfterSec: cadence.pollAfterSec,
+      cadence: {
+        urgency: cadence.urgency,
+        reason: cadence.cadenceReason,
+        degraded: cadence.degraded,
+      },
+      service: {
+        modelReachable: ollamaHealth.ok,
+        modelCheckedAt: ollamaHealth.checkedAt,
+      },
+    }, {
+      generatedAt: now.toISOString(),
+      refreshAfterSec: cadence.pollAfterSec,
+    })));
+  }
+
+  if (req.method === 'GET' && pathname === '/api/mobile/proactive-policy') {
+    const { query } = parseUrl(req.url);
+    const key = query && query.key ? String(query.key) : '';
+    if (PIKO_HEALTH_API_KEY && key !== PIKO_HEALTH_API_KEY) {
+      return send(res, 401, JSON.stringify({ ok: false, error: 'Unauthorized' }));
+    }
+    try {
+      const policy = loadProactivePolicy();
+      const version = String(policy && policy.updatedAt ? policy.updatedAt : '');
+      const etag = makeWeakEtag(version);
+      res.setHeader('ETag', etag);
+      return send(res, 200, JSON.stringify({ ok: true, policy, version, etag }));
+    } catch (e) {
+      return send(res, 500, JSON.stringify({ ok: false, error: e.message || 'Failed to load mobile policy' }));
+    }
+  }
+
+  if (req.method === 'POST' && pathname === '/api/mobile/proactive-policy') {
+    readBody(req)
+      .then((body) => {
+        try {
+          const parsed = body ? JSON.parse(body) : {};
+          const key = parsed && parsed.key ? String(parsed.key) : '';
+          if (PIKO_HEALTH_API_KEY && key !== PIKO_HEALTH_API_KEY) {
+            return send(res, 401, JSON.stringify({ ok: false, error: 'Unauthorized' }));
+          }
+          const expectedUpdatedAt = (parsed && parsed.expectedUpdatedAt)
+            ? String(parsed.expectedUpdatedAt)
+            : parseIfMatchVersion(req.headers['if-match']);
+          const current = loadProactivePolicy();
+          const merged = buildMobilePolicyPatch(current, parsed && parsed.patch ? parsed.patch : {});
+          const next = saveProactivePolicy(merged, { expectedUpdatedAt });
+          const version = String(next && next.updatedAt ? next.updatedAt : '');
+          const etag = makeWeakEtag(version);
+          res.setHeader('ETag', etag);
+          return send(res, 200, JSON.stringify({ ok: true, policy: next, version, etag }));
+        } catch (e) {
+          if (e && e.code === 'POLICY_CONFLICT') {
+            const current = e.current || loadProactivePolicy();
+            const version = String(current && current.updatedAt ? current.updatedAt : '');
+            const etag = makeWeakEtag(version);
+            res.setHeader('ETag', etag);
+            return send(res, 409, JSON.stringify({
+              ok: false,
+              code: e.code,
+              error: 'Policy version conflict',
+              current,
+              version,
+              etag,
+            }));
+          }
+          return send(res, 400, JSON.stringify({ ok: false, error: e.message || 'Invalid mobile policy patch' }));
+        }
+      })
+      .catch((e) => send(res, 500, JSON.stringify({ ok: false, error: e.message || 'Failed to update mobile policy' })));
+    return;
+  }
+
+  if (req.method === 'GET' && pathname === '/api/mobile/preferences') {
+    const { query } = parseUrl(req.url);
+    const key = query && query.key ? String(query.key) : '';
+    if (PIKO_HEALTH_API_KEY && key !== PIKO_HEALTH_API_KEY) {
+      return send(res, 401, JSON.stringify({ ok: false, error: 'Unauthorized' }));
+    }
+    const prefs = loadMobilePreferences();
+    const version = String(prefs && prefs.updatedAt ? prefs.updatedAt : '');
+    const etag = makeWeakEtag(version);
+    res.setHeader('ETag', etag);
+    return send(res, 200, JSON.stringify({ ok: true, preferences: prefs, version, etag }));
+  }
+
+  if (req.method === 'PUT' && pathname === '/api/mobile/preferences') {
+    readBody(req)
+      .then((body) => {
+        try {
+          const parsed = body ? JSON.parse(body) : {};
+          const key = parsed && parsed.key ? String(parsed.key) : '';
+          if (PIKO_HEALTH_API_KEY && key !== PIKO_HEALTH_API_KEY) {
+            return send(res, 401, JSON.stringify({ ok: false, error: 'Unauthorized' }));
+          }
+          const expectedUpdatedAt = (parsed && parsed.expectedUpdatedAt)
+            ? String(parsed.expectedUpdatedAt)
+            : parseIfMatchVersion(req.headers['if-match']);
+          const next = saveMobilePreferences(parsed && parsed.preferences ? parsed.preferences : parsed, expectedUpdatedAt);
+          const version = String(next && next.updatedAt ? next.updatedAt : '');
+          const etag = makeWeakEtag(version);
+          res.setHeader('ETag', etag);
+          return send(res, 200, JSON.stringify({ ok: true, preferences: next, version, etag }));
+        } catch (e) {
+          if (e && e.code === 'PREFERENCES_CONFLICT') {
+            const current = e.current || loadMobilePreferences();
+            const version = String(current && current.updatedAt ? current.updatedAt : '');
+            const etag = makeWeakEtag(version);
+            res.setHeader('ETag', etag);
+            return send(res, 409, JSON.stringify({
+              ok: false,
+              code: e.code,
+              error: 'Preferences version conflict',
+              current,
+              version,
+              etag,
+            }));
+          }
+          return send(res, 400, JSON.stringify({ ok: false, error: e.message || 'Invalid mobile preferences payload' }));
+        }
+      })
+      .catch((e) => send(res, 500, JSON.stringify({ ok: false, error: e.message || 'Failed to save mobile preferences' })));
+    return;
+  }
+
+  if (req.method === 'GET' && pathname === '/api/control/mobile-devices') {
+    try {
+      const { query } = parseUrl(req.url);
+      const limit = Math.max(1, Math.min(500, parseInt(query && query.limit, 10) || 100));
+      const out = listDevices(limit);
+      return send(res, 200, JSON.stringify({ ok: true, ...out }));
+    } catch (e) {
+      return send(res, 500, JSON.stringify({ ok: false, error: e.message || 'Failed to load mobile devices' }));
+    }
+  }
+
+  if (req.method === 'GET' && pathname === '/api/control/mobile-reliability') {
+    try {
+      const { query } = parseUrl(req.url);
+      const activeWithinMin = Math.max(5, Math.min(24 * 60, parseInt(query && query.activeWithinMin, 10) || 60));
+      const staleAfterMin = Math.max(10, Math.min(7 * 24 * 60, parseInt(query && query.staleAfterMin, 10) || 6 * 60));
+      const ackSinceHours = Math.max(1, Math.min(24 * 30, parseInt(query && query.ackSinceHours, 10) || 24));
+      const out = getMobileReliabilityMetrics({ activeWithinMin, staleAfterMin, ackSinceHours });
+      return send(res, 200, JSON.stringify({ ok: true, ...out }));
+    } catch (e) {
+      return send(res, 500, JSON.stringify({ ok: false, error: e.message || 'Failed to load mobile reliability metrics' }));
+    }
+  }
+
+  if (req.method === 'GET' && pathname === '/api/control/connectors') {
+    const connectorIds = listConnectors();
+    const health = await getConnectorHealth(buildConnectorContext());
+    return send(res, 200, JSON.stringify({ ok: true, connectors: connectorIds, health }));
+  }
+
+  if (req.method === 'GET' && pathname === '/api/control/connector-health') {
+    const health = await getConnectorHealth(buildConnectorContext());
+    return send(res, 200, JSON.stringify({ ok: true, connectors: health }));
+  }
+
+  const connectorStatusMatch = req.method === 'GET' && pathname.match(/^\/api\/control\/connectors\/([^/]+)\/status$/);
+  if (connectorStatusMatch) {
+    const connectorId = decodeURIComponent(connectorStatusMatch[1] || '').trim();
+    const out = await invokeConnector(connectorId, 'status', buildConnectorContext(), {});
+    if (!out.ok) {
+      const status = out.code === 'UNKNOWN_CONNECTOR' ? 404 : out.code === 'NOT_IMPLEMENTED' ? 501 : 400;
+      return send(res, status, JSON.stringify({ ok: false, connector: connectorId, error: out.error, code: out.code || '' }));
+    }
+    return send(res, 200, JSON.stringify({ ok: true, connector: connectorId, status: out.result || {} }));
+  }
+
+  const connectorListMatch = req.method === 'GET' && pathname.match(/^\/api\/control\/connectors\/([^/]+)\/list$/);
+  if (connectorListMatch) {
+    const connectorId = decodeURIComponent(connectorListMatch[1] || '').trim();
+    const { query } = parseUrl(req.url);
+    const params = {
+      limit: query && query.limit,
+    };
+    const out = await invokeConnector(connectorId, 'list', buildConnectorContext(), params);
+    if (!out.ok) return send(res, 400, JSON.stringify({ ok: false, connector: connectorId, error: out.error, code: out.code || '' }));
+    return send(res, 200, JSON.stringify({ ok: true, connector: connectorId, ...out.result }));
+  }
+
+  const connectorPullMatch = req.method === 'GET' && pathname.match(/^\/api\/control\/connectors\/([^/]+)\/pull$/);
+  if (connectorPullMatch) {
+    const connectorId = decodeURIComponent(connectorPullMatch[1] || '').trim();
+    const { query } = parseUrl(req.url);
+    const params = {
+      id: query && query.id,
+      messageId: query && query.messageId,
+      eventId: query && query.eventId,
+    };
+    const out = await invokeConnector(connectorId, 'pull', buildConnectorContext(), params);
+    if (!out.ok) return send(res, 400, JSON.stringify({ ok: false, connector: connectorId, error: out.error, code: out.code || '' }));
+    return send(res, 200, JSON.stringify({ ok: true, connector: connectorId, ...out.result }));
+  }
+
+  const connectorActMatch = req.method === 'POST' && pathname.match(/^\/api\/control\/connectors\/([^/]+)\/act$/);
+  if (connectorActMatch) {
+    const connectorId = decodeURIComponent(connectorActMatch[1] || '').trim();
+    readBody(req)
+      .then(async (body) => {
+        try {
+          const params = body ? JSON.parse(body) : {};
+          const out = await invokeConnector(connectorId, 'act', buildConnectorContext(), params || {});
+          if (!out.ok) {
+            const status = out.code === 'UNKNOWN_CONNECTOR' ? 404 : out.code === 'NOT_IMPLEMENTED' ? 501 : 400;
+            return send(res, status, JSON.stringify({ ok: false, connector: connectorId, error: out.error, code: out.code || '' }));
+          }
+          return send(res, 200, JSON.stringify({ ok: true, connector: connectorId, result: out.result }));
+        } catch (e) {
+          return send(res, 400, JSON.stringify({ ok: false, connector: connectorId, error: e.message || 'Invalid payload' }));
+        }
+      })
+      .catch((e) => send(res, 500, JSON.stringify({ ok: false, connector: connectorId, error: e.message || 'Connector act failed' })));
+    return;
+  }
+
+  const connectorDisconnectMatch = req.method === 'POST' && pathname.match(/^\/api\/control\/connectors\/([^/]+)\/disconnect$/);
+  if (connectorDisconnectMatch) {
+    const connectorId = decodeURIComponent(connectorDisconnectMatch[1] || '').trim();
+    const out = await invokeConnector(connectorId, 'disconnect', buildConnectorContext(), {});
+    if (!out.ok) {
+      const status = out.code === 'UNKNOWN_CONNECTOR' ? 404 : out.code === 'NOT_IMPLEMENTED' ? 501 : 400;
+      return send(res, status, JSON.stringify({ ok: false, connector: connectorId, error: out.error, code: out.code || '' }));
+    }
+    return send(res, 200, JSON.stringify({ ok: true, connector: connectorId, result: out.result }));
+  }
+
+  if (req.method === 'GET' && pathname === '/api/control/proactive-events') {
+    try {
+      const { query } = parseUrl(req.url);
+      const limit = Math.max(1, Math.min(500, parseInt(query && query.limit, 10) || 100));
+      const status = query && query.status ? String(query.status).trim() : '';
+      const type = query && query.type ? String(query.type).trim() : '';
+      const since = query && query.since ? String(query.since).trim() : '';
+      const out = proactiveEngine.getStatus({ limit, status, type, since });
+      return send(res, 200, JSON.stringify({ ok: true, ...out }));
+    } catch (e) {
+      return send(res, 500, JSON.stringify({ ok: false, error: e.message || 'Failed to load proactive events' }));
+    }
+  }
+
+  if (req.method === 'POST' && pathname === '/api/control/proactive-engine/run') {
+    proactiveCycleRunner.run('manual', { skipIfBusy: true })
+      .then((out) => {
+        if (out && out.skipped) {
+          return send(res, 409, JSON.stringify({
+            ok: false,
+            skipped: true,
+            reason: out.reason || 'busy',
+            activeSource: out.activeSource || '',
+            activeForMs: Number(out.activeForMs || 0),
+          }));
+        }
+        return send(res, 200, JSON.stringify({ ok: true, summary: out.summary, durationMs: out.durationMs }));
+      })
+      .catch((e) => {
+        const status = e && e.code === 'PROACTIVE_CYCLE_TIMEOUT' ? 504 : 500;
+        return send(res, status, JSON.stringify({ ok: false, code: e.code || '', error: e.message || 'Failed to run proactive engine' }));
+      });
+    return;
+  }
+
+  if (req.method === 'GET' && pathname === '/api/control/proactive-deliveries') {
+    try {
+      const { query } = parseUrl(req.url);
+      const limit = Math.max(1, Math.min(500, parseInt(query && query.limit, 10) || 100));
+      const status = query && query.status ? String(query.status) : '';
+      const out = proactiveEngine.getDeliveries(limit, status);
+      return send(res, 200, JSON.stringify({ ok: true, ...out }));
+    } catch (e) {
+      return send(res, 500, JSON.stringify({ ok: false, error: e.message || 'Failed to load proactive deliveries' }));
+    }
+  }
+
+  if (req.method === 'GET' && pathname === '/api/control/proactive-dead-letters') {
+    try {
+      const { query } = parseUrl(req.url);
+      const limit = Math.max(1, Math.min(500, parseInt(query && query.limit, 10) || 100));
+      const status = query && query.status ? String(query.status) : '';
+      const out = proactiveEngine.getDeadLetters(limit, status);
+      return send(res, 200, JSON.stringify({ ok: true, ...out }));
+    } catch (e) {
+      return send(res, 500, JSON.stringify({ ok: false, error: e.message || 'Failed to load proactive dead letters' }));
+    }
+  }
+
+  if (req.method === 'GET' && pathname === '/api/control/proactive-reliability') {
+    try {
+      const { query } = parseUrl(req.url);
+      const sinceHours = Math.max(1, Math.min(24 * 30, parseInt(query && query.sinceHours, 10) || 24));
+      const repeatThreshold = Math.max(2, Math.min(100, parseInt(query && query.repeatThreshold, 10) || 3));
+      const out = proactiveEngine.getReliabilityMetrics({ sinceHours, repeatThreshold });
+      return send(res, 200, JSON.stringify({ ok: true, ...out }));
+    } catch (e) {
+      return send(res, 500, JSON.stringify({ ok: false, error: e.message || 'Failed to load proactive reliability metrics' }));
+    }
+  }
+
+  if (req.method === 'POST' && pathname.startsWith('/api/control/proactive-deliveries/') && pathname.endsWith('/ack')) {
+    const id = decodeURIComponent(pathname.slice('/api/control/proactive-deliveries/'.length, -('/ack'.length)));
+    readBody(req)
+      .then((body) => {
+        try {
+          const parsed = body ? JSON.parse(body) : {};
+          const out = proactiveEngine.acknowledgeDelivery(id, {
+            source: parsed && parsed.source ? parsed.source : 'api',
+            channel: parsed && parsed.channel ? parsed.channel : 'manual',
+            status: parsed && parsed.status ? parsed.status : 'acknowledged',
+            ackType: parsed && parsed.ackType ? parsed.ackType : 'seen',
+            ackId: parsed && parsed.ackId ? parsed.ackId : '',
+            deviceId: parsed && parsed.deviceId ? parsed.deviceId : '',
+            userResponse: parsed && parsed.userResponse ? parsed.userResponse : '',
+            note: parsed && parsed.note ? parsed.note : '',
+          });
+          return send(res, 200, JSON.stringify({ ok: true, ...out }));
+        } catch (e) {
+          return send(res, 400, JSON.stringify({ ok: false, error: e.message || 'Ack failed' }));
+        }
+      })
+      .catch((e) => send(res, 500, JSON.stringify({ ok: false, error: e.message || 'Failed to process ack payload' })));
+    return;
+  }
+
+  if (req.method === 'POST' && pathname.startsWith('/api/control/proactive-replay/')) {
+    const id = decodeURIComponent(pathname.slice('/api/control/proactive-replay/'.length));
+    proactiveEngine.replayDelivery(id, 'api')
+      .then((out) => send(res, 200, JSON.stringify({ ok: true, ...out })))
+      .catch((e) => {
+        const status = e && (e.code === 'REPLAY_COOLDOWN' || e.code === 'REPLAY_IN_PROGRESS') ? 429 : 404;
+        return send(res, status, JSON.stringify({ ok: false, code: e.code || '', error: e.message || 'Replay failed' }));
+      });
+    return;
+  }
+
+  if (req.method === 'POST' && pathname.startsWith('/api/control/proactive-dead-letters/replay/')) {
+    const id = decodeURIComponent(pathname.slice('/api/control/proactive-dead-letters/replay/'.length));
+    proactiveEngine.replayDeadLetter(id, 'api_dead_letter_replay')
+      .then((out) => send(res, 200, JSON.stringify({ ok: true, ...out })))
+      .catch((e) => send(res, 404, JSON.stringify({ ok: false, error: e.message || 'Dead-letter replay failed' })));
+    return;
+  }
+
+  if (req.method === 'POST' && pathname === '/api/control/proactive-dispatch/test') {
+    readBody(req)
+      .then((body) => {
+        let parsed = {};
+        try {
+          parsed = body ? JSON.parse(body) : {};
+        } catch (e) {
+          return send(res, 400, JSON.stringify({ ok: false, error: e.message || 'Invalid JSON' }));
+        }
+        proactiveEngine.dispatchTest(parsed || {})
+          .then((out) => send(res, 200, JSON.stringify({ ok: true, ...out })))
+          .catch((e) => send(res, 500, JSON.stringify({ ok: false, error: e.message || 'Dispatch test failed' })));
+      })
+      .catch((e) => send(res, 500, JSON.stringify({ ok: false, error: e.message || 'Failed to read body' })));
+    return;
   }
 
   if (req.method === 'GET' && pathname === '/api/integrations/linked') {
@@ -3029,8 +7187,15 @@ async function handleRequest(req, res) {
     }
   }
   if (req.method === 'GET' && pathname === '/api/models') {
+    const registry = loadRegistry();
     return send(res, 200, JSON.stringify({
       primary: process.env.MODEL_PRIMARY || OLLAMA_MODEL,
+      currentOverride: getCurrentModelOverride(),
+      registry: {
+        updatedAt: registry.updatedAt,
+        stages: registry.stages,
+        lastStable: registry.lastStable,
+      },
       available: [
         'ollama/llama3.1:latest',
         'ollama/llama3.2',
@@ -3040,8 +7205,129 @@ async function handleRequest(req, res) {
     }));
   }
 
+  if (req.method === 'GET' && pathname === '/api/control/model-registry') {
+    const registry = loadRegistry();
+    return send(res, 200, JSON.stringify({ ok: true, registry }));
+  }
+
+  if (req.method === 'GET' && pathname === '/api/control/modelops/overview') {
+    try {
+      const overview = getModelOpsOverview();
+      return send(res, 200, JSON.stringify({ ok: true, overview }));
+    } catch (e) {
+      return send(res, 500, JSON.stringify({ ok: false, error: e.message || 'Failed to load modelops overview' }));
+    }
+  }
+
+  if (req.method === 'POST' && pathname === '/api/control/model-registry/register-model') {
+    readBody(req)
+      .then((body) => {
+        try {
+          const parsed = body ? JSON.parse(body) : {};
+          const modelTag = String(parsed.modelTag || '').trim();
+          if (!modelTag) return send(res, 400, JSON.stringify({ ok: false, error: 'Missing modelTag' }));
+          const next = upsertModel(modelTag, {
+            notes: parsed.notes ? String(parsed.notes).slice(0, 500) : '',
+            status: parsed.status ? String(parsed.status).slice(0, 40) : 'registered',
+            source: parsed.source ? String(parsed.source).slice(0, 80) : 'manual',
+          });
+          return send(res, 200, JSON.stringify({ ok: true, registry: next }));
+        } catch (e) {
+          return send(res, 400, JSON.stringify({ ok: false, error: e.message || 'Invalid payload' }));
+        }
+      })
+      .catch((e) => send(res, 500, JSON.stringify({ ok: false, error: e.message || 'Failed to register model' })));
+    return;
+  }
+
+  if (req.method === 'POST' && pathname === '/api/control/model-registry/promote') {
+    readBody(req)
+      .then((body) => {
+        try {
+          const parsed = body ? JSON.parse(body) : {};
+          const targetStage = String(parsed.toStage || '').trim();
+          const latestGate = targetStage === 'candidate' ? getLatestGateEvaluation() : null;
+          if (
+            targetStage === 'candidate'
+            && MODEL_GATE_BLOCK_CANDIDATE
+            && latestGate
+            && latestGate.pass === false
+            && !parsed.allowUnsafe
+          ) {
+            return send(res, 409, JSON.stringify({
+              ok: false,
+              code: 'GATE_BLOCKED',
+              error: 'Candidate promotion blocked by failed gate',
+              gate: latestGate,
+            }));
+          }
+          const next = promoteModel({
+            modelTag: parsed.modelTag,
+            toStage: targetStage,
+            by: parsed.by || 'api',
+            notes: parsed.notes || '',
+            allowUnsafe: !!parsed.allowUnsafe,
+          });
+          if (targetStage === 'primary') {
+            setCurrentModelOverride(parsed.modelTag);
+          }
+          let warning = null;
+          if (targetStage === 'candidate' && latestGate && latestGate.pass === false) {
+            warning = {
+              code: 'GATE_FAILED_SOFT',
+              message: 'Candidate promotion succeeded, but latest gate did not pass.',
+              gate: {
+                id: latestGate.id || '',
+                createdAt: latestGate.createdAt || '',
+                pass: false,
+                reasons: Array.isArray(latestGate.reasons) ? latestGate.reasons : [],
+                metrics: latestGate.metrics || {},
+              },
+            };
+          }
+          return send(res, 200, JSON.stringify({
+            ok: true,
+            registry: next,
+            gate: latestGate,
+            warning,
+          }));
+        } catch (e) {
+          const code = e.code || '';
+          const status = (code === 'UNKNOWN_MODEL' || code === 'INVALID_STAGE' || code === 'INVALID_PROMOTION_PATH') ? 400 : 500;
+          return send(res, status, JSON.stringify({ ok: false, error: e.message || 'Promotion failed', code }));
+        }
+      })
+      .catch((e) => send(res, 500, JSON.stringify({ ok: false, error: e.message || 'Promotion failed' })));
+    return;
+  }
+
+  if (req.method === 'POST' && pathname === '/api/control/model-registry/rollback') {
+    readBody(req)
+      .then((body) => {
+        try {
+          const parsed = body ? JSON.parse(body) : {};
+          const next = rollbackModel({
+            by: parsed.by || 'api',
+            notes: parsed.notes || '',
+            targetModel: parsed.targetModel || '',
+          });
+          if (next.stages && next.stages.primary) {
+            setCurrentModelOverride(next.stages.primary);
+          }
+          return send(res, 200, JSON.stringify({ ok: true, registry: next }));
+        } catch (e) {
+          const code = e.code || '';
+          const status = (code === 'NO_ROLLBACK_TARGET' || code === 'UNKNOWN_MODEL') ? 400 : 500;
+          return send(res, status, JSON.stringify({ ok: false, error: e.message || 'Rollback failed', code }));
+        }
+      })
+      .catch((e) => send(res, 500, JSON.stringify({ ok: false, error: e.message || 'Rollback failed' })));
+    return;
+  }
+
   if (req.method === 'GET' && pathname === '/api/widget') {
     const widget = { tensions: 0, nextReminder: null, moltbook: null };
+    const generatedAt = new Date().toISOString();
     try {
       const tensionsPath = path.join(LEARNING_DIR, 'tensions.md');
       if (fs.existsSync(tensionsPath)) {
@@ -3061,7 +7347,10 @@ async function handleRequest(req, res) {
         widget.moltbook = last && last.upvotes != null ? String(last.upvotes) + ' upvotes' : null;
       }
     } catch (_) {}
-    return send(res, 200, JSON.stringify(widget));
+    return send(res, 200, JSON.stringify(toWidgetPayload(widget, {
+      generatedAt,
+      refreshAfterSec: 300,
+    })));
   }
 
   if (req.method === 'GET' && pathname === '/api/ios-dashboard') {
@@ -3184,7 +7473,10 @@ async function handleRequest(req, res) {
     } catch (e) {
       log('warn', 'ios-dashboard', { error: e.message });
     }
-    return send(res, 200, JSON.stringify(dashboard));
+    return send(res, 200, JSON.stringify(toIosDashboardPayload(dashboard, {
+      generatedAt: new Date().toISOString(),
+      refreshAfterSec: 300,
+    })));
   }
 
   if (req.method === 'GET' && pathname === '/api/pending') {
@@ -3220,34 +7512,21 @@ async function handleRequest(req, res) {
 
   // —— EA Phase 4: delivery preferences (quiet hours) ——
   if (req.method === 'GET' && pathname === '/api/ea-preferences') {
-    let prefs = { quietStart: null, quietEnd: null };
-    try {
-      if (fs.existsSync(EA_PREFERENCES_FILE)) {
-        const raw = fs.readFileSync(EA_PREFERENCES_FILE, 'utf8');
-        prefs = { ...prefs, ...JSON.parse(raw) };
-      }
-    } catch (_) {}
+    const prefs = loadMobilePreferences();
     return send(res, 200, JSON.stringify(prefs));
   }
   if (req.method === 'PUT' && pathname === '/api/ea-preferences') {
     let body = '';
     req.on('data', (c) => (body += c));
     req.on('end', () => {
-      let prefs = { quietStart: null, quietEnd: null };
-      try {
-        if (fs.existsSync(EA_PREFERENCES_FILE)) {
-          const raw = fs.readFileSync(EA_PREFERENCES_FILE, 'utf8');
-          prefs = { ...prefs, ...JSON.parse(raw) };
-        }
-      } catch (_) {}
       try {
         const data = JSON.parse(body || '{}');
-        if (data.quietStart !== undefined) prefs.quietStart = data.quietStart === '' || data.quietStart === null ? null : String(data.quietStart).trim().slice(0, 8);
-        if (data.quietEnd !== undefined) prefs.quietEnd = data.quietEnd === '' || data.quietEnd === null ? null : String(data.quietEnd).trim().slice(0, 8);
-        fs.mkdirSync(DATA_DIR, { recursive: true });
-        fs.writeFileSync(EA_PREFERENCES_FILE, JSON.stringify(prefs, null, 2), 'utf8');
-        return send(res, 200, JSON.stringify(prefs));
+        const next = saveMobilePreferences(data, data && data.expectedUpdatedAt ? String(data.expectedUpdatedAt) : '');
+        return send(res, 200, JSON.stringify(next));
       } catch (e) {
+        if (e && e.code === 'PREFERENCES_CONFLICT') {
+          return send(res, 409, JSON.stringify({ error: 'Preferences version conflict', code: e.code, current: e.current || loadMobilePreferences() }));
+        }
         return send(res, 400, JSON.stringify({ error: e.message || 'Bad request' }));
       }
     });
@@ -3522,6 +7801,14 @@ async function handleRequest(req, res) {
       eaPrepMeeting: process.env.PIKO_EA_PREP_MEETING === '1' || process.env.PIKO_EA_PREP_MEETING === 'true',
       eaGmailReadBody: process.env.PIKO_EA_GMAIL_READ_BODY === '1' || process.env.PIKO_EA_GMAIL_READ_BODY === 'true',
     };
+    let connectorHealth = {};
+    try {
+      connectorHealth = await getConnectorHealth(buildConnectorContext());
+    } catch (_) {}
+    let mobileDevices = { totalDevices: 0, devices: [] };
+    try {
+      mobileDevices = listDevices(5);
+    } catch (_) {}
     let eaAlertsCount = 0;
     try {
       if (fs.existsSync(EA_ALERTS_FILE)) {
@@ -3533,9 +7820,22 @@ async function handleRequest(req, res) {
         }
       }
     } catch (_) {}
+    let proactive = null;
+    try {
+      proactive = proactiveEngine.getStatus(10);
+    } catch (_) {}
     const payload = {
       health: { ollama: ollamaOk, model: OLLAMA_MODEL },
       integrations,
+      connectorHealth,
+      mobileDevices: {
+        totalDevices: mobileDevices.totalDevices || 0,
+        recent: Array.isArray(mobileDevices.devices) ? mobileDevices.devices.slice(0, 5) : [],
+      },
+      proactive: proactive ? {
+        summary: proactive.summary,
+        recentEvents: (proactive.events || []).slice(0, 5),
+      } : null,
       eaAlertsCount,
       allowlist,
       moltbook: { profile: moltbookProfile, lastPostAt: lastMoltbookPostAt, nextPostEligibleAt: nextMoltbookPostEligibleAt, lastPostUrl: lastMoltbookPostUrl, posts: moltbookPosts, postsFromLocal: postsFromLocal, note: 'Cron runs every 30 min at :00 and :30', journal: moltbookJournal, pendingProposal: moltbookPendingProposal, memory: pikoMemory, lastRun: moltbookLastRun, feedbackSignals: moltbookFeedbackSignals },
@@ -3720,14 +8020,19 @@ async function handleRequest(req, res) {
     }
     const sid = typeof body.sessionId === 'string' ? body.sessionId.trim() : '';
     if (!sid) return send(res, 400, JSON.stringify({ error: 'Missing sessionId' }));
-    try {
+    (async () => {
+      try {
+        const { flushSessionToVectorMemory } = require('./lib/vectorMemory');
+        await flushSessionToVectorMemory(sid);
+      } catch (_) {}
       sessionStore.clear(sid);
       log('info', 'session-reset', { sessionId: sid }, req.requestId);
       return send(res, 200, JSON.stringify({ ok: true, message: 'Session history cleared.' }));
-    } catch (e) {
+    })().catch((e) => {
       log('error', 'session-reset', { error: e.message, sessionId: sid }, req.requestId);
       return send(res, 500, JSON.stringify({ error: e.message }));
-    }
+    });
+    return;
   }
   if (req.method === 'POST' && pathname === '/api/control/aim-reject') {
     try {
@@ -4235,43 +8540,177 @@ function dumpHistory(forDate) {
 }
 
 let lastDumpDate = new Date().toISOString().slice(0, 10);
-const HISTORY_CHECK_MS = 60000; // check every minute
-setInterval(() => {
-  const today = new Date().toISOString().slice(0, 10);
-  if (today > lastDumpDate) {
-    dumpHistory(lastDumpDate);
-    lastDumpDate = today;
-  }
-}, HISTORY_CHECK_MS);
 
 const server = http.createServer(handleRequest);
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Piko WebChat http://0.0.0.0:${PORT} (Ollama: ${OLLAMA_MODEL})`);
+  try {
+    const { startFridayCloser } = require('./scripts/fridayCloser');
+    startFridayCloser();
+  } catch (e) {
+    if (process.env.PIKO_LOG_PLANNER === '1') console.warn('[boot] Friday Closer:', e.message);
+  }
+  try {
+    const { startProactiveLoop } = require('./scripts/proactiveThinker');
+    startProactiveLoop();
+  } catch (e) {
+    if (process.env.PIKO_LOG_PLANNER === '1') console.warn('[boot] Proactive Thinker:', e.message);
+  }
+  // Boot warm-up: load model into VRAM with keep_alive: -1 so first user request is fast
+  const warmModel = process.env.OLLAMA_MODEL || OLLAMA_MODEL;
+  ollamaNativeChat(warmModel, [{ role: 'user', content: 'hi' }], { max_tokens: 2 })
+    .then(() => { if (process.env.PIKO_LOG_PLANNER === '1') console.log('[boot] Ollama model warmed'); })
+    .catch((e) => { if (process.env.PIKO_LOG_PLANNER === '1') console.warn('[boot] Ollama warm-up:', e.message); });
+  const { loadManifest } = require('./lib/knowledgeManifest');
+  const manifest = loadManifest(__dirname);
+  if (!manifest.fromFile) {
+    console.log('[knowledge] No manifest at knowledge/manifest.json — using defaults. For platform-agnostic config, add knowledge/ and restart. See docs/PLATFORM_AGNOSTICISM_AUDIT.md');
+  }
+  const { discoverCapabilities } = require('./lib/legionAdapterDiscovery');
+  discoverCapabilities(__dirname)
+    .then((caps) => {
+      if (caps.length > 0) console.log('[legionDiscovery] Discovered', caps.length, 'capabilities from Legion + adapters');
+    })
+    .catch((e) => {
+      if (process.env.PIKO_LOG_PLANNER === '1') console.warn('[legionDiscovery]', e.message);
+    });
   if (HISTORY_DIR) console.log('[history] Nightly dumps to', HISTORY_DIR);
   runUnifiedHeartbeat();
+  proactiveCycleRunner.run('boot', { skipIfBusy: true }).catch((e) => {
+    log('error', 'proactive_cycle_boot', { code: e.code || '', message: e.message });
+  });
   cron.schedule('*/5 * * * *', runUnifiedHeartbeat);
+
+  // The Watchman — every 5 mins: evaluate tripwires
+  cron.schedule('*/5 * * * *', async () => {
+    const { evaluateTripwires } = require('./lib/tripwireEngine');
+    try {
+      await evaluateTripwires(async (alertMessage) => {
+        console.log('[TRIPWIRE TRIGGERED]:', alertMessage.slice(0, 120) + (alertMessage.length > 120 ? '…' : ''));
+        await telegramNotify(alertMessage);
+      });
+    } catch (e) {
+      log('error', 'tripwire_eval', { message: e.message });
+    }
+  });
+
+  // The Daily Digest — every minute: check dynamic schedules
+  cron.schedule('* * * * *', async () => {
+    const { loadSchedules, saveSchedules, flushDailyDigest } = require('./lib/tripwireEngine');
+    const schedules = loadSchedules();
+    if (schedules.length === 0) return;
+    const now = new Date();
+    const currentDateString = now.toDateString();
+    const currentMinutes = now.getHours() * 60 + now.getMinutes();
+    let schedulesUpdated = false;
+    for (const sched of schedules) {
+      const [schedH, schedM] = sched.time.split(':').map(Number);
+      const schedMinutes = (schedH || 0) * 60 + (schedM || 0);
+      if (currentMinutes >= schedMinutes && sched.lastSentDate !== currentDateString) {
+        try {
+          await flushDailyDigest(async (reportMessage) => {
+            console.log('[DAILY DIGEST TO USER]:', reportMessage.slice(0, 80) + '…');
+            await telegramNotify(reportMessage);
+          });
+          sched.lastSentDate = currentDateString;
+          schedulesUpdated = true;
+        } catch (e) {
+          console.error('[DIGEST] Failed:', e.message);
+        }
+      }
+    }
+    if (schedulesUpdated) saveSchedules(schedules);
+  });
+
+  // The Urgency Engine — every 30 mins during work hours (9am–5pm)
+  cron.schedule('*/30 9-17 * * *', async () => {
+    const { runInternalMonologue } = require('./lib/urgencyEngine');
+    try {
+      await runInternalMonologue(async (msg) => await telegramNotify(msg));
+    } catch (e) {
+      log('error', 'urgency_engine', { message: e.message });
+    }
+  });
+
+  // The Weekly PO — Thursdays at 4 PM
+  cron.schedule('0 16 * * 4', async () => {
+    const { flushWeeklyPO } = require('./lib/tripwireEngine');
+    try {
+      await flushWeeklyPO(async (reportMessage) => {
+        await telegramNotify(reportMessage);
+      });
+    } catch (e) {
+      console.error('[WEEKLY PO] Failed:', e.message);
+    }
+  });
+
+  cron.schedule('* * * * *', () => {
+    const today = new Date().toISOString().slice(0, 10);
+    if (today > lastDumpDate) {
+      dumpHistory(lastDumpDate);
+      lastDumpDate = today;
+    }
+  });
+
+  cron.schedule('*/5 * * * *', () => {
+    proactiveCycleRunner.run('scheduler', { skipIfBusy: true }).catch((e) => {
+      log('error', 'proactive_cycle', { code: e.code || '', message: e.message });
+    });
+  });
   cron.schedule('*/5 * * * *', () => {
     const cwd = __dirname;
     exec('node scripts/intent-poller.js', { cwd, env: process.env, timeout: 60000 }, (err, stdout, stderr) => {
       if (err) log('error', 'intent_poller', { message: err.message }, null);
     });
   });
-  const runMoltbookPoster = () => {
-    const cwd = __dirname;
-    exec('node scripts/moltbook-poster.js', { cwd, env: process.env, timeout: 90000 }, (err, stdout, stderr) => {
-      if (err) log('error', 'moltbook_poster', { message: err.message }, null);
+  // Phase 3: continuous mind loop — processes due intents every 60s when ReAct agent enabled
+  const useReAct = process.env.PIKO_USE_REACT_AGENT === '1' || process.env.PIKO_USE_REACT_AGENT === 'true';
+  if (useReAct) {
+    const { fork } = require('child_process');
+    const mindPath = path.join(__dirname, 'workers', 'pikoMind.js');
+    const mindProcess = fork(mindPath, [], { env: process.env, cwd: __dirname });
+    mindProcess.on('error', (err) => console.error('[pikoMind] spawn error:', err.message));
+    mindProcess.on('exit', (code, sig) => {
+      if (code !== 0 && code !== null) console.warn('[pikoMind] exited', code, sig);
     });
-  };
-  cron.schedule('0,30 * * * *', runMoltbookPoster);
-  setTimeout(runMoltbookPoster, 60000);
+    if (process.env.PIKO_LOG_PLANNER === '1') console.log('[boot] Mind loop spawned');
+  }
+  // Moltbook disabled — no longer maintained. Removed cron to avoid 403s and event-loop churn.
+  // let moltbookPosterRunning = false;
+  // const runMoltbookPoster = () => { ... };
+  // cron.schedule('0,30 * * * *', runMoltbookPoster);
   cron.schedule('0 2 * * *', () => {
     require('./scripts/nightly_wisdom').runNightlyWisdom().catch((e) => log('error', 'nightly_wisdom', { message: e.message }));
+  });
+  // Nightly Quant Agent — 1 AM: run statistical forecasts, write all SKUs to agent_forecasts
+  cron.schedule('0 1 * * *', async () => {
+    console.log('[CRON] Waking up Quant Agent for nightly batch forecast...');
+    try {
+      const { deploySubAgent } = require('./lib/legionSwarm');
+      const taskContext = 'Deploy the quant agent to run our statistical forecasts and write all SKUs to the database.';
+      const result = await deploySubAgent('quant', taskContext);
+      const { sendToAdmin } = require('./lib/telegramNotifier');
+      if (result && !result.startsWith('Error:') && !result.includes('Failed after')) {
+        await sendToAdmin('🌙 **Nightly Math Complete:**\nI just finished running the 1 AM statistical forecasts across the catalog. Database is updated for today!');
+      } else {
+        console.error('[CRON] Quant Agent failed:', result || 'No result');
+        const errSnippet = (result || '').slice(0, 500);
+        await sendToAdmin('⚠️ **Nightly Quant Agent:** The forecast run encountered an issue.\n\n' + (errSnippet || 'Check logs for details.'));
+      }
+    } catch (e) {
+      console.error('[CRON] Quant Agent failed:', e.message);
+      const { sendToAdmin } = require('./lib/telegramNotifier');
+      await sendToAdmin('⚠️ **Nightly Quant Agent Failed:** ' + (e.message || 'Unknown error')).catch(() => {});
+    }
   });
   cron.schedule('0 3 * * *', () => {
     beliefLoop.runBeliefConsolidation()
       .then(() => memory.pruneEpisodicOlderThanDays())
       .then(() => beliefLoop.resolveBeliefConflicts())
       .catch((e) => log('error', 'belief_consolidation', { message: e.message }));
+  });
+  cron.schedule('0 3 * * 0', () => {
+    require('./scripts/memoryConsolidation').consolidateSoul().catch((e) => log('error', 'memory_consolidation', { message: e.message }));
   });
   cron.schedule('0 8 * * 0', () => {
     try {
@@ -4294,5 +8733,5 @@ server.listen(PORT, '0.0.0.0', () => {
       log('error', 'weekly_retro', { message: e.message });
     }
   });
-  console.log('[heartbeat] Unified 5min cron; intent poller every 5min; Moltbook poster at :00 and :30; nightly wisdom 2AM; belief 3AM; weekly retro Sun 8AM');
+  console.log('[heartbeat] Watchman 5min; Daily Digest 1min; Weekly PO Thu 4PM; Urgency 30min 9–17; intent poller 5min; nightly wisdom 2AM; belief 3AM; SOUL consolidation Sun 3AM; weekly retro Sun 8AM');
 });
