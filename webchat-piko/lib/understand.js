@@ -276,19 +276,27 @@ function logUnderstanding(message, result, mode) {
   console.log(`[understand] ${line}`);
 }
 
+function getUnderstandOllamaBaseUrl() {
+  const raw = String(process.env.PIKO_UNDERSTAND_OLLAMA_URL || '').trim();
+  return raw || undefined;
+}
+
 async function callUnderstandLlm(message, ctx, model) {
   const messages = [
     { role: 'system', content: buildUnderstandPrompt(ctx) },
     { role: 'user', content: String(message || '').trim().slice(0, 800) },
   ];
-  const raw = await ollamaNativeChat(model, messages, {
+  const opts = {
     format: 'json',
     temperature: 0,
     max_tokens: 280,
     num_ctx: Number(process.env.PIKO_UNDERSTAND_NUM_CTX || 4096),
     timeoutMs: Math.max(3000, Number(process.env.PIKO_UNDERSTAND_TIMEOUT_MS || 45000)),
     purpose: 'chat',
-  });
+  };
+  const base = getUnderstandOllamaBaseUrl();
+  if (base) opts.ollamaBaseUrl = base;
+  const raw = await ollamaNativeChat(model, messages, opts);
   return raw;
 }
 
@@ -393,6 +401,7 @@ module.exports = {
   FEW_SHOT_IDS,
   MUTATING_INTENTS,
   getUnderstandModel,
+  getUnderstandOllamaBaseUrl,
   isAuthoritative,
   isShadowEnabled,
   computeNeedsOperator,

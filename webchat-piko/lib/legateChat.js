@@ -397,8 +397,13 @@ function applyVetoFloors(text, mode, parsed, opts = {}) {
   };
 }
 
+function getLegateOllamaBaseUrl() {
+  const raw = String(process.env.PIKO_LEGATE_OLLAMA_URL || '').trim();
+  return raw || undefined;
+}
+
 async function callDecideModel(model, msgs) {
-  const raw = await ollamaNativeChat(model, msgs, {
+  const opts = {
     format: 'json',
     temperature: 0,
     max_tokens: 400,
@@ -406,7 +411,10 @@ async function callDecideModel(model, msgs) {
     timeoutMs: Math.max(5000, Number(process.env.PIKO_LEGATE_TIMEOUT_MS || 60000)),
     priority: 'user',
     lane: 'chat',
-  });
+  };
+  const base = getLegateOllamaBaseUrl();
+  if (base) opts.ollamaBaseUrl = base;
+  const raw = await ollamaNativeChat(model, msgs, opts);
   return extractJsonObject(raw);
 }
 
@@ -943,6 +951,7 @@ module.exports = {
   resolveDispatchAgentId,
   applyVetoFloors,
   isValidDecidePayload,
+  getLegateOllamaBaseUrl,
   DECIDE_FAIL_REPLY,
   LEGATE_DISPATCH_AGENTS,
   __testSetFloorModule,
