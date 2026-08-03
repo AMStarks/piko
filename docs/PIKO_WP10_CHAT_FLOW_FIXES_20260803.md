@@ -1,7 +1,7 @@
 # WP10 — Chat flow fixes: decide-fail honesty, single-comprehension turns
 
 Date: 2026-08-03
-Status: PLAN
+Status: ENACTING (F1–F6 code complete; deploy + live probes in progress)
 Depends on: WP8 (understand() authoritative), WP9 (Rodimus VRAM partition, release `20260803-2254-44a9e22f`)
 
 ## Triggering incident (measured)

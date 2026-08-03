@@ -632,7 +632,7 @@ async function synthesizeLookupReply(message, data, opts = {}) {
     ], {
       temperature: 0.2,
       max_tokens: 500,
-      num_ctx: Number(process.env.PIKO_LEGATE_NUM_CTX || 4096),
+      num_ctx: Number(process.env.PIKO_LEGATE_NUM_CTX || 8192),
       timeoutMs: Math.max(5000, Number(process.env.PIKO_LEGATE_SYNTHESIS_TIMEOUT_MS || 45000)),
       priority: 'user',
       lane: 'chat',

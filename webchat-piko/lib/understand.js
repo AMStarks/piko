@@ -290,7 +290,7 @@ async function callUnderstandLlm(message, ctx, model) {
     format: 'json',
     temperature: 0,
     max_tokens: 280,
-    num_ctx: Number(process.env.PIKO_UNDERSTAND_NUM_CTX || 4096),
+    num_ctx: Number(process.env.PIKO_UNDERSTAND_NUM_CTX || 8192),
     timeoutMs: Math.max(3000, Number(process.env.PIKO_UNDERSTAND_TIMEOUT_MS || 45000)),
     purpose: 'chat',
   };

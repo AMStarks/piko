@@ -65,8 +65,24 @@ const LEGATE_DISPATCH_AGENTS = new Set([
   'ei-corpus-reviewer',
 ]);
 
-const DECIDE_FAIL_REPLY = "I didn't parse that cleanly — want me to treat it as a work order?";
+const DECIDE_FAIL_REPLY = "I didn't quite catch that — can you say it another way?";
 const CONTROL_ACTIONS = new Set(['start', 'pause', 'resume', 'stop', 'run_now']);
+
+/** Intents that never need Legate decide — understand() is enough (WP10 F1/F3). */
+const NON_MUTATING_INTENTS = new Set([
+  'conversation',
+  'musing',
+  'opinion_question',
+  'status_question',
+  'learning_question',
+  'feedback',
+  'identity_capability',
+]);
+
+function isNonMutatingUnderstanding(u) {
+  if (!u || u.failed) return false;
+  return NON_MUTATING_INTENTS.has(String(u.intent || ''));
+}
 
 let floorModule = null;
 let floorsAvailable = false;
@@ -158,6 +174,7 @@ Rules:
 - mode=dispatch: operator wants worker research done. Pick agent_id from the available list only. Short ack in "reply" that mirrors THEIR scope (singular if they asked singular). Do NOT claim work is already done.
 - The system sends the operator's exact message to the worker — you do NOT write a replacement brief. "understood" must paraphrase THIS ask without expanding it.
 - NEVER invent "successfully located" / fake ingest. NEVER substitute web-link summaries for dispatch.
+- CRITICAL: "reply" must be at most TWO short sentences. The chat persona voices the real answer — decide only routes. Prefer empty reply when lookups are set or mode=answer for opinions/musings.
 - Plain, brief tone. Available agents: ${agentList}. Prefer ${DEFAULT_WORKER} for find/add/seek/harvest/corpus work.`);
 }
 
@@ -211,7 +228,37 @@ function isValidDecidePayload(parsed) {
   return true;
 }
 
-function decideFailResult(reason) {
+function decideFailResult(reason, meta = {}) {
+  const reasonStr = String(reason || 'decide_fail').slice(0, 200);
+  const rawHead = String(meta.raw || '').slice(0, 200);
+  const hash = msgHash(meta.message || '');
+  console.log(`[decide_fail] ${JSON.stringify({
+    ts: new Date().toISOString(),
+    reason: reasonStr,
+    msg_hash: hash || null,
+    raw_head: rawHead || null,
+  })}`);
+
+  // WP10 F1: never surface the work-order clarifier when understand already
+  // classified a non-mutating intent — recover with lookups or fallthrough.
+  const u = meta.understanding;
+  if (isNonMutatingUnderstanding(u)) {
+    const intent = String(u.intent || '');
+    const lookups = intent === 'status_question' ? ['campaign', 'activity'] : [];
+    return {
+      mode: 'answer',
+      reply: '',
+      agent_id: null,
+      brief: null,
+      control_action: null,
+      understood: null,
+      lookups,
+      reason: `decide_fail_recover:${intent}`.slice(0, 200),
+      source: 'understand_recover',
+      decide_fail_reason: reasonStr,
+    };
+  }
+
   return {
     mode: 'answer',
     reply: DECIDE_FAIL_REPLY,
@@ -220,9 +267,18 @@ function decideFailResult(reason) {
     control_action: null,
     understood: null,
     lookups: [],
-    reason: String(reason || 'decide_fail').slice(0, 200),
+    reason: reasonStr,
     source: 'decide_fail',
   };
+}
+
+function logFloorsUnavailable(text, reason) {
+  console.log(`[decide_fail] ${JSON.stringify({
+    ts: new Date().toISOString(),
+    reason: String(reason || 'floors_unavailable').slice(0, 200),
+    msg_hash: msgHash(text),
+    floors_ok: false,
+  })}`);
 }
 
 function dispatchAckLine(agentId) {
@@ -267,6 +323,7 @@ function applyVetoFloors(text, mode, parsed, opts = {}) {
         floorMode: 'answer',
         floor: 'floors_unavailable_no_work_confirm',
       });
+      logFloorsUnavailable(text, 'floors_unavailable_no_work_confirm');
       next = 'answer';
       parsed.reply = DECIDE_FAIL_REPLY;
       parsed.lookups = [];
@@ -279,6 +336,7 @@ function applyVetoFloors(text, mode, parsed, opts = {}) {
         reason: 'floors_unavailable_no_work_confirm',
       };
     }
+    logFloorsUnavailable(text, 'floors_unavailable');
     return {
       mode: next,
       forcedStatusAnswer,
@@ -406,8 +464,8 @@ async function callDecideModel(model, msgs) {
   const opts = {
     format: 'json',
     temperature: 0,
-    max_tokens: 400,
-    num_ctx: Number(process.env.PIKO_LEGATE_NUM_CTX || 4096),
+    max_tokens: 600,
+    num_ctx: Number(process.env.PIKO_LEGATE_NUM_CTX || 8192),
     timeoutMs: Math.max(5000, Number(process.env.PIKO_LEGATE_TIMEOUT_MS || 60000)),
     priority: 'user',
     lane: 'chat',
@@ -415,7 +473,7 @@ async function callDecideModel(model, msgs) {
   const base = getLegateOllamaBaseUrl();
   if (base) opts.ollamaBaseUrl = base;
   const raw = await ollamaNativeChat(model, msgs, opts);
-  return extractJsonObject(raw);
+  return { raw, parsed: extractJsonObject(raw) };
 }
 
 /**
@@ -462,12 +520,21 @@ async function decideLegateTurn(message, opts = {}) {
   ];
 
   try {
-    let parsed = await callDecideModel(model, msgs);
+    let lastRaw = '';
+    let call = await callDecideModel(model, msgs);
+    lastRaw = call.raw;
+    let parsed = call.parsed;
     if (!isValidDecidePayload(parsed)) {
-      parsed = await callDecideModel(model, msgs);
+      call = await callDecideModel(model, msgs);
+      lastRaw = call.raw;
+      parsed = call.parsed;
     }
     if (!isValidDecidePayload(parsed)) {
-      return decideFailResult('invalid_decide_json');
+      return decideFailResult('invalid_decide_json', {
+        message: text,
+        raw: lastRaw,
+        understanding: opts.understanding || null,
+      });
     }
 
     let mode = String(parsed.mode || '').toLowerCase().trim();
@@ -475,7 +542,11 @@ async function decideLegateTurn(message, opts = {}) {
       ? String(parsed.control_action || '').toLowerCase().trim()
       : null;
     if (mode === 'control' && !CONTROL_ACTIONS.has(controlAction)) {
-      return decideFailResult('invalid_control_action');
+      return decideFailResult('invalid_control_action', {
+        message: text,
+        raw: lastRaw,
+        understanding: opts.understanding || null,
+      });
     }
 
     let agentId = resolveDispatchAgentId(parsed.agent_id, agents);
@@ -539,7 +610,11 @@ async function decideLegateTurn(message, opts = {}) {
     };
   } catch (e) {
     // Honest failure — never silently dispatch, never silently "Got it."
-    return decideFailResult(`decide_fail:${e.message || 'llm_fail'}`);
+    return decideFailResult(`decide_fail:${e.message || 'llm_fail'}`, {
+      message: text,
+      raw: e && e.message ? e.message : String(e || ''),
+      understanding: opts.understanding || null,
+    });
   }
 }
 
@@ -725,8 +800,97 @@ function wantsProgressLookup(text, understanding) {
   return false;
 }
 
+async function answerViaLookups(message, lookups, opts = {}) {
+  const root = opts.rootDir || path.join(__dirname, '..');
+  const keys = Array.isArray(lookups) && lookups.length ? lookups : ['campaign', 'activity'];
+  const data = runLookups(keys, { rootDir: root });
+  const reply = await synthesizeLookupReply(message, data, {
+    model: opts.model,
+  });
+  return {
+    reply: reply || formatLookupReply('', data),
+    mode: 'answer',
+    decision: {
+      mode: 'answer',
+      reply: '',
+      lookups: keys,
+      reason: opts.reason || 'lookup',
+      source: opts.source || 'understand_skip_decide',
+      agent_id: null,
+      control_action: null,
+    },
+    lookup_data: data,
+    inject_campaign_state: false,
+    understanding: opts.understanding || null,
+  };
+}
+
+function fallthroughFromUnderstanding(understanding, reason) {
+  return {
+    reply: null,
+    fallthrough: true,
+    inject_campaign_state: false,
+    decision: {
+      mode: 'answer',
+      reply: '',
+      lookups: [],
+      reason: String(reason || (understanding && understanding.intent) || 'fallthrough').slice(0, 200),
+      source: 'understand_skip_decide',
+      agent_id: null,
+      control_action: null,
+    },
+    understanding: understanding || null,
+  };
+}
+
 /**
- * Full Legate turn for chat: decide → maybe lookups / control / dispatch → reply.
+ * WP10 F1: when decide failed but understand already classified a non-mutating
+ * intent, recover instead of surfacing DECIDE_FAIL_REPLY.
+ */
+async function recoverDecideFailWithUnderstanding(message, understanding, opts = {}) {
+  const intent = String((understanding && understanding.intent) || '');
+  if (intent === 'status_question') {
+    return answerViaLookups(message, ['campaign', 'activity'], {
+      rootDir: opts.rootDir,
+      model: opts.model,
+      understanding,
+      reason: 'decide_fail_recover_status',
+      source: 'understand_recover',
+    });
+  }
+  // learning / opinion / musing / conversation / feedback / identity → persona
+  return fallthroughFromUnderstanding(understanding, `decide_fail_recover:${intent}`);
+}
+
+/**
+ * WP10 F3: skip decide entirely for non-mutating authoritative understandings.
+ */
+async function routeNonMutatingUnderstanding(message, understanding, opts = {}) {
+  const intent = String((understanding && understanding.intent) || '');
+  if (intent === 'status_question') {
+    return answerViaLookups(message, ['campaign', 'activity'], {
+      rootDir: opts.rootDir,
+      model: opts.model,
+      understanding,
+      reason: 'status_question',
+      source: 'understand_skip_decide',
+    });
+  }
+  if (intent === 'learning_question') {
+    return answerViaLookups(message, ['campaign', 'learning', 'activity'], {
+      rootDir: opts.rootDir,
+      model: opts.model,
+      understanding,
+      reason: 'learning_question',
+      source: 'understand_skip_decide',
+    });
+  }
+  // conversation / musing / opinion / feedback / identity_capability
+  return fallthroughFromUnderstanding(understanding, intent);
+}
+
+/**
+ * Full Legate turn for chat: understand → (maybe decide) → lookups / control / dispatch / fallthrough.
  */
 async function handleLegateChatTurn(message, opts = {}) {
   const root = opts.rootDir || path.join(__dirname, '..');
@@ -758,6 +922,14 @@ async function handleLegateChatTurn(message, opts = {}) {
     }
   } catch (e) {
     console.warn('[legateChat] understand setup failed', e && e.message ? e.message : e);
+  }
+
+  // WP10 F3: non-mutating intents skip decide — one 27B call (understand) only.
+  if (authoritative && isNonMutatingUnderstanding(understanding)) {
+    return routeNonMutatingUnderstanding(message, understanding, {
+      rootDir: root,
+      model: opts.model,
+    });
   }
 
   // Decide always runs on the Legate model (PIKO_LEGATE_MODEL) — the session
@@ -836,13 +1008,35 @@ async function handleLegateChatTurn(message, opts = {}) {
         understanding,
       };
     }
-    // Honest decide-failure stays visible — do not fall through and bury it.
-    if (decision.source === 'decide_fail') {
-      return { reply: decision.reply, mode: 'answer', decision, inject_campaign_state: false, understanding };
+    // WP10 F1: decide-fail recovery (also when decide returned understand_recover).
+    if (decision.source === 'decide_fail' || decision.source === 'understand_recover') {
+      if (decision.source === 'understand_recover' || isNonMutatingUnderstanding(understanding)) {
+        if (decision.lookups && decision.lookups.length) {
+          const data = runLookups(decision.lookups, { rootDir: root });
+          const reply = await synthesizeLookupReply(message, data, { model: opts.model });
+          return {
+            reply: reply || formatLookupReply('', data),
+            mode: 'answer',
+            decision: { ...decision, lookups: decision.lookups },
+            lookup_data: data,
+            inject_campaign_state: false,
+            understanding,
+          };
+        }
+        if (isNonMutatingUnderstanding(understanding)) {
+          return recoverDecideFailWithUnderstanding(message, understanding, {
+            rootDir: root,
+            model: opts.model,
+          });
+        }
+      }
+      if (decision.source === 'decide_fail') {
+        return { reply: decision.reply, mode: 'answer', decision, inject_campaign_state: false, understanding };
+      }
     }
     // Plain conversation: hand back to the main chat brain (full persona).
     // Fall-through must NOT inject LIVE RESEARCH STATE numbers.
-    if (decision.source === 'llm') {
+    if (decision.source === 'llm' || decision.source === 'understand_recover') {
       return {
         reply: null,
         fallthrough: true,
@@ -955,8 +1149,10 @@ module.exports = {
   resolveDispatchAgentId,
   applyVetoFloors,
   isValidDecidePayload,
+  isNonMutatingUnderstanding,
   getLegateOllamaBaseUrl,
   DECIDE_FAIL_REPLY,
+  NON_MUTATING_INTENTS,
   LEGATE_DISPATCH_AGENTS,
   __testSetFloorModule,
 };
