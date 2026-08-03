@@ -760,8 +760,12 @@ async function handleLegateChatTurn(message, opts = {}) {
     console.warn('[legateChat] understand setup failed', e && e.message ? e.message : e);
   }
 
+  // Decide always runs on the Legate model (PIKO_LEGATE_MODEL) — the session
+  // chat model must not leak in, or decide silently downgrades to the 8B and
+  // (post-WP9) drags it onto the 27B instance, evicting the resident qwen.
+  const { model: _sessionChatModel, ...decideOpts } = opts;
   const decision = await module.exports.decideLegateTurn(message, {
-    ...opts,
+    ...decideOpts,
     understanding,
     authoritative,
   });
