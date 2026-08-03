@@ -1,0 +1,103 @@
+{
+  "mode": "understand_llm",
+  "total": 60,
+  "correct": 58,
+  "accuracy": 0.9666666666666667,
+  "failed_calls": 0,
+  "false_work_on_musing_status": 0,
+  "by_intent": {
+    "status_question": {
+      "n": 6,
+      "correct": 6,
+      "accuracy": 1,
+      "failed": 0
+    },
+    "opinion_question": {
+      "n": 6,
+      "correct": 6,
+      "accuracy": 1,
+      "failed": 0
+    },
+    "musing": {
+      "n": 6,
+      "correct": 6,
+      "accuracy": 1,
+      "failed": 0
+    },
+    "work_order": {
+      "n": 5,
+      "correct": 5,
+      "accuracy": 1,
+      "failed": 0
+    },
+    "campaign_control": {
+      "n": 5,
+      "correct": 5,
+      "accuracy": 1,
+      "failed": 0
+    },
+    "conversation": {
+      "n": 5,
+      "correct": 5,
+      "accuracy": 1,
+      "failed": 0
+    },
+    "identity_capability": {
+      "n": 5,
+      "correct": 5,
+      "accuracy": 1,
+      "failed": 0
+    },
+    "learning_question": {
+      "n": 5,
+      "correct": 5,
+      "accuracy": 1,
+      "failed": 0
+    },
+    "schedule_request": {
+      "n": 5,
+      "correct": 5,
+      "accuracy": 1,
+      "failed": 0
+    },
+    "feedback": {
+      "n": 4,
+      "correct": 4,
+      "accuracy": 1,
+      "failed": 0
+    },
+    "config_change": {
+      "n": 4,
+      "correct": 4,
+      "accuracy": 1,
+      "failed": 0
+    },
+    "agent_command": {
+      "n": 4,
+      "correct": 2,
+      "accuracy": 0.5,
+      "failed": 0
+    }
+  },
+  "miss_count": 2,
+  "misses_sample": [
+    {
+      "id": "agent_command-88c6ef6284",
+      "text": "How many agents are working?",
+      "expected": "agent_command",
+      "predicted": "status_question",
+      "tags": [
+        "agent"
+      ]
+    },
+    {
+      "id": "agent_command-db59d3526d",
+      "text": "Show agent status",
+      "expected": "agent_command",
+      "predicted": "status_question",
+      "tags": [
+        "agent"
+      ]
+    }
+  ]
+}

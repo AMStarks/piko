@@ -1,6 +1,6 @@
 {
-  "updated_at": "2026-08-03T07:12:32.099Z",
-  "total": 867,
+  "updated_at": "2026-08-03T08:54:05.431Z",
+  "total": 857,
   "files": {
     "lib/actionRouter.js": 0,
     "lib/activityLog.js": 0,
@@ -65,7 +65,8 @@
     "lib/eiCorpusNotes.js": 1,
     "lib/eiCorpusRag.js": 5,
     "lib/eiEngineeringQueue.js": 0,
-    "lib/eiGoalParse.js": 15,
+    "lib/eiFloors.js": 0,
+    "lib/eiGoalParse.js": 6,
     "lib/eiImprovementLog.js": 0,
     "lib/eiIntentGate.js": 2,
     "lib/eiKnownWorks.js": 6,
@@ -100,7 +101,7 @@
     "lib/knowledgeManifest.js": 1,
     "lib/laskoModeration.js": 1,
     "lib/laskoModerationPatterns.js": 2,
-    "lib/legateChat.js": 10,
+    "lib/legateChat.js": 9,
     "lib/legateTools.js": 11,
     "lib/legionAdapterDiscovery.js": 1,
     "lib/legionAdapterHealth.js": 2,

@@ -260,29 +260,75 @@ function applyVetoFloors(text, mode, parsed, opts = {}) {
     };
   }
 
-  const {
-    isCampaignStatusQuestion,
-    isOpinionQuestion,
-    isSoftMusing,
-  } = floorModule;
+  // WP8.2: prefer understand() intents; phrase floors are fail-closed backup.
+  let status = false;
+  let opinion = false;
+  let musing = false;
+  let floorName = 'phrases';
+  try {
+    const { floorsFromUnderstanding, floorsFromPhrases } = require('./eiFloors');
+    const u = opts.understanding;
+    if (u && !u.failed) {
+      const f = floorsFromUnderstanding(u);
+      status = f.status;
+      opinion = f.opinion;
+      musing = f.musing;
+      floorName = 'understand';
+    } else if (u && u.failed && opts.authoritative === true) {
+      // Fail closed: never dispatch when comprehension failed.
+      if (next === 'dispatch' || next === 'control') {
+        logFloorOverride({
+          message: text,
+          llmMode,
+          floorMode: 'answer',
+          floor: 'understand_failed_fail_closed',
+        });
+        next = 'answer';
+        parsed.reply = DECIDE_FAIL_REPLY;
+        parsed.lookups = [];
+        return {
+          mode: next,
+          forcedStatusAnswer: false,
+          forcedOpinionAnswer: false,
+          forcedMusingAnswer: false,
+          floorsOk: true,
+          reason: 'understand_failed_fail_closed',
+        };
+      }
+      const f = floorsFromPhrases(text);
+      status = f.status;
+      opinion = f.opinion;
+      musing = f.musing;
+      floorName = 'phrases_after_fail';
+    } else {
+      const f = floorsFromPhrases(text);
+      status = f.status;
+      opinion = f.opinion;
+      musing = f.musing;
+    }
+  } catch (_) {
+    status = floorModule.isCampaignStatusQuestion(text);
+    opinion = floorModule.isOpinionQuestion(text);
+    musing = floorModule.isSoftMusing(text);
+  }
 
-  if (isCampaignStatusQuestion(text)) {
+  if (status) {
     if (llmMode !== 'answer') {
-      logFloorOverride({ message: text, llmMode, floorMode: 'answer', floor: 'campaign_status' });
+      logFloorOverride({ message: text, llmMode, floorMode: 'answer', floor: `campaign_status:${floorName}` });
     }
     next = 'answer';
     forcedStatusAnswer = true;
-  } else if (isOpinionQuestion(text)) {
+  } else if (opinion) {
     // Opinion always wins — even when the phrasing mentions find/research.
     if (llmMode !== 'answer') {
-      logFloorOverride({ message: text, llmMode, floorMode: 'answer', floor: 'opinion' });
+      logFloorOverride({ message: text, llmMode, floorMode: 'answer', floor: `opinion:${floorName}` });
     }
     next = 'answer';
     forcedOpinionAnswer = true;
     parsed.reply = '';
     parsed.lookups = [];
-  } else if (next === 'dispatch' && isSoftMusing(text)) {
-    logFloorOverride({ message: text, llmMode, floorMode: 'answer', floor: 'soft_musing' });
+  } else if (next === 'dispatch' && musing) {
+    logFloorOverride({ message: text, llmMode, floorMode: 'answer', floor: `soft_musing:${floorName}` });
     next = 'answer';
     forcedMusingAnswer = true;
     parsed.reply = '';
@@ -398,7 +444,10 @@ async function decideLegateTurn(message, opts = {}) {
     let agentId = resolveDispatchAgentId(parsed.agent_id, agents);
     const understood = String(parsed.understood || '').trim().slice(0, 500) || null;
 
-    const floor = applyVetoFloors(text, mode, parsed);
+    const floor = applyVetoFloors(text, mode, parsed, {
+      understanding: opts.understanding || null,
+      authoritative: opts.authoritative === true,
+    });
     mode = floor.mode;
     if (mode !== 'control') controlAction = null;
     if (mode !== 'dispatch') agentId = resolveDispatchAgentId(DEFAULT_WORKER, agents);
@@ -619,12 +668,24 @@ async function runCampaignControlAction(action, opts = {}) {
   return out;
 }
 
-function wantsProgressLookup(text) {
-  if (!floorsAvailable || !floorModule) return false;
+function wantsProgressLookup(text, understanding) {
   try {
-    if (floorModule.isCampaignStatusQuestion(text)) return true;
+    const { floorsFromUnderstanding, floorsFromPhrases } = require('./eiFloors');
+    if (understanding && !understanding.failed) {
+      const f = floorsFromUnderstanding(understanding);
+      if (f.status || understanding.intent === 'learning_question') return true;
+    }
+    if (floorsFromPhrases(text).status) return true;
   } catch (_) {}
-  return /\b(how many|how much|progress|cycles?|pending leads?|what have you (learned|found))\b/i.test(text);
+  const t = String(text || '').toLowerCase();
+  const markers = [
+    'how many', 'how much', 'progress', 'cycle', 'cycles',
+    'pending lead', 'pending leads', 'what have you learned', 'what have you found',
+  ];
+  for (const m of markers) {
+    if (t.includes(m)) return true;
+  }
+  return false;
 }
 
 /**
@@ -634,13 +695,14 @@ async function handleLegateChatTurn(message, opts = {}) {
   const root = opts.rootDir || path.join(__dirname, '..');
   if (!isLegateChatEnabled(root)) return null;
 
-  // WP8.0: shadow comprehension — log only; never drives dispatch until
-  // PIKO_UNDERSTAND_AUTHORITATIVE=1 (WP8.2). Fire-and-forget so a hung
-  // Ollama cannot stall the chat path. Attach id only after WP8.2 cutover.
+  // WP8.2: when authoritative, understand() runs first and veto floors use it.
+  // Shadow mode remains fire-and-forget (must not stall chat).
   let understanding = null;
+  let authoritative = false;
   try {
     const { understand, isAuthoritative, isShadowEnabled } = require('./understand');
-    if (isAuthoritative()) {
+    authoritative = isAuthoritative();
+    if (authoritative) {
       understanding = await understand(message, {
         is_operator: opts.isOperator === true,
         campaign_summary: opts.campaignSummary || '',
@@ -661,7 +723,11 @@ async function handleLegateChatTurn(message, opts = {}) {
     console.warn('[legateChat] understand setup failed', e && e.message ? e.message : e);
   }
 
-  const decision = await module.exports.decideLegateTurn(message, opts);
+  const decision = await module.exports.decideLegateTurn(message, {
+    ...opts,
+    understanding,
+    authoritative,
+  });
 
   if (decision.mode === 'control') {
     // WP7.6: mutating campaign control requires an operator session (mirrors REST).
@@ -712,7 +778,7 @@ async function handleLegateChatTurn(message, opts = {}) {
       ? decision.lookups
       : [];
     // Progress/number-seeking with empty lookups → run a real lookup, never raw state dump.
-    if (!lookups.length && wantsProgressLookup(message)) {
+    if (!lookups.length && wantsProgressLookup(message, understanding)) {
       lookups = ['campaign', 'activity'];
     }
     if (lookups.length) {

@@ -27,6 +27,35 @@ function loadBattery() {
   return [...synth, ...real].filter((r) => !r.exclude_from_scoring);
 }
 
+/** Stratified sample so a LIMIT does not take only the first intent block. */
+function stratifiedSample(rows, limit) {
+  if (!limit || limit <= 0 || rows.length <= limit) return rows;
+  const by = new Map();
+  for (const r of rows) {
+    if (!by.has(r.intent)) by.set(r.intent, []);
+    by.get(r.intent).push(r);
+  }
+  const intents = [...by.keys()];
+  const out = [];
+  const idx = Object.fromEntries(intents.map((k) => [k, 0]));
+  // Round-robin across intents
+  while (out.length < limit) {
+    let progressed = false;
+    for (const intent of intents) {
+      if (out.length >= limit) break;
+      const bucket = by.get(intent);
+      const i = idx[intent];
+      if (i < bucket.length) {
+        out.push(bucket[i]);
+        idx[intent] = i + 1;
+        progressed = true;
+      }
+    }
+    if (!progressed) break;
+  }
+  return out;
+}
+
 async function main() {
   const offline = process.env.PIKO_UNDERSTAND_EVAL_OFFLINE === '1';
   const limit = Number(process.env.PIKO_UNDERSTAND_EVAL_LIMIT || 0);
@@ -35,7 +64,7 @@ async function main() {
     console.error('No battery fixtures — run: node scripts/generate-understand-battery.js');
     process.exit(1);
   }
-  if (limit > 0) rows = rows.slice(0, limit);
+  if (limit > 0) rows = stratifiedSample(rows, limit);
 
   const { labelWithFloors } = require('./generate-understand-battery');
   const stats = {
@@ -54,6 +83,7 @@ async function main() {
 
   for (const row of rows) {
     stats.total += 1;
+    if (stats.total % 5 === 1) console.error(`[eval] ${stats.total}/${rows.length}`);
     if (!stats.by_intent[row.intent]) {
       stats.by_intent[row.intent] = { n: 0, correct: 0, failed: 0 };
     }
