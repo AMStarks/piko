@@ -1,0 +1,485 @@
+{
+  "mode": "offline_floor",
+  "total": 2135,
+  "correct": 1969,
+  "accuracy": 0.922248243559719,
+  "failed_calls": 0,
+  "false_work_on_musing_status": 0,
+  "by_intent": {
+    "status_question": {
+      "n": 370,
+      "correct": 356,
+      "accuracy": 0.9621621621621622,
+      "failed": 0
+    },
+    "opinion_question": {
+      "n": 543,
+      "correct": 479,
+      "accuracy": 0.8821362799263351,
+      "failed": 0
+    },
+    "musing": {
+      "n": 519,
+      "correct": 495,
+      "accuracy": 0.953757225433526,
+      "failed": 0
+    },
+    "work_order": {
+      "n": 375,
+      "correct": 373,
+      "accuracy": 0.9946666666666667,
+      "failed": 0
+    },
+    "campaign_control": {
+      "n": 187,
+      "correct": 148,
+      "accuracy": 0.7914438502673797,
+      "failed": 0
+    },
+    "conversation": {
+      "n": 105,
+      "correct": 105,
+      "accuracy": 1,
+      "failed": 0
+    },
+    "identity_capability": {
+      "n": 10,
+      "correct": 3,
+      "accuracy": 0.3,
+      "failed": 0
+    },
+    "learning_question": {
+      "n": 7,
+      "correct": 6,
+      "accuracy": 0.8571428571428571,
+      "failed": 0
+    },
+    "schedule_request": {
+      "n": 7,
+      "correct": 4,
+      "accuracy": 0.5714285714285714,
+      "failed": 0
+    },
+    "feedback": {
+      "n": 4,
+      "correct": 0,
+      "accuracy": 0,
+      "failed": 0
+    },
+    "config_change": {
+      "n": 4,
+      "correct": 0,
+      "accuracy": 0,
+      "failed": 0
+    },
+    "agent_command": {
+      "n": 4,
+      "correct": 0,
+      "accuracy": 0,
+      "failed": 0
+    }
+  },
+  "miss_count": 166,
+  "misses_sample": [
+    {
+      "id": "status_question-791c38ce0b",
+      "text": "How i sthe research campaign going?",
+      "expected": "status_question",
+      "predicted": "conversation",
+      "tags": [
+        "status",
+        "typo"
+      ]
+    },
+    {
+      "id": "status_question-403211d57b",
+      "text": "Hey mate — Give me an update cheers",
+      "expected": "status_question",
+      "predicted": "conversation",
+      "tags": [
+        "status",
+        "aussie"
+      ]
+    },
+    {
+      "id": "status_question-c30c1c0676",
+      "text": "How i singestion progressing?",
+      "expected": "status_question",
+      "predicted": "conversation",
+      "tags": [
+        "status",
+        "typo"
+      ]
+    },
+    {
+      "id": "status_question-528c5830f8",
+      "text": "how are the keeps looking this week?",
+      "expected": "status_question",
+      "predicted": "conversation",
+      "tags": [
+        "status",
+        "lower"
+      ]
+    },
+    {
+      "id": "status_question-c128a75ae6",
+      "text": "What' sprogress on the corpus?",
+      "expected": "status_question",
+      "predicted": "conversation",
+      "tags": [
+        "status",
+        "typo"
+      ]
+    },
+    {
+      "id": "status_question-700878d9ee",
+      "text": "How many cycles have we run?",
+      "expected": "status_question",
+      "predicted": "conversation",
+      "tags": [
+        "status",
+        "terse"
+      ]
+    },
+    {
+      "id": "status_question-427bc19a7c",
+      "text": "update on pending leads?",
+      "expected": "status_question",
+      "predicted": "conversation",
+      "tags": [
+        "status",
+        "lower"
+      ]
+    },
+    {
+      "id": "opinion_question-f0fc589551",
+      "text": "What od you think about Giza?",
+      "expected": "opinion_question",
+      "predicted": "conversation",
+      "tags": [
+        "opinion",
+        "typo"
+      ]
+    },
+    {
+      "id": "opinion_question-6fc2338c0c",
+      "text": "How d oyou interpret Younger Dryas?",
+      "expected": "opinion_question",
+      "predicted": "conversation",
+      "tags": [
+        "opinion",
+        "typo"
+      ]
+    },
+    {
+      "id": "opinion_question-52294ddc01",
+      "text": "Reckon Thoughts on Puma Punku thanks",
+      "expected": "opinion_question",
+      "predicted": "conversation",
+      "tags": [
+        "opinion",
+        "aussie"
+      ]
+    },
+    {
+      "id": "opinion_question-24c40a2d32",
+      "text": "How d oyou feel about Dunn?",
+      "expected": "opinion_question",
+      "predicted": "conversation",
+      "tags": [
+        "opinion",
+        "typo"
+      ]
+    },
+    {
+      "id": "opinion_question-0d9b678c55",
+      "text": "Your htoughts on Gilgamesh flood?",
+      "expected": "opinion_question",
+      "predicted": "conversation",
+      "tags": [
+        "opinion",
+        "typo"
+      ]
+    },
+    {
+      "id": "opinion_question-26a21c76c0",
+      "text": "Do yo ureckon Osireion is real?",
+      "expected": "opinion_question",
+      "predicted": "conversation",
+      "tags": [
+        "opinion",
+        "typo"
+      ]
+    },
+    {
+      "id": "opinion_question-30f2089f0d",
+      "text": "What od you think about Abydos?",
+      "expected": "opinion_question",
+      "predicted": "conversation",
+      "tags": [
+        "opinion",
+        "typo"
+      ]
+    },
+    {
+      "id": "opinion_question-4f8a255ec8",
+      "text": "How d oyou interpret Petrie?",
+      "expected": "opinion_question",
+      "predicted": "conversation",
+      "tags": [
+        "opinion",
+        "typo"
+      ]
+    },
+    {
+      "id": "opinion_question-342038047a",
+      "text": "Mate, Thoughts on Dunn, yeah?",
+      "expected": "opinion_question",
+      "predicted": "conversation",
+      "tags": [
+        "opinion",
+        "aussie"
+      ]
+    },
+    {
+      "id": "opinion_question-f902be995f",
+      "text": "How d oyou feel about scablands?",
+      "expected": "opinion_question",
+      "predicted": "conversation",
+      "tags": [
+        "opinion",
+        "typo"
+      ]
+    },
+    {
+      "id": "opinion_question-408871e1e9",
+      "text": "Your htoughts on Hall of Records?",
+      "expected": "opinion_question",
+      "predicted": "conversation",
+      "tags": [
+        "opinion",
+        "typo"
+      ]
+    },
+    {
+      "id": "opinion_question-3719d65328",
+      "text": "Do yo ureckon Göbekli Tepe is real?",
+      "expected": "opinion_question",
+      "predicted": "conversation",
+      "tags": [
+        "opinion",
+        "typo"
+      ]
+    },
+    {
+      "id": "opinion_question-4e6d68624d",
+      "text": "What od you think about Atlantis?",
+      "expected": "opinion_question",
+      "predicted": "conversation",
+      "tags": [
+        "opinion",
+        "typo"
+      ]
+    },
+    {
+      "id": "opinion_question-a297fb4754",
+      "text": "How d oyou interpret Umm el-Qaab?",
+      "expected": "opinion_question",
+      "predicted": "conversation",
+      "tags": [
+        "opinion",
+        "typo"
+      ]
+    },
+    {
+      "id": "opinion_question-6b1e381931",
+      "text": "Hey mate — Thoughts on scablands cheers",
+      "expected": "opinion_question",
+      "predicted": "conversation",
+      "tags": [
+        "opinion",
+        "aussie"
+      ]
+    },
+    {
+      "id": "opinion_question-3cf5046361",
+      "text": "How d oyou feel about Sphinx water erosion?",
+      "expected": "opinion_question",
+      "predicted": "conversation",
+      "tags": [
+        "opinion",
+        "typo"
+      ]
+    },
+    {
+      "id": "opinion_question-120532a504",
+      "text": "Your htoughts on Orion correlation?",
+      "expected": "opinion_question",
+      "predicted": "conversation",
+      "tags": [
+        "opinion",
+        "typo"
+      ]
+    },
+    {
+      "id": "opinion_question-aba4bc90dd",
+      "text": "Do yo ureckon Puma Punku is real?",
+      "expected": "opinion_question",
+      "predicted": "conversation",
+      "tags": [
+        "opinion",
+        "typo"
+      ]
+    },
+    {
+      "id": "opinion_question-363a40edd4",
+      "text": "What od you think about Karahan Tepe?",
+      "expected": "opinion_question",
+      "predicted": "conversation",
+      "tags": [
+        "opinion",
+        "typo"
+      ]
+    },
+    {
+      "id": "opinion_question-418168f407",
+      "text": "How d oyou interpret Tiwanaku?",
+      "expected": "opinion_question",
+      "predicted": "conversation",
+      "tags": [
+        "opinion",
+        "typo"
+      ]
+    },
+    {
+      "id": "opinion_question-a5278d2614",
+      "text": "Mate, Thoughts on Sphinx water erosion, yeah?",
+      "expected": "opinion_question",
+      "predicted": "conversation",
+      "tags": [
+        "opinion",
+        "aussie"
+      ]
+    },
+    {
+      "id": "opinion_question-15c829f190",
+      "text": "How d oyou feel about Giza?",
+      "expected": "opinion_question",
+      "predicted": "conversation",
+      "tags": [
+        "opinion",
+        "typo"
+      ]
+    },
+    {
+      "id": "opinion_question-e7a1384133",
+      "text": "Your htoughts on Younger Dryas?",
+      "expected": "opinion_question",
+      "predicted": "conversation",
+      "tags": [
+        "opinion",
+        "typo"
+      ]
+    },
+    {
+      "id": "opinion_question-85ed36f06f",
+      "text": "Do yo ureckon Dunn is real?",
+      "expected": "opinion_question",
+      "predicted": "conversation",
+      "tags": [
+        "opinion",
+        "typo"
+      ]
+    },
+    {
+      "id": "opinion_question-3c174cb7ec",
+      "text": "What od you think about Gilgamesh flood?",
+      "expected": "opinion_question",
+      "predicted": "conversation",
+      "tags": [
+        "opinion",
+        "typo"
+      ]
+    },
+    {
+      "id": "opinion_question-b1d35c0ae6",
+      "text": "How d oyou interpret Osireion?",
+      "expected": "opinion_question",
+      "predicted": "conversation",
+      "tags": [
+        "opinion",
+        "typo"
+      ]
+    },
+    {
+      "id": "opinion_question-af2f76ba1a",
+      "text": "Mate, Thoughts on Giza, yeah?",
+      "expected": "opinion_question",
+      "predicted": "conversation",
+      "tags": [
+        "opinion",
+        "aussie"
+      ]
+    },
+    {
+      "id": "opinion_question-0e3b341e62",
+      "text": "How d oyou feel about Abydos?",
+      "expected": "opinion_question",
+      "predicted": "conversation",
+      "tags": [
+        "opinion",
+        "typo"
+      ]
+    },
+    {
+      "id": "opinion_question-bc4caf63d2",
+      "text": "Your htoughts on Petrie?",
+      "expected": "opinion_question",
+      "predicted": "conversation",
+      "tags": [
+        "opinion",
+        "typo"
+      ]
+    },
+    {
+      "id": "opinion_question-dde6263b88",
+      "text": "Do yo ureckon scablands is real?",
+      "expected": "opinion_question",
+      "predicted": "conversation",
+      "tags": [
+        "opinion",
+        "typo"
+      ]
+    },
+    {
+      "id": "opinion_question-4e9eec8671",
+      "text": "What od you think about Hall of Records?",
+      "expected": "opinion_question",
+      "predicted": "conversation",
+      "tags": [
+        "opinion",
+        "typo"
+      ]
+    },
+    {
+      "id": "opinion_question-4afbda9701",
+      "text": "How d oyou interpret Göbekli Tepe?",
+      "expected": "opinion_question",
+      "predicted": "conversation",
+      "tags": [
+        "opinion",
+        "typo"
+      ]
+    },
+    {
+      "id": "opinion_question-fc00dfebf9",
+      "text": "Reckon Thoughts on Abydos thanks",
+      "expected": "opinion_question",
+      "predicted": "conversation",
+      "tags": [
+        "opinion",
+        "aussie"
+      ]
+    }
+  ]
+}

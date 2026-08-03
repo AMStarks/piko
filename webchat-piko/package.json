@@ -1,23 +1,49 @@
 {
   "name": "webchat-piko",
   "version": "1.0.0",
-  "description": "Piko WebChat — Llama 3.1 8B via Ollama",
+  "description": "Piko WebChat \u2014 Llama 3.1 8B via Ollama",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
-    "test": "node --test tests/planner.test.js tests/memory.test.js tests/beliefLoop.test.js"
+    "test": "TZ=UTC node --test --test-force-exit tests/*.test.js",
+    "lint:routing": "node scripts/check-no-routing-regex.js",
+    "lint:regex": "node scripts/check-no-regex.js",
+    "test:routing": "npm run lint:routing && TZ=UTC node --test tests/inventoryStockOnHand.test.js tests/businessDataGuard.test.js",
+    "understand:battery": "node scripts/generate-understand-battery.js",
+    "understand:eval": "node scripts/understand-eval.js",
+    "understand:eval:offline": "PIKO_UNDERSTAND_EVAL_OFFLINE=1 node scripts/understand-eval.js",
+    "phase1:smoke": "node scripts/proactive-phase1-smoke.js",
+    "phase2:smoke": "node scripts/proactive-phase2-smoke.js",
+    "phase3:smoke": "node scripts/proactive-phase3-connectors-smoke.js",
+    "phaseD:smoke": "node scripts/proactive-phaseD-link-reliability-smoke.js",
+    "phaseG:smoke": "node scripts/proactive-phaseG-cutover-smoke.js",
+    "phaseG:evidence": "node scripts/proactive-phaseG-canary-evidence.js",
+    "phase5:smoke": "node scripts/modelops/phase5-smoke.js",
+    "proactive:replay-open": "node scripts/proactive-replay-open-deadletters.js",
+    "proactive:policy:safe": "node scripts/proactive-policy-apply.js safe",
+    "proactive:policy:smoke": "node scripts/proactive-policy-apply.js smoke",
+    "proactive:post-smoke-cleanup": "node scripts/proactive-post-smoke-cleanup.js"
   },
   "engines": {
     "node": ">=16"
   },
   "dependencies": {
+    "@lancedb/lancedb": "^0.26.2",
+    "@mozilla/readability": "^0.6.0",
     "@notionhq/client": "^2.2.15",
+    "@xenova/transformers": "^2.17.2",
     "better-sqlite3": "^12.6.2",
+    "cron-parser": "^5.5.0",
     "dotenv": "^16.0.0",
+    "groq-sdk": "^1.1.1",
+    "jsdom": "^28.1.0",
     "litellm": "^0.12.0",
     "node-cron": "^3.0.3",
+    "nodemailer": "^8.0.2",
     "pdf-parse": "^1.1.1",
-    "pino": "^10.3.1"
+    "pino": "^10.3.1",
+    "playwright": "^1.58.2",
+    "turndown": "^7.2.2"
   }
 }
