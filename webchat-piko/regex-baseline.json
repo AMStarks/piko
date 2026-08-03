@@ -1,6 +1,6 @@
 {
-  "updated_at": "2026-08-03T08:54:34.430Z",
-  "total": 854,
+  "updated_at": "2026-08-03T08:55:25.699Z",
+  "total": 849,
   "files": {
     "lib/actionRouter.js": 0,
     "lib/activityLog.js": 0,
@@ -11,7 +11,7 @@
     "lib/agentAdapterRuntime.js": 1,
     "lib/agentBrain.js": 1,
     "lib/agentBriefWizard.js": 8,
-    "lib/agentChatCommands.js": 5,
+    "lib/agentChatCommands.js": 0,
     "lib/agentJobs.js": 0,
     "lib/agentMissionPlanner.js": 8,
     "lib/agentMissions.js": 0,
