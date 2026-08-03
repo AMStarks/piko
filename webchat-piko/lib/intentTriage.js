@@ -165,7 +165,9 @@ async function triageIntent(userMessage, opts = {}) {
     format: 'json',
     temperature: 0,
     max_tokens: 80,
-    num_ctx: Number(process.env.PIKO_TRIAGE_NUM_CTX || 2048),
+    // Aligned to the chat-lane default (8192) — mismatched num_ctx forces a
+    // full 8B reload per switch on Ollama 0.23.
+    num_ctx: Number(process.env.PIKO_TRIAGE_NUM_CTX || 8192),
     timeoutMs: Math.max(2000, Number(process.env.PIKO_TRIAGE_TIMEOUT_MS || 12000)),
   });
   return parseTriageResponse(raw);

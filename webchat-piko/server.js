@@ -7311,7 +7311,7 @@ You: For sure — what do you feel like talking about?`);
     if (streamReply) {
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' });
       const streamOptions = plan.casual
-        ? { max_tokens: casualMaxTokens, temperature: casualTemp, repeat_penalty: 1.25, presence_penalty: 0.2, frequency_penalty: 0.15, num_ctx: Number(process.env.PIKO_CASUAL_NUM_CTX) || 512 }
+        ? { max_tokens: casualMaxTokens, temperature: casualTemp, repeat_penalty: 1.25, presence_penalty: 0.2, frequency_penalty: 0.15, num_ctx: Number(process.env.PIKO_CASUAL_NUM_CTX) || 8192 }
         : (plan.socialChat ? socialChatOptions : (plan.deepReasoning ? deepOptions : {}));
       if (plan.deepReasoning) {
         const placeholder = DEEP_PLACEHOLDERS[Math.floor(Math.random() * DEEP_PLACEHOLDERS.length)];
@@ -7383,7 +7383,7 @@ You: For sure — what do you feel like talking about?`);
       return;
     }
     const chatOptions = plan.casual
-      ? { max_tokens: casualMaxTokens, temperature: casualTemp, repeat_penalty: 1.25, presence_penalty: 0.2, frequency_penalty: 0.15, num_ctx: Number(process.env.PIKO_CASUAL_NUM_CTX) || 512 }
+      ? { max_tokens: casualMaxTokens, temperature: casualTemp, repeat_penalty: 1.25, presence_penalty: 0.2, frequency_penalty: 0.15, num_ctx: Number(process.env.PIKO_CASUAL_NUM_CTX) || 8192 }
       : (plan.socialChat ? socialChatOptions : (plan.deepReasoning ? deepOptions : {}));
     const modelForRequest = plan.deepReasoning
       ? (process.env.PIKO_HEAVY_MODEL || process.env.PIKO_LEGION_MODEL || sessionModel)

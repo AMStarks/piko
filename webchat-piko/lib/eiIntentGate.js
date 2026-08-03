@@ -64,7 +64,9 @@ async function classifyEiFrontDoor(message, opts = {}) {
       format: 'json',
       temperature: 0,
       max_tokens: 80,
-      num_ctx: 1024,
+      // Must match the chat-lane default (8192): any num_ctx change forces a
+      // full model reload on Ollama 0.23, stalling the whole lane ~6-8s.
+      num_ctx: Number(process.env.PIKO_EI_FRONT_DOOR_NUM_CTX || 8192),
       timeoutMs: Math.max(1500, Number(process.env.PIKO_EI_FRONT_DOOR_TIMEOUT_MS || 8000)),
     });
     const parsed = extractJsonObject(raw) || {};

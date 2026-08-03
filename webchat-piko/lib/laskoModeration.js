@@ -123,7 +123,9 @@ async function evaluateWithOllama(text, charter) {
     5000,
     Number(process.env.LASKO_MODERATION_TIMEOUT_MS || process.env.PIKO_OLLAMA_TIMEOUT_MS || 25000)
   );
-  const numCtx = Math.max(1024, Number(process.env.LASKO_MODERATION_NUM_CTX || 2048));
+  // Aligned to the chat-lane default (8192) — mismatched num_ctx forces a
+  // full 8B reload per switch on Ollama 0.23.
+  const numCtx = Math.max(1024, Number(process.env.LASKO_MODERATION_NUM_CTX || 8192));
   const maxTokens = Math.max(48, Number(process.env.LASKO_MODERATION_MAX_TOKENS || 96));
 
   const messages = [
