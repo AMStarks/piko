@@ -8,6 +8,7 @@
 const path = require('path');
 const fs = require('fs');
 const https = require('https');
+const { splitLines } = require('../lib/text');
 
 const DATA_DIR = process.env.PIKO_DATA_DIR || path.join(__dirname, '..', 'data');
 const LEARNING_DIR = path.join(DATA_DIR, 'learning');
@@ -50,7 +51,7 @@ function telegramSend(chatId, text) {
 function readTensions() {
   if (!fs.existsSync(TENSIONS_FILE)) return { items: [], mtime: null };
   const raw = fs.readFileSync(TENSIONS_FILE, 'utf8');
-  const lines = raw.split(/\n/).map((l) => l.trim()).filter(Boolean);
+  const lines = splitLines(raw).map((l) => l.trim()).filter(Boolean);
   const items = [];
   for (const line of lines) {
     if (line.startsWith('- ') && !line.startsWith('#') && !line.toLowerCase().startsWith('- max ')) {

@@ -22,6 +22,7 @@ const INQUIRY_HISTORY_FILE = path.join(LEARNING_DIR, 'inquiry-history.txt');
 const LOGS_DIR = path.join(ROOT, 'logs');
 const INQUIRY_HISTORY_LINES = 20;
 const { ai } = require('../lib/llm');
+const { splitLines, splitMarkdownH2, stripListPrefixLoose, stripWrappingQuotesLoose } = require('../lib/text');
 const MAX_QUESTION_LEN = 400;
 
 function httpRequest(opts, body) {
@@ -43,7 +44,7 @@ function readRecentNotes() {
   try {
     if (!fs.existsSync(RABBIT_HOLE_NOTES)) return '(No rabbit-hole notes yet.)';
     const raw = fs.readFileSync(RABBIT_HOLE_NOTES, 'utf8');
-    const blocks = raw.split(/\n## /).filter(Boolean);
+    const blocks = splitMarkdownH2(raw).filter(Boolean);
     const last = blocks.slice(-5);
     return last.join('\n## ').trim().slice(-3000) || '(No recent notes.)';
   } catch (_) {
@@ -55,8 +56,8 @@ function readStickyIdeas() {
   try {
     if (!fs.existsSync(STICKY_IDEAS_FILE)) return '(No sticky ideas yet.)';
     const raw = fs.readFileSync(STICKY_IDEAS_FILE, 'utf8');
-    const lines = raw.split(/\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
-    const ideas = lines.map((l) => l.replace(/^[-*•]\s*\d+[.)]\s*/, '').replace(/^\d+[.)]\s*/, '').trim()).filter((l) => l.length >= 5).slice(-5);
+    const lines = splitLines(raw).map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
+    const ideas = lines.map((l) => stripListPrefixLoose(l)).filter((l) => l.length >= 5).slice(-5);
     return ideas.length ? ideas.join(' ') : '(None.)';
   } catch (_) {
     return '(None.)';
@@ -68,7 +69,7 @@ function readInquiryHistory() {
   try {
     if (!fs.existsSync(INQUIRY_HISTORY_FILE)) return '';
     const raw = fs.readFileSync(INQUIRY_HISTORY_FILE, 'utf8');
-    const lines = raw.split(/\r?\n/).filter((l) => l.includes(' asked=true'));
+    const lines = splitLines(raw).filter((l) => l.includes(' asked=true'));
     const recent = lines.slice(-INQUIRY_HISTORY_LINES);
     const questions = recent.map((l) => {
       const idx = l.indexOf(': ');
@@ -117,7 +118,7 @@ ${recentAsked ? `\n--- Recently asked (do not repeat these) ---\n${recentAsked}\
 
   let question = '';
   try {
-    question = (await ai(prompt)).trim().replace(/^["']|["']$/g, '').slice(0, MAX_QUESTION_LEN);
+    question = stripWrappingQuotesLoose(await ai(prompt)).slice(0, MAX_QUESTION_LEN);
   } catch (e) {
     console.error('[learning-inquiry] Ollama error:', e.message);
     process.exitCode = 1;

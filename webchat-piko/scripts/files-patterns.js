@@ -8,6 +8,12 @@
 const path = require('path');
 const fs = require('fs');
 const https = require('https');
+const {
+  splitMarkdownDateSections,
+  parseMarkdownDateH2,
+  countOccurrencesIgnoreCase,
+  toLowerAsciiish,
+} = require('../lib/text');
 
 const ROOT = path.resolve(__dirname, '..');
 const DATA_DIR = process.env.PIKO_DATA_DIR || path.join(ROOT, 'data');
@@ -38,15 +44,52 @@ function telegramSend(chatId, text) {
 function getSectionsThisWeek(raw) {
   const now = new Date();
   const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-  const sections = raw.split(/\n(?=##\s+\d{4}-\d{2}-\d{2})/);
+  const sections = splitMarkdownDateSections(raw);
   const out = [];
   for (const block of sections) {
-    const dateMatch = block.match(/^##\s+(\d{4}-\d{2}-\d{2})/);
-    if (!dateMatch) continue;
-    const d = new Date(dateMatch[1]);
+    const dateStr = parseMarkdownDateH2(block);
+    if (!dateStr) continue;
+    const d = new Date(dateStr);
     if (d >= weekAgo && d <= now) out.push(block);
   }
   return out.join('\n');
+}
+
+function countAgentThemeMentions(text) {
+  const low = toLowerAsciiish(text);
+  let n = 0;
+  // Approximate prior /\bagent\b|coordination|distributed\b/gi global match count
+  let from = 0;
+  while (from < low.length) {
+    const a = low.indexOf('agent', from);
+    const c = low.indexOf('coordination', from);
+    const d = low.indexOf('distributed', from);
+    let next = -1;
+    let kind = '';
+    if (a >= 0 && (next < 0 || a < next)) { next = a; kind = 'agent'; }
+    if (c >= 0 && (next < 0 || c < next)) { next = c; kind = 'coordination'; }
+    if (d >= 0 && (next < 0 || d < next)) { next = d; kind = 'distributed'; }
+    if (next < 0) break;
+    if (kind === 'agent') {
+      const before = next === 0 ? ' ' : low[next - 1];
+      const after = next + 5 >= low.length ? ' ' : low[next + 5];
+      const beforeOk = !(before >= 'a' && before <= 'z') && !(before >= '0' && before <= '9');
+      const afterOk = !(after >= 'a' && after <= 'z') && !(after >= '0' && after <= '9');
+      if (beforeOk && afterOk) n += 1;
+      from = next + 5;
+    } else if (kind === 'coordination') {
+      n += 1;
+      from = next + 'coordination'.length;
+    } else {
+      const before = next === 0 ? ' ' : low[next - 1];
+      const after = next + 'distributed'.length >= low.length ? ' ' : low[next + 'distributed'.length];
+      const beforeOk = !(before >= 'a' && before <= 'z') && !(before >= '0' && before <= '9');
+      const afterOk = !(after >= 'a' && after <= 'z') && !(after >= '0' && after <= '9');
+      if (beforeOk && afterOk) n += 1;
+      from = next + 'distributed'.length;
+    }
+  }
+  return n;
 }
 
 function main() {
@@ -61,8 +104,8 @@ function main() {
   }
   const raw = fs.readFileSync(NOTES_CAPTURE, 'utf8');
   const thisWeek = getSectionsThisWeek(raw);
-  const pdfCount = (thisWeek.match(/\.pdf/gi) || []).length;
-  const agentMentions = (thisWeek.match(/\bagent\b|coordination|distributed\b/gi) || []).length;
+  const pdfCount = countOccurrencesIgnoreCase(thisWeek, '.pdf');
+  const agentMentions = countAgentThemeMentions(thisWeek);
 
   const promises = [];
 

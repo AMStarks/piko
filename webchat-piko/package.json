@@ -6,9 +6,9 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
-    "test": "TZ=UTC node --test --test-force-exit tests/*.test.js",
+    "test": "npm run lint:routing && npm run lint:regex && TZ=UTC node --test --test-force-exit tests/*.test.js",
     "lint:routing": "node scripts/check-no-routing-regex.js",
-    "lint:regex": "node scripts/check-no-regex.js",
+    "lint:regex": "node scripts/check-no-regex.js --zero",
     "test:routing": "npm run lint:routing && TZ=UTC node --test tests/inventoryStockOnHand.test.js tests/businessDataGuard.test.js",
     "understand:battery": "node scripts/generate-understand-battery.js",
     "understand:eval": "node scripts/understand-eval.js",

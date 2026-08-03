@@ -99,13 +99,23 @@ function getMetrics() {
   const truthStats = getTruthStats();
   const cache = getWisdomCache();
   const existingIds = new Set();
+  
+function isWisdomId(id) {
+  const s = String(id || '');
+  if (s.length < 2) return false;
+  if (s[0] !== 'w' && s[0] !== 'W') return false;
+  for (let i = 1; i < s.length; i++) {
+    if (s[i] < '0' || s[i] > '9') return false;
+  }
+  return true;
+}
   const normalize = (w, i) => {
     const text = (w.text || w || '').trim();
     if (!text) return null;
     const created = w.created_at || w.distilled || new Date().toISOString();
     const distilled = (w.distilled || created).toString().slice(0, 10);
     let id = w.id;
-    if (!id || !/^w\d+$/i.test(id)) {
+    if (!id || !isWisdomId(id)) {
       let n = i + 1;
       while (existingIds.has(`w${String(n).padStart(3, '0')}`)) n++;
       id = `w${String(n).padStart(3, '0')}`;

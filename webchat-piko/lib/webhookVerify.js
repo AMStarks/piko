@@ -16,7 +16,17 @@ function verifyHmac(rawBody, signatureHeader, secret, algorithm = 'sha256') {
   if (!secret || !signatureHeader) return false;
   const body = typeof rawBody === 'string' ? rawBody : (rawBody && rawBody.toString ? rawBody.toString() : '');
   const expected = crypto.createHmac(algorithm, secret).update(body).digest('hex');
-  const provided = (signatureHeader || '').replace(/^[\w]+=/, '').trim();
+  let provided = String(signatureHeader || '').trim();
+  const eq = provided.indexOf('=');
+  if (eq > 0) {
+    const prefix = provided.slice(0, eq);
+    let ok = true;
+    for (const ch of prefix) {
+      const isWord = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch === '_';
+      if (!isWord) { ok = false; break; }
+    }
+    if (ok) provided = provided.slice(eq + 1).trim();
+  }
   try {
     const a = Buffer.from(expected, 'hex');
     const b = Buffer.from(provided, 'hex');

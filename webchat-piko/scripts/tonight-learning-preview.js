@@ -17,6 +17,7 @@ const TOPICS_FILE = path.join(DATA_LEARNING, 'topics.txt');
 const SUGGESTED_TOPICS_FILE = path.join(DATA_LEARNING, 'suggested-topics.txt');
 const JOURNAL_FILE = path.join(ROOT, 'data', 'moltbook-journal.md');
 const { ai } = require('../lib/llm');
+const { splitLines, stripWrappingQuotesLoose } = require('../lib/text');
 
 function dayOfYear() {
   const now = new Date();
@@ -28,7 +29,7 @@ function peekSuggestedTopic() {
   try {
     if (!fs.existsSync(SUGGESTED_TOPICS_FILE)) return null;
     const raw = fs.readFileSync(SUGGESTED_TOPICS_FILE, 'utf8');
-    const lines = raw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    const lines = splitLines(raw).map((l) => l.trim()).filter(Boolean);
     return lines.length > 0 ? lines[0] : null;
   } catch (_) {
     return null;
@@ -38,7 +39,7 @@ function peekSuggestedTopic() {
 function readTopics() {
   try {
     const raw = fs.readFileSync(TOPICS_FILE, 'utf8');
-    return raw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    return splitLines(raw).map((l) => l.trim()).filter(Boolean);
   } catch (_) {
     return [];
   }
@@ -58,7 +59,7 @@ async function pickTopicFromJournal(topics) {
 
 ${excerpt}`;
     const reply = await ai(prompt);
-    const topic = (reply || '').trim().replace(/^["']|["']$/g, '').slice(0, 60);
+    const topic = stripWrappingQuotesLoose(reply || '').slice(0, 60);
     return topic && topic.length >= 2 ? topic : null;
   } catch (_) {
     return null;

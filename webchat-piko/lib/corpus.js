@@ -51,13 +51,29 @@ function loadCorpus() {
  * Uses cached summary from index if present (Option C); otherwise uses core_truths + short doc snippets.
  * No AI call.
  */
+
+function replaceInjectedMarkers(text, name) {
+  const marker = '[INJECTED';
+  let s = String(text || '');
+  let out = '';
+  let i = 0;
+  while (i < s.length) {
+    const idx = s.indexOf(marker, i);
+    if (idx < 0) { out += s.slice(i); break; }
+    out += s.slice(i, idx) + name;
+    let j = idx + marker.length;
+    while (j < s.length && s[j] !== ']') j++;
+    i = j < s.length ? j + 1 : s.length;
+  }
+  return out.split('primary human').join(name);
+}
 function getCorpusBlockForPrompt(primaryHuman = '') {
   const { index, docs } = loadCorpus();
   const truths = index.core_truths || [];
   const name = (primaryHuman || 'the primary human').trim() || 'the primary human';
 
   if (index.summary && index.last_summarized) {
-    const summaryWithName = index.summary.replace(/\[INJECTED[^\]]*\]/g, name).replace(/primary human/g, name);
+    const summaryWithName = replaceInjectedMarkers(index.summary, name);
     return (
       `**Fixed corpus (bedrock — inalienable truth)**\n${summaryWithName}\n\n` +
       `**Honesty protocol:** Never say "From corpus" or cite the corpus—reply in your own voice. When the user corrects you, acknowledge with "You corrected me…" or similar. Prefer "I'm not sure" or "You told me X" when that's the case.\n\n`
@@ -68,7 +84,7 @@ function getCorpusBlockForPrompt(primaryHuman = '') {
   const snippet = [];
   for (const docName of DOCS) {
     let content = docs[docName] || '';
-    content = content.replace(/\[INJECTED[^\]]*\]/g, name);
+    content = replaceInjectedMarkers(content, name);
     if (content.length > MAX_SNIPPET_CHARS) content = content.slice(0, MAX_SNIPPET_CHARS) + '…';
     if (content.trim()) snippet.push(content);
   }

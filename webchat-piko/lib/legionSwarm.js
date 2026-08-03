@@ -42,7 +42,11 @@ Output ONLY the raw Python code.`,
 
 const SWARM_MODEL = process.env.PIKO_ROUTER_MODEL || process.env.OLLAMA_MODEL || 'piko:finetune';
 
-async function deploySubAgent(role, taskContext) {
+const {
+  stripCodeFences,
+} = require('./text');
+
+async function deploySubAgentRaw(role, taskContext) {
   console.log(`[LEGION SWARM] Deploying ${role.toUpperCase()} agent...`);
   const persona = AGENT_PERSONAS[role];
 
@@ -75,14 +79,16 @@ NO sales_history table. NO CSV files. Use the SQLite path above.
       console.log(`[REFLECTION] Quant Agent attempt ${attempts}/${maxAttempts}...`);
 
       const prompt = `${persona}\n\nTask: ${currentContext}`;
+      const quantLlmTimeoutMs = (() => {
+        const n = parseInt(process.env.PIKO_QUANT_LLM_TIMEOUT_MS || '', 10);
+        return Number.isFinite(n) && n > 0 ? n : 300000; // 5 min — full-catalog code gen is slow
+      })();
       const code = await ollamaNativeChat(SWARM_MODEL, [{ role: 'user', content: prompt }], {
         max_tokens: 2800,
         temperature: 0.1,
+        timeoutMs: quantLlmTimeoutMs,
       });
-      const rawCode = (code && typeof code === 'string' ? code : String(code || ''))
-        .replace(/^```\w*\n?/, '')
-        .replace(/\n?```$/, '')
-        .trim();
+      const rawCode = stripCodeFences(code && typeof code === 'string' ? code : String(code || ''));
 
       if (!rawCode || rawCode.length < 10) {
         lastError = 'Quant Agent failed to generate valid Python code.';
@@ -125,4 +131,22 @@ NO sales_history table. NO CSV files. Use the SQLite path above.
   return `Error: Unhandled role '${role}'.`;
 }
 
-module.exports = { deploySubAgent };
+/**
+ * Public entry — on EI (PIKO_AGENT_ORCH=1) goes through registry + Piko review.
+ * AusMaker / default: unchanged raw swarm path.
+ */
+async function deploySubAgent(role, taskContext) {
+  try {
+    const { isAgentOrchEnabled, deploySubAgentViaOrch } = require('./agentOrchestrator');
+    if (isAgentOrchEnabled()) {
+      return deploySubAgentViaOrch(role, taskContext);
+    }
+  } catch (e) {
+    if (process.env.PIKO_LOG_PLANNER === '1') {
+      console.warn('[legionSwarm] orch bypass:', e.message);
+    }
+  }
+  return deploySubAgentRaw(role, taskContext);
+}
+
+module.exports = { deploySubAgent, deploySubAgentRaw, AGENT_PERSONAS };

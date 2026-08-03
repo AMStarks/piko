@@ -9,6 +9,11 @@ const { ai } = require('./llm');
 const MIND_DIR = process.env.PIKO_MIND_DIR || path.join(__dirname, '..', 'data', 'mind');
 const PRIMARY_HUMAN = process.env.PIKO_PRIMARY_HUMAN || process.env.PIKO_PRIMARY_USER || '';
 
+const {
+  stripCodeFences,
+  extractBalancedJsonObject,
+} = require('./text');
+
 function mindPath(file) {
   return path.join(MIND_DIR, file);
 }
@@ -63,11 +68,10 @@ function nextId(items, prefix) {
 /** Extract JSON from LLM reply (handles optional markdown code block). */
 function parseUpdateReply(reply) {
   if (!reply || typeof reply !== 'string') return null;
-  let raw = reply.trim();
-  const codeMatch = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (codeMatch) raw = codeMatch[1].trim();
+  const raw = stripCodeFences(reply);
+  const obj = extractBalancedJsonObject(raw);
   try {
-    return JSON.parse(raw);
+    return JSON.parse(obj || raw);
   } catch (_) {
     return null;
   }

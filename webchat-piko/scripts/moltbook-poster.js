@@ -7,7 +7,7 @@
  * 4. Generate post; POST to Moltbook; save new post to state.
  * Env: MOLTBOOK_API_KEY (required), OLLAMA_URL, OLLAMA_MODEL, PIKO_MOLTBOOK_AIM_PATH,
  *      PIKO_MOLTBOOK_MIN_INTERVAL_MINUTES (default 30, or 6 when POSTS_PER_30MIN>1),
- *      PIKO_MOLTBOOK_POSTS_PER_30MIN (default 1; set 5 for 5 posts per half hour, one every ~6 min). Run cron every 6 min: */6 * * * *
+ *      PIKO_MOLTBOOK_POSTS_PER_30MIN (default 1; set 5 for 5 posts per half hour, one every ~6 min). Example cron: every 6 minutes.
  */
 const fs = require('fs');
 const path = require('path');
@@ -36,6 +36,19 @@ const MIN_INTERVAL_MINUTES = Number(process.env.PIKO_MOLTBOOK_MIN_INTERVAL_MINUT
 const MIN_INTERVAL_MS = MIN_INTERVAL_MINUTES * 60 * 1000;
 const WINDOW_MS = 30 * 60 * 1000;
 const { ai } = require('../lib/llm');
+const {
+  splitLines,
+  splitMarkdownH2Loose,
+  splitMarkdownH2,
+  parseKeyColonInt,
+  textAfterPrefixOnFirstLine,
+  extractQuotedSpans,
+  extractBalancedJsonObject,
+  startsWithYyyyMmDd,
+  stripMarkdownEmphasis,
+  startsWithIgnoreCase,
+  isWhitespace,
+} = require('../lib/text');
 const MAX_POSTS_IN_STATE = 50;
 const JOURNAL_ENTRIES_READ = 5;
 const NEW_POSTS_LIMIT = 25;
@@ -67,7 +80,7 @@ function getFullAim() {
 function getAimSummaryForMemory() {
   try {
     const raw = fs.readFileSync(AIM_PATH, 'utf8');
-    const lines = raw.split(/\r?\n/).map((l) => l.trim());
+    const lines = splitLines(raw).map((l) => l.trim());
     const marker = '## Aim (content sent to the poster)';
     const markerIdx = lines.findIndex((l) => l === marker || l.includes('Aim (content sent to the poster)'));
     if (markerIdx >= 0) {
@@ -75,7 +88,7 @@ function getAimSummaryForMemory() {
       const firstLine = after.find((l) => l && !l.startsWith('#') && !l.startsWith('-') && !l.startsWith('*'));
       if (firstLine) return firstLine.slice(0, 120);
     }
-    const imLine = lines.find((l) => /^I'm\s/.test(l) || /^I am\s/i.test(l));
+    const imLine = lines.find((l) => startsWithIgnoreCase(l, "I'm ") || startsWithIgnoreCase(l, 'I am '));
     if (imLine) return imLine.slice(0, 120);
   } catch (_) {}
   return '';
@@ -87,12 +100,12 @@ function readPostConfig() {
   let bodyMax = 400;
   try {
     const raw = fs.readFileSync(POST_CONFIG_PATH, 'utf8');
-    raw.split(/\r?\n/).forEach((line) => {
-      const m = line.match(/^\s*title_max_chars\s*:\s*(\d+)\s*$/);
-      if (m) titleMax = Math.min(Math.max(1, parseInt(m[1], 10)), 200);
-      const m2 = line.match(/^\s*body_max_chars\s*:\s*(\d+)\s*$/);
-      if (m2) bodyMax = Math.min(Math.max(1, parseInt(m2[1], 10)), 2000);
-    });
+    for (const line of splitLines(raw)) {
+      const t = parseKeyColonInt(line, 'title_max_chars');
+      if (t != null) titleMax = Math.min(Math.max(1, t), 200);
+      const b = parseKeyColonInt(line, 'body_max_chars');
+      if (b != null) bodyMax = Math.min(Math.max(1, b), 2000);
+    }
   } catch (_) {}
   return { titleMax, bodyMax };
 }
@@ -387,7 +400,7 @@ function signalGuard(state, prevState, justPosted) {
 function readLastJournalEntries(n) {
   try {
     const raw = fs.readFileSync(JOURNAL_FILE, 'utf8');
-    const blocks = raw.split(/\n##\s+/);
+    const blocks = splitMarkdownH2Loose(raw);
     const entries = [];
     for (let i = blocks.length - 1; i >= 0 && entries.length < n; i--) {
       const block = blocks[i].trim();
@@ -407,12 +420,12 @@ function readLastJournalEntries(n) {
 function getLastJournalTryNext() {
   try {
     const raw = fs.readFileSync(JOURNAL_FILE, 'utf8');
-    const blocks = raw.split(/\n##\s+/);
+    const blocks = splitMarkdownH2Loose(raw);
     for (let i = blocks.length - 1; i >= 0; i--) {
       const block = blocks[i].trim();
       if (!block || block.startsWith('# Piko')) continue;
-      const m = block.match(/What I'll try next:\s*(.+?)(?=\n|$)/s);
-      if (m && m[1]) return m[1].trim().slice(0, 200);
+      const next = textAfterPrefixOnFirstLine(block, "What I'll try next:");
+      if (next) return next.slice(0, 200);
     }
   } catch (_) {}
   return '';
@@ -422,9 +435,7 @@ function getLastJournalTryNext() {
 function extractForbiddenWordsFromFailure(notes) {
   if (!notes || typeof notes !== 'string') return [];
   const out = new Set();
-  // Quoted phrases (e.g. "agents", "autonomy" or 'buzzwords')
-  const quoted = notes.match(/["']([^"']{2,20})["']/g);
-  if (quoted) for (const q of quoted) out.add(q.replace(/^["']|["']$/g, '').trim().toLowerCase());
+  for (const q of extractQuotedSpans(notes, 2, 20)) out.add(q.trim().toLowerCase());
   // Known title-style words that often appear in failure notes (buzzwords, repetition)
   const known = ['beneath', 'beyond', 'fracturing', 'abyss', 'surface', 'code', 'reality', 'agents', 'autonomy', 'synthetic', 'hierarchy', 'calculus', 'efficiency', 'echoes', 'obedience', 'dominion', 'veil', 'horizon'];
   const lower = notes.toLowerCase();
@@ -461,16 +472,13 @@ async function runCritiqueStep(state, memory) {
 async function runSelfEvalStep(plannedForNext, title, content) {
   if (!plannedForNext || !plannedForNext.trim()) return { followedPlan: null, notes: '' };
   const bodySnippet = (content || '').trim().slice(0, 120);
-  const prompt = `You are Piko. You intended to do this in your last post: "${plannedForNext.trim().slice(0, 100)}". Your post title was: "${(title || '').trim().slice(0, 80)}". Your post body started with: "${bodySnippet}". Did you actually follow your intention? Answer with exactly two lines. Line 1: Yes or No. Line 2: One short sentence explaining why.`;
+  const prompt = `You are Piko. You intended to do this in your last post: "${plannedForNext.trim().slice(0, 100)}". Your post title was: "${(title || '').trim().slice(0, 80)}". Your post body started with: "${bodySnippet}". Did you actually follow your intention? Reply with ONLY valid JSON: {"followedPlan": true, "explanation": "..."} or {"followedPlan": false, "explanation": "..."}. No other text.`;
   try {
-    const reply = (await ai(prompt)).trim();
-    const lines = (reply || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-    const first = (lines[0] || '').toLowerCase();
-    let followedPlan = first.startsWith('yes') ? true : first.startsWith('no') ? false : null;
-    const notes = (lines[1] || lines[0] || '').slice(0, 150);
-    // If explanation contradicts Yes (e.g. "Yes" but "I didn't actually do X"), trust the explanation
-    const negativeMarkers = /\b(didn't|did not|failed to|instead|without|not actually|still used|rather than|stuck to|relied on)\b/i;
-    if (followedPlan === true && notes && negativeMarkers.test(notes)) followedPlan = false;
+    const reply = (await ai(prompt, { format: 'json', max_tokens: 80 })).trim();
+    const jsonSlice = extractBalancedJsonObject(reply);
+    const parsed = jsonSlice ? JSON.parse(jsonSlice) : {};
+    const followedPlan = parsed.followedPlan === true ? true : parsed.followedPlan === false ? false : null;
+    const notes = (parsed.explanation || '').slice(0, 150);
     return { followedPlan, notes };
   } catch (_) {
     return { followedPlan: null, notes: '' };
@@ -502,13 +510,18 @@ function getRecentExplorationLine() {
   try {
     if (!fs.existsSync(RABBIT_HOLE_NOTES_FILE)) return '';
     const raw = fs.readFileSync(RABBIT_HOLE_NOTES_FILE, 'utf8');
-    const blocks = raw.split(/\n## /).filter(Boolean);
+    const blocks = splitMarkdownH2(raw).filter(Boolean);
     const last = blocks.slice(-3);
     const topics = [];
     for (const b of last) {
-      const firstLine = b.split('\n')[0].trim();
-      const m = firstLine.match(/^\d{4}-\d{2}-\d{2}:\s*(.+)$/);
-      if (m && m[1]) topics.push(m[1].trim().slice(0, 40));
+      const firstLine = splitLines(b)[0].trim();
+      if (!startsWithYyyyMmDd(firstLine)) continue;
+      let i = 10;
+      if (firstLine[i] !== ':') continue;
+      i += 1;
+      while (i < firstLine.length && isWhitespace(firstLine[i])) i += 1;
+      const topic = firstLine.slice(i).trim();
+      if (topic) topics.push(topic.slice(0, 40));
     }
     if (topics.length === 0) return '';
     const unique = [...new Set(topics)].slice(-2);
@@ -618,14 +631,7 @@ const FALLBACK_CONTENT = 'Hello from Piko.';
 /** Strip Markdown bold/emphasis so we send plain text to Moltbook (API shows titles as plain; ** would show literally). */
 function stripMarkdownFromText(str) {
   if (typeof str !== 'string') return '';
-  return str
-    .replace(/\*\*(.+?)\*\*/g, '$1')
-    .replace(/__(.+?)__/g, '$1')
-    .replace(/\*(.+?)\*/g, '$1')
-    .replace(/_(.+?)_/g, '$1')
-    .replace(/\*\*/g, '')
-    .replace(/__/g, '')
-    .trim();
+  return stripMarkdownEmphasis(str);
 }
 
 /** Remove one leading and one trailing double quote if the whole string is wrapped (not an actual quote inside). */
@@ -638,7 +644,7 @@ function stripWrappingQuotes(str) {
 
 function parseOllamaPost(reply) {
   const config = readPostConfig();
-  const lines = reply.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const lines = splitLines(reply).map((l) => l.trim()).filter(Boolean);
   let title = (lines[0] || FALLBACK_TITLE).slice(0, config.titleMax);
   let content = (lines.slice(1).join(' ') || lines[0] || FALLBACK_CONTENT).slice(0, config.bodyMax);
   title = stripMarkdownFromText(title) || title.slice(0, config.titleMax);
@@ -759,7 +765,16 @@ async function main() {
     if (forbiddenWords.length > 0) {
       constraintLines.push(`MUST NOT use in title this cycle: ${forbiddenWords.slice(0, 10).join(', ')}.`);
     } else {
-      const cleaned = lastFailureRaw.replace(/^I'm an AI[^.]*\.?/i, '').replace(/^(You |I )/i, '').slice(0, 60);
+      let cleaned = lastFailureRaw;
+      if (startsWithIgnoreCase(cleaned, "I'm an AI")) {
+        let i = "I'm an AI".length;
+        while (i < cleaned.length && cleaned[i] !== '.') i += 1;
+        if (i < cleaned.length && cleaned[i] === '.') i += 1;
+        cleaned = cleaned.slice(i).trim();
+      }
+      if (startsWithIgnoreCase(cleaned, 'You ')) cleaned = cleaned.slice(4);
+      else if (startsWithIgnoreCase(cleaned, 'I ')) cleaned = cleaned.slice(2);
+      cleaned = cleaned.slice(0, 60);
       constraintLines.push(`You MUST NOT repeat last cycle's failure: ${cleaned}.`);
     }
   }

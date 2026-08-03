@@ -87,12 +87,22 @@ function getWisdomCache() {
 }
 
 /** Normalize wisdom entry to full shape: id, text, distilled, confirmed, age_days, status. */
+
+function isWisdomId(id) {
+  const s = String(id || '');
+  if (s.length < 2) return false;
+  if (s[0] !== 'w' && s[0] !== 'W') return false;
+  for (let i = 1; i < s.length; i++) {
+    if (s[i] < '0' || s[i] > '9') return false;
+  }
+  return true;
+}
 function normalizeWisdomEntry(w, index, existingIds) {
   const text = (w.text || w || '').trim().slice(0, 500);
   if (!text) return null;
   const created = w.created_at || w.distilled || new Date().toISOString();
   const distilled = (w.distilled || created).toString().slice(0, 10);
-  let id = (w.id && /^w\d+$/i.test(w.id)) ? w.id : null;
+  let id = (w.id && isWisdomId(w.id)) ? w.id : null;
   if (!id) {
     let n = index + 1;
     while (existingIds.has(`w${String(n).padStart(3, '0')}`)) n++;

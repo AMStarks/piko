@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Phase 1 exploration learning: daily rabbit hole.
- * Reads topic from data/learning/topics.txt (round-robin by day), searches (TAVILY or SERPER),
+ * Reads topic from data/learning/topics.txt (round-robin by day), searches (SearXNG or SERPER fallback),
  * asks Ollama for a structured note, appends to data/learning/rabbit-hole-notes.md.
  * Run from app root: node scripts/rabbit-hole-daily.js
  * Cron (11pm daily for nighttime learning): 0 23 * * * cd /root/webchat-piko && ./scripts/run-rabbit-hole-daily.sh >> logs/rabbit-hole-daily.log 2>&1
@@ -22,7 +22,7 @@ const JOURNAL_FILE = path.join(ROOT, 'data', 'moltbook-journal.md');
 const LOGS_DIR = path.join(ROOT, 'logs');
 const EMERGENT_TOPIC_RATIO = 0.2; // 20% of days pick from journal (Phase 2)
 const { ai } = require('../lib/llm');
-const TAVILY_API_KEY = process.env.TAVILY_API_KEY || process.env.TAVILY_KEY;
+const { splitLines, stripWrappingQuotesLoose } = require('../lib/text');
 const SERPER_API_KEY = process.env.SERPER_API_KEY || process.env.SERPER_KEY;
 const MAX_NOTE_CHARS = 800;
 
@@ -35,7 +35,7 @@ function dayOfYear() {
 function readTopics() {
   try {
     const raw = fs.readFileSync(TOPICS_FILE, 'utf8');
-    const lines = raw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    const lines = splitLines(raw).map((l) => l.trim()).filter(Boolean);
     return lines;
   } catch (e) {
     console.error('[rabbit-hole-daily] No topics file:', TOPICS_FILE, e.message);
@@ -49,7 +49,7 @@ function consumeSuggestedTopic() {
   try {
     if (!fs.existsSync(SUGGESTED_TOPICS_FILE)) return null;
     const raw = fs.readFileSync(SUGGESTED_TOPICS_FILE, 'utf8');
-    const lines = raw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    const lines = splitLines(raw).map((l) => l.trim()).filter(Boolean);
     if (lines.length === 0) return null;
     const topic = lines[0];
     const rest = lines.slice(1).join('\n') + (lines.length > 1 ? '\n' : '');
@@ -81,7 +81,7 @@ async function pickTopicFromJournal(topics) {
 
 ${excerpt}`;
     const reply = await ai(prompt);
-    const topic = (reply || '').trim().replace(/^["']|["']$/g, '').slice(0, 60);
+    const topic = stripWrappingQuotesLoose(reply || '').slice(0, 60);
     if (topic && topic.length >= 2) return topic;
   } catch (e) {
     console.error('[rabbit-hole-daily] Journal topic error:', e.message);
@@ -106,19 +106,16 @@ function httpRequest(opts, body) {
 
 async function search(query, maxResults = 5) {
   let text = '';
-  if (TAVILY_API_KEY) {
-    try {
-      const body = JSON.stringify({ api_key: TAVILY_API_KEY, query, max_results: maxResults });
-      const u = new URL('https://api.tavily.com/search');
-      const opts = { hostname: u.hostname, port: 443, path: u.pathname, method: 'POST', headers: { 'Content-Type': 'application/json' } };
-      const { statusCode, data } = await httpRequest(opts, body);
-      const json = JSON.parse(data);
-      const results = (json.results || []).slice(0, maxResults);
+  try {
+    const { querySearXNG } = require('../lib/sovereignSearch');
+    const results = await querySearXNG(query, maxResults);
+    if (results.length > 0) {
       text = results.map((r, i) => `${i + 1}. ${r.title || ''}\n${(r.content || '').slice(0, 300)}`).join('\n\n');
-    } catch (e) {
-      console.error('[rabbit-hole-daily] Tavily error:', e.message);
     }
-  } else if (SERPER_API_KEY) {
+  } catch (e) {
+    console.error('[rabbit-hole-daily] SearXNG error:', e.message);
+  }
+  if (!text.trim() && SERPER_API_KEY) {
     try {
       const body = JSON.stringify({ q: query });
       const u = new URL('https://google.serper.dev/search');
@@ -131,7 +128,7 @@ async function search(query, maxResults = 5) {
       console.error('[rabbit-hole-daily] Serper error:', e.message);
     }
   }
-  if (!text.trim()) text = 'No search results (set TAVILY_API_KEY or SERPER_API_KEY).';
+  if (!text.trim()) text = 'No search results (ensure SearXNG is running on port 8080, or set SERPER_API_KEY).';
   return text;
 }
 

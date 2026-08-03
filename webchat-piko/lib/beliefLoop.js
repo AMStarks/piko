@@ -27,6 +27,12 @@ const SALIENCE_THRESHOLD = 0.6;
 const CONSOLIDATION_COUNTER_EVIDENCE_INTERACTIONS = 5;
 const CONSOLIDATION_RETRIES = 2;
 
+const {
+  collapseWhitespace,
+  stripCodeFences,
+  extractBalancedJsonObject,
+} = require('./text');
+
 async function withRetry(fn, retries = CONSOLIDATION_RETRIES) {
   for (let i = 0; i <= retries; i++) {
     try {
@@ -40,11 +46,10 @@ async function withRetry(fn, retries = CONSOLIDATION_RETRIES) {
 
 function parseJsonFromReply(reply) {
   if (!reply || typeof reply !== 'string') return null;
-  let raw = reply.trim();
-  const codeMatch = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (codeMatch) raw = codeMatch[1].trim();
+  const raw = stripCodeFences(reply);
+  const obj = extractBalancedJsonObject(raw);
   try {
-    return JSON.parse(raw);
+    return JSON.parse(obj || raw);
   } catch (_) {
     return null;
   }
@@ -52,7 +57,7 @@ function parseJsonFromReply(reply) {
 
 /** Normalize proposition for dedup: lower case, trim, slice. */
 function normalizeProposition(prop) {
-  return String(prop || '').toLowerCase().trim().replace(/\s+/g, ' ').slice(0, 200);
+  return collapseWhitespace(String(prop || '').toLowerCase()).slice(0, 200);
 }
 
 /** True if a is duplicate or near-duplicate of b (one contains the other or equal). */

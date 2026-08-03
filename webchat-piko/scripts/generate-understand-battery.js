@@ -10,6 +10,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { collapseWhitespace, removeWholePhraseIgnoreCase } = require('../lib/text');
 
 const OUT_DIR = path.join(__dirname, '..', 'fixtures', 'understand');
 const SYNTH_PATH = path.join(OUT_DIR, 'battery-synthetic.jsonl');
@@ -51,7 +52,9 @@ function perturb(text, kind) {
     return chars.join('');
   }
   if (kind === 'terse') {
-    return text.replace(/\bplease\b/gi, '').replace(/\bcan you\b/gi, '').replace(/\s+/g, ' ').trim();
+    let s = removeWholePhraseIgnoreCase(text, 'please');
+    s = removeWholePhraseIgnoreCase(s, 'can you');
+    return collapseWhitespace(s);
   }
   if (kind === 'aussie') {
     const prefixes = ['Mate, ', 'Hey mate — ', 'Reckon ', ''];

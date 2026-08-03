@@ -1,8 +1,8 @@
 /**
  * In-memory rate limiter for /api/chat. Per-key (e.g. IP or session); resets after window.
  */
-const WINDOW_MS = 60 * 1000;
-const MAX_PER_WINDOW = 60;
+const WINDOW_MS = Number.parseInt(process.env.PIKO_RATE_LIMIT_WINDOW_MS || '', 10) || (60 * 1000);
+const MAX_PER_WINDOW = Number.parseInt(process.env.PIKO_RATE_LIMIT_MAX_PER_WINDOW || '', 10) || 60;
 
 const store = new Map();
 

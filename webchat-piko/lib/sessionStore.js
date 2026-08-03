@@ -6,7 +6,10 @@ const fs = require('fs');
 
 const DATA_DIR = process.env.PIKO_DATA_DIR || path.join(__dirname, '..', 'data');
 const DB_PATH = path.join(DATA_DIR, 'conversations.db');
-const MAX_HISTORY = 30;
+const MAX_HISTORY = Math.max(
+  50,
+  Math.min(2000, Number(process.env.PIKO_CHAT_HISTORY_MAX || 500) || 500),
+);
 
 let db = null;
 
@@ -37,10 +40,14 @@ function getHistory(sessionId) {
   if (!database) return [];
   try {
     const rows = database.prepare(
-      'SELECT role, content FROM conversation WHERE session_id = ? ORDER BY created_at ASC'
+      'SELECT role, content, created_at FROM conversation WHERE session_id = ? ORDER BY created_at ASC'
     ).all(sessionId);
     const last = rows.slice(-MAX_HISTORY);
-    return last.map((r) => ({ role: r.role, content: r.content || '' }));
+    return last.map((r) => ({
+      role: r.role,
+      content: r.content || '',
+      created_at: r.created_at || null,
+    }));
   } catch (e) {
     if (process.env.PIKO_LOG_CONSOLE) console.error('[sessionStore] getHistory', e.message);
     return [];
@@ -51,16 +58,32 @@ function append(sessionId, role, content) {
   const database = getDb();
   if (!database) return false;
   try {
+    let text = String(content);
+    if (role === 'assistant') {
+      try {
+        text = require('./operatorVoice').polishOutbound(text);
+      } catch (_) {}
+    }
     const created = new Date().toISOString();
     database.prepare(
       'INSERT INTO conversation (session_id, role, content, created_at) VALUES (?, ?, ?, ?)'
-    ).run(sessionId, role, String(content).slice(0, 100000), created);
+    ).run(sessionId, role, text.slice(0, 100000), created);
+    try {
+      require('./transcriptCapture').captureTurn(sessionId, role, text);
+    } catch (_) {}
 
     database.prepare(`
       DELETE FROM conversation WHERE session_id = ? AND rowid NOT IN (
         SELECT rowid FROM conversation WHERE session_id = ? ORDER BY created_at DESC LIMIT ?
       )
     `).run(sessionId, sessionId, MAX_HISTORY);
+    if (role === 'assistant') {
+      setImmediate(() => {
+        try {
+          require('./vectorMemory').scheduleIdleFlush(sessionId);
+        } catch (_) {}
+      });
+    }
     return true;
   } catch (e) {
     if (process.env.PIKO_LOG_CONSOLE) console.error('[sessionStore] append', e.message);
@@ -92,11 +115,28 @@ function getSessionCount() {
   }
 }
 
+/** Distinct session ids (for nightly history dump). */
+function listSessionIds(limit = 5000) {
+  const database = getDb();
+  if (!database) return [];
+  try {
+    const lim = Math.max(1, Math.min(50_000, Number(limit) || 5000));
+    const rows = database.prepare(
+      'SELECT DISTINCT session_id AS id FROM conversation ORDER BY session_id ASC LIMIT ?',
+    ).all(lim);
+    return rows.map((r) => r.id).filter(Boolean);
+  } catch (e) {
+    if (process.env.PIKO_LOG_CONSOLE) console.error('[sessionStore] listSessionIds', e.message);
+    return [];
+  }
+}
+
 module.exports = {
   getHistory,
   append,
   clear,
   getSessionCount,
+  listSessionIds,
   MAX_HISTORY,
   DB_PATH,
 };

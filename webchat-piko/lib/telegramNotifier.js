@@ -5,15 +5,20 @@
 const https = require('https');
 
 /**
+ * Low-level Telegram send (no dashboard feed).
  * @param {string} text
- * @param {{ parseMode?: 'Markdown' | 'HTML' | 'none' | false }} [opts] - use 'none' or false for plain text (avoids Markdown breaking on SKUs with _)
+ * @param {{ parseMode?: 'Markdown' | 'HTML' | 'none' | false, category?: string, title?: string, severity?: string, source?: string, skipFeed?: boolean }} [opts]
  */
-function sendToAdmin(text, opts = {}) {
+function sendTelegramMessage(text, opts = {}) {
   const token = process.env.TELEGRAM_TOKEN || process.env.TELEGRAM_BOT_TOKEN;
-  const chatId = process.env.PIKO_ADMIN_CHAT_ID || process.env.TELEGRAM_ADMIN_CHAT_ID || process.env.TELEGRAM_CHAT_ID;
+  const chatId =
+    opts.chatId ||
+    process.env.PIKO_ADMIN_CHAT_ID ||
+    process.env.TELEGRAM_ADMIN_CHAT_ID ||
+    process.env.TELEGRAM_CHAT_ID;
 
   if (!token || !chatId) {
-    console.warn('[telegramNotifier] TELEGRAM_TOKEN and PIKO_ADMIN_CHAT_ID required. Skipping send.');
+    console.warn('[telegramNotifier] TELEGRAM_TOKEN and chat id required. Skipping send.');
     return Promise.resolve(false);
   }
 
@@ -62,4 +67,29 @@ function sendToAdmin(text, opts = {}) {
   });
 }
 
-module.exports = { sendToAdmin };
+/**
+ * Send to admin Telegram and log to the unified notification feed.
+ * @param {string} text
+ * @param {Object} [opts]
+ */
+function sendToAdmin(text, opts = {}) {
+  const { notifyAdmin } = require('./notifyAdmin');
+  return notifyAdmin(text, {
+    category: opts.category || 'system',
+    title: opts.title,
+    severity: opts.severity || 'info',
+    source: opts.source || 'telegramNotifier',
+    meta: opts.meta,
+    skipFeed: opts.skipFeed === true,
+    skipTelegram: false,
+    parseMode: opts.parseMode,
+    telegram: opts.telegram,
+  }).then((r) => r.telegram === 'sent');
+}
+
+/** Send to a specific Telegram chat (e.g. async local-answer follow-up). */
+function sendTelegramToChat(chatId, text, opts = {}) {
+  return sendTelegramMessage(text, { ...opts, chatId: String(chatId) });
+}
+
+module.exports = { sendToAdmin, sendTelegramMessage, sendTelegramToChat };

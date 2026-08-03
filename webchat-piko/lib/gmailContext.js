@@ -3,6 +3,7 @@
  * Reuses token refresh logic; full access via /gmail commands in server.js.
  */
 const https = require('https');
+const { collapseWhitespace } = require('./text');
 
 async function getGmailAccessToken() {
   const refresh = process.env.GMAIL_REFRESH_TOKEN;
@@ -72,13 +73,13 @@ async function fetchUnreadEmails(options = {}) {
       if (includeBody && msg.payload) {
         if (msg.payload.body && msg.payload.body.data) {
           try {
-            body = Buffer.from(msg.payload.body.data, 'base64').toString('utf8').slice(0, 400).replace(/\s+/g, ' ');
+            body = collapseWhitespace(Buffer.from(msg.payload.body.data, 'base64').toString('utf8').slice(0, 400));
           } catch (_) {}
         } else if (msg.payload.parts && msg.payload.parts.length) {
           const part = msg.payload.parts.find((p) => p.mimeType === 'text/plain') || msg.payload.parts[0];
           if (part && part.body && part.body.data) {
             try {
-              body = Buffer.from(part.body.data, 'base64').toString('utf8').slice(0, 400).replace(/\s+/g, ' ');
+              body = collapseWhitespace(Buffer.from(part.body.data, 'base64').toString('utf8').slice(0, 400));
             } catch (_) {}
           }
         }
@@ -137,13 +138,13 @@ async function fetchSearchEmails(query, options = {}) {
       if (includeBody && msg.payload) {
         if (msg.payload.body && msg.payload.body.data) {
           try {
-            body = Buffer.from(msg.payload.body.data, 'base64').toString('utf8').slice(0, 1000).replace(/\s+/g, ' ');
+            body = collapseWhitespace(Buffer.from(msg.payload.body.data, 'base64').toString('utf8').slice(0, 1000));
           } catch (_) {}
         } else if (msg.payload.parts && msg.payload.parts.length) {
           const part = msg.payload.parts.find((p) => p.mimeType === 'text/plain') || msg.payload.parts[0];
           if (part && part.body && part.body.data) {
             try {
-              body = Buffer.from(part.body.data, 'base64').toString('utf8').slice(0, 1000).replace(/\s+/g, ' ');
+              body = collapseWhitespace(Buffer.from(part.body.data, 'base64').toString('utf8').slice(0, 1000));
             } catch (_) {}
           }
         }
@@ -186,13 +187,13 @@ async function fetchMessageById(id, includeBody = true) {
     if (includeBody && msg.payload) {
       if (msg.payload.body && msg.payload.body.data) {
         try {
-          body = Buffer.from(msg.payload.body.data, 'base64').toString('utf8').replace(/\s+/g, ' ');
+          body = collapseWhitespace(Buffer.from(msg.payload.body.data, 'base64').toString('utf8'));
         } catch (_) {}
       } else if (msg.payload.parts && msg.payload.parts.length) {
         const part = msg.payload.parts.find((p) => p.mimeType === 'text/plain') || msg.payload.parts[0];
         if (part && part.body && part.body.data) {
           try {
-            body = Buffer.from(part.body.data, 'base64').toString('utf8').replace(/\s+/g, ' ');
+            body = collapseWhitespace(Buffer.from(part.body.data, 'base64').toString('utf8'));
           } catch (_) {}
         }
       }

@@ -21,6 +21,42 @@ const EXEMPT_FILES = new Set([
   path.join('scripts', 'check-no-routing-regex.js'),
 ]);
 
+/** Eval / smoke / finetune / one-off — reported but not zero-gated (WP8.8). */
+const EXEMPT_SCRIPT_NAMES = new Set([
+  'routing-battery-eval.js',
+  'grounding-battery-eval.js',
+  'continuity-eval.js',
+  'routing-policy-eval.js',
+  'intent-triage-eval.js',
+  'orchestrator-workflow-eval.js',
+  'eval_triage.js',
+  'legion-ausmaker-task-setup-smoke.js',
+  'smoke-delay-test.js',
+  'test-action-router.js',
+  'proactive-phase1-smoke.js',
+  'proactive-phase2-smoke.js',
+  'proactive-phase3-connectors-smoke.js',
+  'proactive-phaseD-link-reliability-smoke.js',
+  'proactive-phaseG-canary-evidence.js',
+  'proactive-phaseG-cutover-smoke.js',
+  'proactive-policy-apply.js',
+  'proactive-post-smoke-cleanup.js',
+  'proactive-replay-open-deadletters.js',
+  'understand-eval.js',
+  'understand-smoke.js',
+]);
+
+function isExemptScript(rel) {
+  if (EXEMPT_FILES.has(rel)) return true;
+  const norm = rel.split(path.sep).join('/');
+  if (!norm.startsWith('scripts/')) return false;
+  if (norm.startsWith('scripts/finetune/') || norm.startsWith('scripts/modelops/')) return true;
+  const base = path.basename(rel);
+  if (EXEMPT_SCRIPT_NAMES.has(base)) return true;
+  if (base.includes('-smoke') || base.endsWith('-eval.js') || base.endsWith('_eval.js')) return true;
+  return false;
+}
+
 function stripCommentsAndStrings(source) {
   const out = [];
   let i = 0;
@@ -153,25 +189,36 @@ function walkJs(dir, acc = []) {
   return acc;
 }
 
-function collectTargets() {
+function collectTargets(opts = {}) {
+  const includeExemptReport = opts.includeExemptReport === true;
   const files = [];
+  const exemptReported = [];
   files.push(...walkJs(path.join(ROOT, 'lib')));
   files.push(path.join(ROOT, 'server.js'));
-  // Runtime scripts (exclude pure eval/smoke generators later if needed)
   for (const abs of walkJs(path.join(ROOT, 'scripts'))) {
     const rel = path.relative(ROOT, abs);
-    if (EXEMPT_FILES.has(rel)) continue;
-    // Keep ratchet on production-ish scripts; skip test-only generators is optional
+    if (isExemptScript(rel)) {
+      if (includeExemptReport) exemptReported.push(abs);
+      continue;
+    }
     files.push(abs);
   }
-  return files.filter((f) => fs.existsSync(f));
+  return {
+    files: files.filter((f) => fs.existsSync(f)),
+    exemptReported,
+  };
 }
 
 function main() {
   const args = process.argv.slice(2);
   const update = args.includes('--update-baseline');
-  const zero = args.includes('--zero');
-  const targets = collectTargets();
+  // WP8.8: zero-tolerance is the default for production paths (lib/, server.js, runtime scripts).
+  // Use --ratchet to keep the old baseline mode; --report-exempt lists eval/smoke leftovers.
+  const ratchet = args.includes('--ratchet');
+  const zero = !ratchet || args.includes('--zero');
+  const { files: targets, exemptReported } = collectTargets({
+    includeExemptReport: args.includes('--report-exempt'),
+  });
   const counts = {};
   const details = {};
   let total = 0;
@@ -182,6 +229,17 @@ function main() {
     counts[rel] = hits.length;
     if (hits.length) details[rel] = hits.slice(0, 5);
     total += hits.length;
+  }
+
+  if (args.includes('--report-exempt')) {
+    let exemptHits = 0;
+    for (const abs of exemptReported) {
+      const n = countRegexHits(fs.readFileSync(abs, 'utf8')).length;
+      if (!n) continue;
+      exemptHits += n;
+      console.log(`exempt ${n}\t${path.relative(ROOT, abs)}`);
+    }
+    console.log(`Exempt eval/smoke/finetune regex hits (not gated): ${exemptHits}`);
   }
 
   if (update) {
@@ -205,7 +263,7 @@ function main() {
       }
       process.exit(1);
     }
-    console.log('Zero-tolerance regex check OK — 0 hits in production paths');
+    console.log('Zero-tolerance regex check OK — 0 hits in lib/, server.js, runtime scripts');
     return;
   }
 

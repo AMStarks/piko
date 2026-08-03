@@ -26,6 +26,35 @@ const {
 } = require('./legateTools');
 const { friendlyAgentName } = require('./operatorVoice');
 const { acquireSessionLock } = require('./sessionLock');
+const {
+  startsWithIgnoreCase,
+  includesAny,
+  toLowerAsciiish,
+} = require('./text');
+
+function replaceEiWorkerLabel(text) {
+  const friendly = friendlyAgentName('ei-worker');
+  let s = String(text || '');
+  // Case-insensitive replace of "ei-worker" without regex
+  const needle = 'ei-worker';
+  let out = '';
+  let i = 0;
+  const lower = toLowerAsciiish(s);
+  while (i < s.length) {
+    const idx = lower.indexOf(needle, i);
+    if (idx < 0) {
+      out += s.slice(i);
+      break;
+    }
+    out += s.slice(i, idx) + friendly;
+    i = idx + needle.length;
+  }
+  return out;
+}
+
+function containsEiWorker(text) {
+  return toLowerAsciiish(text).includes('ei-worker');
+}
 
 const DEFAULT_WORKER = 'ei-worker';
 /** Planner-backed agents only — raw legion agents stay registered for /agent run, not decide menu. */
@@ -138,10 +167,10 @@ function historyForDecide(history) {
   return rows
     .filter((m) => {
       const c = String((m && m.content) || '');
-      if (/^Progress —/i.test(c)) return false;
-      if (/^Update —/i.test(c)) return false;
-      if (/^Legate review —/i.test(c)) return false;
-      if (/^Job:\s*job_/i.test(c) && c.length < 80) return false;
+      if (startsWithIgnoreCase(c, 'Progress —') || startsWithIgnoreCase(c, 'Progress -')) return false;
+      if (startsWithIgnoreCase(c, 'Update —') || startsWithIgnoreCase(c, 'Update -')) return false;
+      if (startsWithIgnoreCase(c, 'Legate review —') || startsWithIgnoreCase(c, 'Legate review -')) return false;
+      if (startsWithIgnoreCase(c, 'Job:') && c.length < 80 && toLowerAsciiish(c).includes('job_')) return false;
       return true;
     })
     .slice(-6);
@@ -474,8 +503,8 @@ async function decideLegateTurn(message, opts = {}) {
         };
       }
       if (!reply) reply = dispatchAckLine(agentId);
-      else if (/\bei-worker\b/i.test(reply)) {
-        reply = reply.replace(/\bei-worker\b/gi, friendlyAgentName('ei-worker'));
+      else if (containsEiWorker(reply)) {
+        reply = replaceEiWorkerLabel(reply);
       }
     } else if (mode === 'control') {
       if (!reply) {
@@ -529,8 +558,8 @@ function dispatchFromLegate(decision, opts = {}) {
 function formatDispatchAck(decision, queued) {
   const jobId = queued && queued.job && queued.job.id;
   let base = String((decision && decision.reply) || "On it — I've set that in motion.").trim();
-  if (/\bei-worker\b/i.test(base)) {
-    base = base.replace(/\bei-worker\b/gi, friendlyAgentName('ei-worker'));
+  if (containsEiWorker(base)) {
+    base = replaceEiWorkerLabel(base);
   }
   if (!jobId) return base;
   return `${base}\n\nI'll post updates here as the work comes in, then give you my read on the result. (To cancel: /agent stop ${jobId})`;
@@ -637,7 +666,7 @@ function formatReviewChatReply(job, result) {
       || (() => {
         try { return require('./eiAgentTools').coverageVoiceSummary(cov, mf); } catch (_) { return ''; }
       })();
-    if (voice && /shelf empty/i.test(voice)) {
+    if (voice && includesAny(toLowerAsciiish(voice), ['shelf empty'])) {
       coverageNote = `\n\n${voice}`;
     } else if (verdict !== 'accept' && voice && Number((mf && mf.counts && mf.counts.keep) || 0) === 0) {
       coverageNote = `\n\n${voice}`;

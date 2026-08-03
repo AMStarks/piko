@@ -10,6 +10,7 @@ const fs = require('fs');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 
 const { Client } = require('@notionhq/client');
+const { splitLines, splitMarkdownDateSections, markdownH2Title } = require('../lib/text');
 
 const DATA_LEARNING = path.join(__dirname, '..', 'data', 'learning');
 const STICKY_FILE = path.join(DATA_LEARNING, 'sticky-ideas.md');
@@ -35,7 +36,7 @@ function getClient() {
 function readStickyIdeas() {
   if (!fs.existsSync(STICKY_FILE)) return [];
   const raw = fs.readFileSync(STICKY_FILE, 'utf8');
-  const lines = raw.split(/\n/).map((l) => l.trim()).filter(Boolean);
+  const lines = splitLines(raw).map((l) => l.trim()).filter(Boolean);
   const items = [];
   for (const line of lines) {
     if (line.startsWith('- ') && !line.startsWith('#') && !line.toLowerCase().startsWith('- max ')) {
@@ -48,7 +49,7 @@ function readStickyIdeas() {
 function readTensions() {
   if (!fs.existsSync(TENSIONS_FILE)) return [];
   const raw = fs.readFileSync(TENSIONS_FILE, 'utf8');
-  const lines = raw.split(/\n/).map((l) => l.trim()).filter(Boolean);
+  const lines = splitLines(raw).map((l) => l.trim()).filter(Boolean);
   const items = [];
   for (const line of lines) {
     if (line.startsWith('- ') && !line.startsWith('#') && !line.toLowerCase().startsWith('- max ')) {
@@ -61,11 +62,10 @@ function readTensions() {
 function readRabbitHoleBlocks() {
   if (!fs.existsSync(RABBIT_FILE)) return [];
   const raw = fs.readFileSync(RABBIT_FILE, 'utf8');
-  const blocks = raw.split(/\n(?=## \d{4}-\d{2}-\d{2})/).filter((b) => b.trim());
+  const blocks = splitMarkdownDateSections(raw).filter((b) => b.trim());
   return blocks.map((block) => {
-    const firstLine = block.split('\n')[0] || '';
-    const titleMatch = firstLine.match(/^##\s+(.+)$/);
-    const title = titleMatch ? titleMatch[1].trim() : firstLine.slice(0, 80);
+    const firstLine = splitLines(block)[0] || '';
+    const title = markdownH2Title(firstLine) || firstLine.slice(0, 80);
     return { title, content: block.trim() };
   });
 }

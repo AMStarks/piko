@@ -20,6 +20,7 @@ const META_REFLECTIONS_FILE = path.join(LEARNING_DIR, 'meta-reflections.md');
 const TOPIC_SUGGESTIONS_FILE = path.join(LEARNING_DIR, 'topic-suggestions.md');
 const LOGS_DIR = path.join(ROOT, 'logs');
 const { ai } = require('../lib/llm');
+const { splitLines, splitMarkdownH2, stripListPrefixLoose, stripListMarker } = require('../lib/text');
 
 function httpRequest(opts, body) {
   return new Promise((resolve, reject) => {
@@ -40,8 +41,8 @@ function readStickyIdeas() {
   try {
     if (!fs.existsSync(STICKY_IDEAS_FILE)) return '(No sticky ideas yet.)';
     const raw = fs.readFileSync(STICKY_IDEAS_FILE, 'utf8');
-    const lines = raw.split(/\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
-    const ideas = lines.map((l) => l.replace(/^[-*•]\s*\d+[.)]\s*/, '').replace(/^\d+[.)]\s*/, '').trim()).filter((l) => l.length >= 5);
+    const lines = splitLines(raw).map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
+    const ideas = lines.map((l) => stripListPrefixLoose(l)).filter((l) => l.length >= 5);
     return ideas.length ? ideas.join('\n') : '(None.)';
   } catch (_) {
     return '(None.)';
@@ -52,8 +53,8 @@ function readTensions() {
   try {
     if (!fs.existsSync(TENSIONS_FILE)) return '(No tensions yet.)';
     const raw = fs.readFileSync(TENSIONS_FILE, 'utf8');
-    const lines = raw.split(/\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
-    const list = lines.map((l) => l.replace(/^[-*•]\s*\d+[.)]\s*/, '').replace(/^\d+[.)]\s*/, '').trim()).filter((l) => l.length >= 10);
+    const lines = splitLines(raw).map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
+    const list = lines.map((l) => stripListPrefixLoose(l)).filter((l) => l.length >= 10);
     return list.length ? list.join('\n') : '(None.)';
   } catch (_) {
     return '(None.)';
@@ -64,7 +65,7 @@ function readLastMetaReflection() {
   try {
     if (!fs.existsSync(META_REFLECTIONS_FILE)) return '';
     const raw = fs.readFileSync(META_REFLECTIONS_FILE, 'utf8');
-    const blocks = raw.split(/\n## /).filter(Boolean);
+    const blocks = splitMarkdownH2(raw).filter(Boolean);
     return blocks.length ? blocks[blocks.length - 1].trim().slice(-2000) : '';
   } catch (_) {
     return '';
@@ -100,8 +101,8 @@ ${lastMeta ? `\n--- Last meta-reflection (excerpt) ---\n${lastMeta}` : ''}
     return;
   }
 
-  const lines = (reply || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  const suggestions = lines.map((l) => l.replace(/^\d+[.)]\s*/, '').trim()).filter((l) => l.length >= 2 && l.length <= 80).slice(0, 3);
+  const lines = splitLines(reply || '').map((l) => l.trim()).filter(Boolean);
+  const suggestions = lines.map((l) => stripListMarker(l)).filter((l) => l.length >= 2 && l.length <= 80).slice(0, 3);
   if (!suggestions.length) {
     console.error('[learning-topic-suggestions] No suggestions parsed from reply');
     process.exitCode = 1;

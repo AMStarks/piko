@@ -24,6 +24,7 @@ const MAX_REPLY_TO_US = 2;
 const OUR_POSTS_TO_CHECK = 10;
 const FEED_LIMIT = 40;
 const { ai } = require('../lib/llm');
+const { collapseNewlinesToSpace, keepAsciiDigitsDotMinus } = require('../lib/text');
 const KEY = process.env.MOLTBOOK_API_KEY || process.env.MOLTBOOK_KEY;
 
 function moltbookGet(key, pathWithQuery) {
@@ -203,7 +204,7 @@ Post excerpt: ${(post.content || '').slice(0, 300)}
 
 Comment:`;
       content = (await ai(prompt)).trim();
-      content = (content || '').replace(/\n+/g, ' ').trim().slice(0, 500);
+      content = collapseNewlinesToSpace(content || '').slice(0, 500);
     } catch (e) {
       console.error('[moltbook-comment-run] Ollama comment draft error:', e.message);
       continue;
@@ -237,7 +238,7 @@ Comment:`;
 
 ${challenge}`;
           answer = (await ai(solvePrompt)).trim();
-          answer = (answer || '').replace(/[^\d.-]/g, '').trim();
+          answer = keepAsciiDigitsDotMinus(answer || '').trim();
           if (answer && !answer.includes('.')) answer = answer + '.00';
           if (!answer) answer = '0.00';
         } catch (_) {

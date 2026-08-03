@@ -25,10 +25,61 @@ const TENSION_STATUS_FILE = path.join(LEARNING_DIR, 'tension-status.md');
 const STICKY_IDEAS_FILE = path.join(LEARNING_DIR, 'sticky-ideas.md');
 const LOGS_DIR = path.join(ROOT, 'logs');
 const { ai } = require('../lib/llm');
+const {
+  splitLines,
+  splitMarkdownH2,
+  stripListPrefixLoose,
+  stripListMarker,
+  splitNumberedListChunks,
+  collapseNewlinesToSpace,
+  isAsciiDigit,
+  isWhitespace,
+} = require('../lib/text');
 const MAX_TENSIONS = 5;
 const MAX_STICKY = 10;
 const JOURNAL_CHARS = 3000;
 const NOTES_BLOCKS = 14;
+
+function parseTensionStatusUpdate(line) {
+  const marker = 'TENSION_STATUS:';
+  const idx = line.indexOf(marker);
+  if (idx < 0) return null;
+  let i = idx + marker.length;
+  while (i < line.length && isWhitespace(line[i])) i += 1;
+  let num = '';
+  while (i < line.length && isAsciiDigit(line[i])) { num += line[i]; i += 1; }
+  if (!num) return null;
+  while (i < line.length && isWhitespace(line[i])) i += 1;
+  if (line[i] !== '|') return null;
+  i += 1;
+  while (i < line.length && isWhitespace(line[i])) i += 1;
+  let status = '';
+  while (i < line.length && line[i] !== '|') { status += line[i]; i += 1; }
+  status = status.trim();
+  if (status !== 'Open' && status !== 'Resolved') return null;
+  if (line[i] !== '|') return null;
+  i += 1;
+  const note = line.slice(i).trim();
+  return { idx: Number(num), status, note };
+}
+
+function parseTensionStatusStored(line) {
+  let i = 0;
+  let num = '';
+  while (i < line.length && isAsciiDigit(line[i])) { num += line[i]; i += 1; }
+  if (!num || line[i] !== ':') return null;
+  i += 1;
+  while (i < line.length && isWhitespace(line[i])) i += 1;
+  let status = '';
+  while (i < line.length && !isWhitespace(line[i]) && line[i] !== '—' && line[i] !== '-') {
+    status += line[i];
+    i += 1;
+  }
+  if (status !== 'Open' && status !== 'Resolved') return null;
+  while (i < line.length && (isWhitespace(line[i]) || line[i] === '—' || line[i] === '-')) i += 1;
+  const note = line.slice(i).trim();
+  return { idx: Number(num), status, note };
+}
 
 function httpRequest(opts, body) {
   return new Promise((resolve, reject) => {
@@ -53,7 +104,7 @@ function readNotesExcerpt() {
   try {
     if (!fs.existsSync(RABBIT_HOLE_NOTES)) return '(No rabbit-hole notes yet.)';
     const raw = fs.readFileSync(RABBIT_HOLE_NOTES, 'utf8');
-    const blocks = raw.split(/\n## /).filter(Boolean);
+    const blocks = splitMarkdownH2(raw).filter(Boolean);
     const last = blocks.slice(-NOTES_BLOCKS);
     return last.join('\n## ').trim().slice(-8000) || '(No recent notes.)';
   } catch (_) {
@@ -72,10 +123,10 @@ function readJournalExcerpt() {
 }
 
 function parseTensionsFromReply(reply) {
-  const lines = (reply || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const lines = splitLines(reply || '').map((l) => l.trim()).filter(Boolean);
   const out = [];
   for (const line of lines) {
-    const cleaned = line.replace(/^\d+[.)]\s*[-*•]\s*/, '').replace(/^[-*•]\s*/, '').trim();
+    const cleaned = stripListPrefixLoose(line);
     if (cleaned.length >= 10 && cleaned.length <= 300) out.push(cleaned);
   }
   return out.slice(0, 3);
@@ -85,8 +136,8 @@ function readStickyIdeas() {
   try {
     if (!fs.existsSync(STICKY_IDEAS_FILE)) return [];
     const raw = fs.readFileSync(STICKY_IDEAS_FILE, 'utf8');
-    const lines = raw.split(/\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
-    return lines.map((l) => l.replace(/^[-*•]\s*\d+[.)]\s*/, '').replace(/^\d+[.)]\s*/, '').trim()).filter((l) => l.length >= 5).slice(-MAX_STICKY);
+    const lines = splitLines(raw).map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
+    return lines.map((l) => stripListPrefixLoose(l)).filter((l) => l.length >= 5).slice(-MAX_STICKY);
   } catch (_) {
     return [];
   }
@@ -96,15 +147,15 @@ function readStickyIdeas() {
 function parseStickyIdeasFromReply(reply) {
   const text = (reply || '').trim();
   const out = [];
-  const chunks = text.split(/(?=^\d+[.)]\s)/m).filter(Boolean);
+  const chunks = splitNumberedListChunks(text);
   for (const chunk of chunks) {
-    const cleaned = chunk.replace(/^\d+[.)]\s*/, '').trim().replace(/\n+/g, ' ').trim();
+    const cleaned = collapseNewlinesToSpace(stripListMarker(chunk));
     if (cleaned.length >= 15 && cleaned.length <= 400) out.push(cleaned);
   }
   if (out.length === 0) {
-    const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    const lines = splitLines(text).map((l) => l.trim()).filter(Boolean);
     for (const line of lines) {
-      const cleaned = line.replace(/^\d+[.)]\s*[-*•]\s*/, '').replace(/^[-*•]\s*/, '').trim();
+      const cleaned = stripListPrefixLoose(line);
       if (cleaned.length >= 15 && cleaned.length <= 400) out.push(cleaned);
     }
   }
@@ -175,7 +226,7 @@ ${reflection.trim().slice(0, 1500)}`;
   try {
     if (fs.existsSync(TENSIONS_FILE)) {
       const raw = fs.readFileSync(TENSIONS_FILE, 'utf8');
-      const lines = raw.split(/\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
+      const lines = splitLines(raw).map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
       existingTensions = lines.filter((l) => l.length >= 10).slice(-MAX_TENSIONS);
     }
   } catch (_) {}
@@ -199,12 +250,10 @@ If no updates, output nothing.`;
   let statusUpdates = {};
   try {
     const statusReply = await llmChat([{ role: 'user', content: statusPrompt }]);
-    const statusLines = (statusReply || '').split(/\r?\n/).filter((l) => /TENSION_STATUS:\s*\d+\s*\|\s*(Open|Resolved)\s*\|/.test(l));
-    for (const line of statusLines) {
-      const m = line.match(/TENSION_STATUS:\s*(\d+)\s*\|\s*(Open|Resolved)\s*\|(.+)/);
-      if (m) {
-        const idx = parseInt(m[1], 10);
-        if (idx >= 1 && idx <= combined.length) statusUpdates[idx] = { status: m[2].trim(), note: m[3].trim().slice(0, 200) };
+    for (const line of splitLines(statusReply || '')) {
+      const m = parseTensionStatusUpdate(line);
+      if (m && m.idx >= 1 && m.idx <= combined.length) {
+        statusUpdates[m.idx] = { status: m.status, note: m.note.slice(0, 200) };
       }
     }
   } catch (e) {
@@ -215,12 +264,10 @@ If no updates, output nothing.`;
   try {
     if (fs.existsSync(TENSION_STATUS_FILE)) {
       const raw = fs.readFileSync(TENSION_STATUS_FILE, 'utf8');
-      const lines = raw.split(/\n/).filter((l) => /^\d+:\s*(Open|Resolved)/.test(l));
-      for (const line of lines) {
-        const m = line.match(/^(\d+):\s*(Open|Resolved)\s*—?\s*(.*)/);
-        if (m) {
-          const idx = parseInt(m[1], 10);
-          if (idx >= 1 && idx <= combined.length) statusLines[idx] = { status: m[2], note: (m[3] || '').trim() };
+      for (const line of splitLines(raw)) {
+        const m = parseTensionStatusStored(line);
+        if (m && m.idx >= 1 && m.idx <= combined.length) {
+          statusLines[m.idx] = { status: m.status, note: m.note };
         }
       }
     }

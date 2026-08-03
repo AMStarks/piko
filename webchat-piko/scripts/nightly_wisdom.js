@@ -8,6 +8,7 @@ require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 const { loadCorpus } = require('../lib/corpus');
 const { getRecentClaims, getRecentCorrections, getWisdomCache, setWisdomCache, nextWisdomId } = require('../lib/truth');
 const { ai } = require('../lib/llm');
+const { splitLines, startsWithIgnoreCase, stripPrefixIgnoreCase } = require('../lib/text');
 
 async function runNightlyWisdom() {
   const corpus = loadCorpus();
@@ -38,8 +39,8 @@ Output exactly one statement per line, each line starting with "WISDOM: " (e.g. 
 
   try {
     const reply = (await ai(prompt, { max_tokens: 300, temperature: 0.4 })).trim();
-    const lines = reply.split('\n').filter((l) => /^\s*WISDOM:\s*/i.test(l));
-    const newWisdom = lines.slice(0, 3).map((l) => l.replace(/^\s*WISDOM:\s*/i, '').trim()).filter(Boolean);
+    const lines = splitLines(reply).filter((l) => startsWithIgnoreCase(l.trim(), 'WISDOM:'));
+    const newWisdom = lines.slice(0, 3).map((l) => stripPrefixIgnoreCase(l.trim(), 'WISDOM:').trim()).filter(Boolean);
 
     const cache = getWisdomCache();
     const base = [...(cache.wisdom || [])];

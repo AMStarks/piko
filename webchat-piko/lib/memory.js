@@ -16,6 +16,7 @@ const USER_BELIEFS_FILE = path.join(MEMORY_DIR, 'user_beliefs.json');
 const SELF_BELIEFS_FILE = path.join(MEMORY_DIR, 'self_beliefs.json');
 const REFLECTIVE_FILE = path.join(MEMORY_DIR, 'reflective.json');
 const PENDING_BELIEFS_FILE = path.join(MEMORY_DIR, 'pending_beliefs.json');
+const USER_PROFILE_FILE = path.join(MEMORY_DIR, 'user_profile.json');
 
 const MAX_INTERACTIONS = 200;
 const MAX_EPISODIC = 100;
@@ -24,6 +25,11 @@ const MAX_REFLECTIVE = 50;
 const MAX_PENDING = 30;
 const CONFIDENCE_CAP = 0.95;
 const REFLECTIVE_EXPIRY_DAYS = 7;
+
+const {
+  isAllAsciiDigits,
+  slugify,
+} = require('./text');
 
 function readJson(file, defaultValue) {
   try {
@@ -41,21 +47,21 @@ function writeJson(file, data) {
 
 function nextId(list, prefix) {
   const now = new Date();
-  const dateStr = now.toISOString().slice(0, 10).replace(/-/g, '_');
-  const pattern = new RegExp('^' + prefix + '_' + dateStr + '_(\\d+)$');
-  const nums = list
-    .map((x) => (x.id && pattern.test(x.id) ? parseInt(x.id.match(pattern)[1], 10) : 0))
-    .filter((n) => !Number.isNaN(n));
+  const dateStr = now.toISOString().slice(0, 10).split('-').join('_');
+  const idPrefix = prefix + '_' + dateStr + '_';
+  const nums = list.map((x) => {
+    const id = String(x.id || '');
+    if (!id.startsWith(idPrefix)) return 0;
+    const rest = id.slice(idPrefix.length);
+    if (!isAllAsciiDigits(rest)) return 0;
+    return parseInt(rest, 10) || 0;
+  });
   const seq = (nums.length ? Math.max(...nums) : 0) + 1;
   return `${prefix}_${dateStr}_${String(seq).padStart(3, '0')}`;
 }
 
 function slugForProposition(proposition) {
-  return String(proposition)
-    .slice(0, 80)
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '_')
-    .replace(/^_|_$/g, '') || 'pref';
+  return slugify(String(proposition).slice(0, 80)) || 'pref';
 }
 
 // —— Layer 1: Interaction memory ——
@@ -267,6 +273,44 @@ function setPendingBeliefs(list) {
   writeJson(PENDING_BELIEFS_FILE, list);
 }
 
+// —— Durable user profile (identity facts per session) ——
+function getUserProfile() {
+  const profile = readJson(USER_PROFILE_FILE, { updatedAt: null, sessions: {} });
+  if (!profile || typeof profile !== 'object') return { updatedAt: null, sessions: {} };
+  if (!profile.sessions || typeof profile.sessions !== 'object') profile.sessions = {};
+  return profile;
+}
+
+function getSessionNickname(sessionKey) {
+  const key = String(sessionKey || 'main').trim() || 'main';
+  const profile = getUserProfile();
+  const session = profile.sessions[key] || {};
+  const nickname = String(session.nickname || '').trim();
+  return nickname || '';
+}
+
+function setSessionNickname(sessionKey, nickname, source = 'chat') {
+  const key = String(sessionKey || 'main').trim() || 'main';
+  const clean = String(nickname || '').trim().slice(0, 24);
+  if (!clean) return;
+  const now = new Date().toISOString();
+  const profile = getUserProfile();
+  profile.sessions[key] = {
+    ...(profile.sessions[key] || {}),
+    nickname: clean,
+    nicknameSource: String(source || 'chat').slice(0, 40),
+    nicknameUpdatedAt: now,
+  };
+  profile.updatedAt = now;
+  writeJson(USER_PROFILE_FILE, profile);
+  logWriteDecision({
+    write_target: 'user_profile',
+    proposed_change: 'set_nickname',
+    justification: [`session:${key}`, `nickname:${clean}`],
+    decision: 'approved',
+  });
+}
+
 // —— Block for prompt: user beliefs + top episodic (for context) ——
 function getMemoryBlockForPrompt(maxBeliefs = 8, maxEpisodic = 3) {
   const beliefs = getUserBeliefs();
@@ -305,10 +349,14 @@ module.exports = {
   getPendingBeliefs,
   addPendingBelief,
   setPendingBeliefs,
+  getUserProfile,
+  getSessionNickname,
+  setSessionNickname,
   getMemoryBlockForPrompt,
   MEMORY_DIR,
   INTERACTIONS_FILE,
   USER_BELIEFS_FILE,
   PENDING_BELIEFS_FILE,
+  USER_PROFILE_FILE,
   CONFIDENCE_CAP,
 };

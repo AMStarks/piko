@@ -10,6 +10,17 @@
 const path = require('path');
 const fs = require('fs');
 const https = require('https');
+const {
+  stripTrailingSlash,
+  parseHhMm,
+  stripAngleBrackets,
+  replaceAllLiteral,
+  stripHtmlTags,
+  splitLines,
+  stripListPrefixLoose,
+  collapseNewlinesToSpace,
+  toLowerAsciiish,
+} = require('../lib/text');
 
 const ROOT = path.resolve(__dirname, '..');
 const USE_LLM_SYNTHESIS = process.env.PIKO_EA_USE_LLM_SYNTHESIS === '1' || process.env.PIKO_EA_USE_LLM_SYNTHESIS === 'true';
@@ -61,7 +72,7 @@ function telegramSend(chatId, text) {
 const http = require('http');
 /** Send same look-in message to iMessage via BlueBubbles (Phase 4 optional). */
 function sendToiMessage(chatGuid, text) {
-  const baseUrl = (process.env.BLUEBUBBLES_URL || '').replace(/\/$/, '');
+  const baseUrl = stripTrailingSlash(process.env.BLUEBUBBLES_URL || '');
   const apiKey = process.env.BLUEBUBBLES_API_KEY;
   if (!baseUrl || !apiKey || !chatGuid) return Promise.resolve({ ok: false });
   return new Promise((resolve, reject) => {
@@ -199,12 +210,9 @@ function clearPendingNotifications() {
 /** Parse "HH:MM" or "H:MM" to minutes since midnight; return null if invalid. */
 function parseTimeToMinutes(str) {
   if (!str || typeof str !== 'string') return null;
-  const m = str.trim().match(/^(\d{1,2}):(\d{2})$/);
-  if (!m) return null;
-  const h = parseInt(m[1], 10);
-  const min = parseInt(m[2], 10);
-  if (h < 0 || h > 23 || min < 0 || min > 59) return null;
-  return h * 60 + min;
+  const parsed = parseHhMm(str.trim());
+  if (!parsed) return null;
+  return parsed.h * 60 + parsed.m;
 }
 
 /** Phase 4: true if current time is inside quiet window (e.g. 22:00–07:00). Uses server local time. */
@@ -292,7 +300,7 @@ async function getGmailUnreadAlert() {
       const headers = (msg.payload && msg.payload.headers) || [];
       const subj = (headers.find((h) => h.name === 'Subject') || {}).value || '(no subject)';
       const from = (headers.find((h) => h.name === 'From') || {}).value || '';
-      const fromShort = from.replace(/<.*>/, '').trim().slice(0, 30);
+      const fromShort = stripAngleBrackets(from).trim().slice(0, 30);
       if (suggestion) suggestion += '; ';
       suggestion += `"${subj.slice(0, 40)}" from ${fromShort}`;
     }
@@ -303,32 +311,35 @@ async function getGmailUnreadAlert() {
   }
 }
 
+function decodeBase64Url(data) {
+  const b64 = replaceAllLiteral(replaceAllLiteral(data, '-', '+'), '_', '/');
+  return Buffer.from(b64, 'base64').toString('utf8');
+}
+
 /** Decode Gmail message body from payload (base64url). Returns plain text snippet. */
 function decodeBody(payload) {
   if (!payload) return '';
   let text = '';
   if (payload.body && payload.body.data) {
     try {
-      const b64 = payload.body.data.replace(/-/g, '+').replace(/_/g, '/');
-      text = Buffer.from(b64, 'base64').toString('utf8');
+      text = decodeBase64Url(payload.body.data);
     } catch (_) {}
   }
   if (!text && payload.parts && Array.isArray(payload.parts)) {
     for (const p of payload.parts) {
       if (p.mimeType === 'text/plain' && p.body && p.body.data) {
         try {
-          const b64 = p.body.data.replace(/-/g, '+').replace(/_/g, '/');
-          text = Buffer.from(b64, 'base64').toString('utf8');
+          text = decodeBase64Url(p.body.data);
           break;
         } catch (_) {}
       }
     }
     if (!text && payload.parts.length) {
       const p = payload.parts.find((x) => x.body && x.body.data);
-      if (p) try { const b64 = p.body.data.replace(/-/g, '+').replace(/_/g, '/'); text = Buffer.from(b64, 'base64').toString('utf8'); } catch (_) {}
+      if (p) try { text = decodeBase64Url(p.body.data); } catch (_) {}
     }
   }
-  return (text || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 400);
+  return stripHtmlTags(text || '').slice(0, 400);
 }
 
 /** Phase 2 extended: when PIKO_EA_GMAIL_READ_BODY=1, fetch body snippets and return string for LLM (find what is important). */
@@ -366,7 +377,7 @@ async function getGmailUnreadEnriched() {
       const headers = (msg.payload && msg.payload.headers) || [];
       const subj = (headers.find((h) => h.name === 'Subject') || {}).value || '(no subject)';
       const from = (headers.find((h) => h.name === 'From') || {}).value || '';
-      const fromShort = from.replace(/<.*>/, '').trim().slice(0, 40);
+      const fromShort = stripAngleBrackets(from).trim().slice(0, 40);
       const snippet = decodeBody(msg.payload);
       lines.push(`${i + 1}. Subject: ${subj.slice(0, 60)}\n   From: ${fromShort}\n   Snippet: ${snippet || '(no body)'}`);
     }
@@ -405,8 +416,8 @@ ${contextStr}`;
   try {
     const out = await ai(prompt, { temperature: 0.3, max_tokens: 300 });
     const trimmed = (out && String(out).trim()) || '';
-    if (/^\s*NONE\s*$/i.test(trimmed)) return [];
-    const lines = trimmed.split(/\n/).map((l) => l.replace(/^[\s\-*•]+\s*/, '').trim()).filter(Boolean);
+    if (toLowerAsciiish(trimmed) === 'none') return [];
+    const lines = splitLines(trimmed).map((l) => stripListPrefixLoose(l)).filter(Boolean);
     return lines.slice(0, MAX_BULLETS);
   } catch (e) {
     if (process.env.PIKO_EA_LOOKIN_DEBUG) console.error('[ea-lookin] LLM', e.message);
@@ -431,7 +442,7 @@ async function getMeetingPrepBullet(nextEvent) {
     const out = await ai(prompt, { temperature: 0.4, max_tokens: 150 });
     const line = (out && String(out).trim()) || '';
     if (!line) return null;
-    return 'Prep: ' + line.replace(/\n/g, ' ').slice(0, 120);
+    return 'Prep: ' + collapseNewlinesToSpace(line).slice(0, 120);
   } catch (_) {
     return null;
   }

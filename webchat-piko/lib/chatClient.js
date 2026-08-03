@@ -15,10 +15,14 @@ const DEFAULT_TIMEOUT_MS = 60000;
  * @param {{ timeout?: number }} [options] - Optional timeout in ms
  * @returns {Promise<{ statusCode: number, data: string, reply?: string }>}
  */
+const {
+  stripTrailingSlash,
+} = require('./text');
+
 function postChat(baseUrl, message, sessionId = 'default', options = {}) {
   const timeout = options.timeout != null ? options.timeout : DEFAULT_TIMEOUT_MS;
   return new Promise((resolve, reject) => {
-    const u = new URL((baseUrl || '').replace(/\/$/, '') + '/api/chat');
+    const u = new URL(stripTrailingSlash((baseUrl || '')) + '/api/chat');
     const body = JSON.stringify({ message: String(message), sessionId: String(sessionId || 'default') });
     const isHttps = u.protocol === 'https:';
     const opts = {

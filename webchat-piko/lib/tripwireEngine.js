@@ -4,6 +4,15 @@
  */
 const fs = require('fs');
 const path = require('path');
+const {
+  parseHhMm,
+  parseClockMention,
+  isAllAsciiDigits,
+  replaceAllLiteral,
+  toLowerAsciiish,
+  extractDigitRuns,
+  stripTrailingSlash,
+} = require('./text');
 
 const DATA_DIR = process.env.PIKO_DATA_DIR || path.join(__dirname, '..', 'data');
 const TRIPWIRES_FILE = path.join(DATA_DIR, 'tripwires.json');
@@ -62,7 +71,7 @@ async function evaluateTripwires(sendAlertCallback) {
 
   try {
     const { getUrl } = require('./legionRunPoller');
-    const url = `${AUSMAKER_BASE_URL.replace(/\/$/, '')}/api/forecast`;
+    const url = `${stripTrailingSlash(AUSMAKER_BASE_URL)}/api/forecast`;
     const res = await getUrl(url);
     if (res.statusCode !== 200) return;
     const data = JSON.parse(res.body || '{}');
@@ -84,7 +93,7 @@ async function evaluateTripwires(sendAlertCallback) {
       } else if (rule.field === 'demand' || rule.field.includes('forecast')) {
         currentValue = parseFloat(item.forecasted_demand ?? item['Forecasted Demand'] ?? item.total_forecasted_units ?? 0);
       } else {
-        currentValue = parseFloat(item[rule.field] ?? item[rule.field.replace(/_/g, ' ')] ?? 0);
+        currentValue = parseFloat(item[rule.field] ?? item[replaceAllLiteral(rule.field, '_', ' ')] ?? 0);
       }
 
       let isConditionMet = false;
@@ -147,6 +156,17 @@ function clearDigestSchedule() {
   }
 }
 
+/** Remove one daily digest time (HH:MM). Returns true if removed. */
+function removeDigestSchedule(timeString) {
+  const normalized = normalizeTimeString(timeString);
+  if (!normalized) return false;
+  const schedules = loadSchedules();
+  const next = schedules.filter((s) => s && s.time !== normalized);
+  if (next.length === schedules.length) return false;
+  saveSchedules(next);
+  return true;
+}
+
 /** Add or update a daily digest schedule. timeString in "HH:MM" 24-hour format. */
 function addSummarySchedule(timeString) {
   const normalized = normalizeTimeString(timeString);
@@ -164,22 +184,26 @@ function addSummarySchedule(timeString) {
 function normalizeTimeString(s) {
   if (!s || typeof s !== 'string') return null;
   const t = s.trim();
-  const hhmm = t.match(/^(\d{1,2}):(\d{2})$/);
+  const hhmm = parseHhMm(t);
   if (hhmm) {
-    const h = Math.min(23, Math.max(0, parseInt(hhmm[1], 10)));
-    const m = Math.min(59, Math.max(0, parseInt(hhmm[2], 10)));
-    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+    return `${String(hhmm.h).padStart(2, '0')}:${String(hhmm.m).padStart(2, '0')}`;
   }
-  const pm = /(\d{1,2})\s*(?:am|pm|a\.m\.|p\.m\.)/i.exec(t);
-  if (pm) {
-    let h = parseInt(pm[1], 10);
-    if (/p\.?m/i.test(t)) h = h === 12 ? 12 : h + 12;
-    else if (/a\.?m/i.test(t)) h = h === 12 ? 0 : h;
-    h = Math.min(23, Math.max(0, h));
-    return `${String(h).padStart(2, '0')}:00`;
+  const low = toLowerAsciiish(replaceAllLiteral(replaceAllLiteral(t, '.', ''), ' ', ''));
+  // forms like 4pm / 4am / 16:00 already handled; try clock mention on original
+  const mentioned = parseClockMention(t);
+  if (mentioned) return mentioned;
+  // bare hour + am/pm without space: 4pm
+  if ((low.endsWith('am') || low.endsWith('pm')) && low.length >= 3) {
+    const numPart = low.slice(0, -2);
+    if (isAllAsciiDigits(numPart) && numPart.length <= 2) {
+      let h = parseInt(numPart, 10);
+      if (low.endsWith('pm')) h = h === 12 ? 12 : h + 12;
+      else h = h === 12 ? 0 : h;
+      h = Math.min(23, Math.max(0, h));
+      return `${String(h).padStart(2, '0')}:00`;
+    }
   }
-  const hOnly = /^(\d{1,2})$/;
-  if (hOnly.test(t)) {
+  if (isAllAsciiDigits(t) && t.length <= 2) {
     const h = Math.min(23, Math.max(0, parseInt(t, 10)));
     return `${String(h).padStart(2, '0')}:00`;
   }
@@ -265,7 +289,7 @@ async function flushDailyDigest(sendCallback) {
 async function flushWeeklyPO(sendReportCallback) {
   try {
     const { getUrl } = require('./legionRunPoller');
-    const url = `${AUSMAKER_BASE_URL.replace(/\/$/, '')}/api/purchase_orders/draft_csv`;
+    const url = `${stripTrailingSlash(AUSMAKER_BASE_URL)}/api/purchase_orders/draft_csv`;
     const res = await getUrl(url);
     if (res.statusCode !== 200) {
       console.error('[WEEKLY PO] draft_csv failed', { url, statusCode: res.statusCode, bodySnippet: (res.body || '').slice(0, 200) });
@@ -307,6 +331,7 @@ module.exports = {
   saveSchedules,
   addSummarySchedule,
   clearDigestSchedule,
+  removeDigestSchedule,
   flushDailyDigest,
   flushWeeklyPO,
   normalizeTimeString,

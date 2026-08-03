@@ -2,7 +2,23 @@
  * Parse operator goals for literature seek/mission-fit.
  * Singular named-title asks must seek one work and keep at most one deliverable.
  * Author+topic plural (and near-plural) asks carry an author contract.
+ * WP8: no regex.
  */
+
+const {
+  collapseWhitespace,
+  toLowerAsciiish,
+  includesAny,
+  startsWithIgnoreCase,
+  startsWithAny,
+  stripTrailingPunct,
+  keepLettersDigitsSpaces,
+  isAsciiLetter,
+  isAsciiDigit,
+  isLetterOrNumber,
+  replaceAllLiteral,
+  normalizeApostrophes,
+} = require('./text');
 
 const STOP = new Set([
   'a', 'an', 'the', 'of', 'and', 'in', 'on', 'to', 'for', 'by', 'with', 'from',
@@ -11,37 +27,45 @@ const STOP = new Set([
   'all', 'every', 'any', 'about', 'regarding', 'dealing', 'written', 'ancient',
 ]);
 
-// Particles that appear inside person names ("Pliny the Elder", "W. M. Flinders
-// Petrie", "van Kerkwyk") without breaking the capitalised-name matcher.
-const NAME_PARTICLE = '(?:the|of|de|del|della|van|von|da|di|le|la|du)';
-const NAME_TOKEN = `(?:[A-Z][\\w.'’-]*|${NAME_PARTICLE})`;
-const NAME_RE = `[A-Z][\\w.'’-]*(?:\\s+${NAME_TOKEN}){0,5}`;
-const MULTI_NAME_RE = `[A-Z][\\w.'’-]*(?:\\s+${NAME_TOKEN}){1,5}`;
+const NAME_PARTICLES = new Set([
+  'the', 'of', 'de', 'del', 'della', 'van', 'von', 'da', 'di', 'le', 'la', 'du',
+]);
 
-const WORK_NOUNS = '(?:articles?|books?|works?|papers?|pdfs?|volumes?|writings?|'
-  + 'essays?|reports?|publications?|lectures?|monographs?|accounts?|surveys?|'
-  + 'material|materials|sources?|texts?|descriptions?|records?|notes?)';
+const WORK_NOUN_STEMS = [
+  'article', 'articles', 'book', 'books', 'work', 'works', 'paper', 'papers',
+  'pdf', 'pdfs', 'volume', 'volumes', 'writing', 'writings', 'essay', 'essays',
+  'report', 'reports', 'publication', 'publications', 'lecture', 'lectures',
+  'monograph', 'monographs', 'account', 'accounts', 'survey', 'surveys',
+  'material', 'materials', 'source', 'sources', 'text', 'texts',
+  'description', 'descriptions', 'record', 'records', 'note', 'notes',
+];
+
+const GENERIC_DESC_STEMS = [
+  'account', 'accounts', 'material', 'materials', 'source', 'sources',
+  'text', 'texts', 'writing', 'writings', 'report', 'reports',
+  'survey', 'surveys', 'description', 'descriptions', 'record', 'records',
+];
+
+function isNameTokenChar(ch) {
+  return isAsciiLetter(ch) || isAsciiDigit(ch) || ch === '.' || ch === "'" || ch === '-'
+    || ch === '\u2019' || ch === '\u2018';
+}
 
 function normalizeTitle(s) {
-  return String(s || '')
-    .toLowerCase()
-    .replace(/['’]/g, '')
-    // Unicode-aware: keep letters like ö/é so Göbekli ≠ "bekli"
-    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+  let t = toLowerAsciiish(s);
+  t = normalizeApostrophes(t);
+  t = replaceAllLiteral(t, "'", '');
+  // Keep letters/numbers/spaces (unicode-aware via keepLettersDigitsSpaces)
+  t = keepLettersDigitsSpaces(t);
+  return collapseWhitespace(t);
 }
 
 function significantTokens(s) {
   return normalizeTitle(s)
-    .split(/\s+/)
+    .split(' ')
     .filter((t) => t.length > 2 && !STOP.has(t));
 }
 
-/**
- * Fraction of expected title tokens present in candidate (0–1).
- * Penalizes alternate main titles (e.g. Giza Power Plant vs Lost Technologies).
- */
 function titleMatchScore(expected, candidate) {
   const eToks = significantTokens(expected);
   if (!eToks.length) return 0;
@@ -55,12 +79,10 @@ function titleMatchScore(expected, candidate) {
   }
   let forward = hit / eToks.length;
 
-  // Exact / edition: expected title phrase appears in candidate.
   if (eNorm.length >= 10 && (cNorm.includes(eNorm) || eNorm.includes(cNorm))) {
     return Math.max(forward, 0.95);
   }
 
-  // Different head title → strongly demote partial keyword overlap.
   if (eToks.length >= 2 && cToks.length >= 2) {
     const eHead = `${eToks[0]} ${eToks[1]}`;
     const cHead = `${cToks[0]} ${cToks[1]}`;
@@ -75,8 +97,8 @@ function authorMatch(expected, candidate) {
   const e = normalizeTitle(expected);
   const c = normalizeTitle(candidate);
   if (!e || !c || c === 'unknown') return false;
-  const eParts = e.split(/\s+/).filter((p) => p.length > 2 && !STOP.has(p));
-  const cParts = new Set(c.split(/\s+/));
+  const eParts = e.split(' ').filter((p) => p.length > 2 && !STOP.has(p));
+  const cParts = new Set(c.split(' '));
   if (!eParts.length) return c.includes(e) || e.includes(c);
   const hits = eParts.filter((p) => cParts.has(p) || c.includes(p)).length;
   return hits >= Math.min(2, eParts.length) || (eParts.length === 1 && hits === 1);
@@ -84,62 +106,358 @@ function authorMatch(expected, candidate) {
 
 function stripInstructionPreamble(goal) {
   let q = String(goal || '').trim();
-  q = q.replace(
-    /^(please\s+)?(can\s+you\s+|could\s+you\s+)?(find|add|get|download|seek|locate|search\s+for)\s+(and\s+)?(add\s+)?(to\s+(the\s+)?corpus\s+)?/i,
-    '',
-  );
-  q = q.replace(/\s+(and\s+)?add\s+(it\s+|them\s+)?to\s+(the\s+)?corpus\.?$/i, '');
-  q = q.replace(/\s+to\s+(the\s+)?corpus\.?$/i, '');
-  return q.replace(/\s+/g, ' ').trim();
+  const low = toLowerAsciiish(q);
+  // Strip leading please/can you/find/add…to corpus
+  const verbs = ['find ', 'add ', 'get ', 'download ', 'seek ', 'locate ', 'search for '];
+  let start = 0;
+  if (low.startsWith('please ')) start = 7;
+  const afterPlease = low.slice(start);
+  if (afterPlease.startsWith('can you ')) start += 8;
+  else if (afterPlease.startsWith('could you ')) start += 10;
+  const restLow = low.slice(start);
+  for (const v of verbs) {
+    if (restLow.startsWith(v)) {
+      start += v.length;
+      break;
+    }
+  }
+  let midLow = low.slice(start);
+  if (midLow.startsWith('and ')) {
+    start += 4;
+    midLow = low.slice(start);
+  }
+  if (midLow.startsWith('add ')) {
+    start += 4;
+    midLow = low.slice(start);
+  }
+  for (const phrase of ['to the corpus ', 'to corpus ']) {
+    if (midLow.startsWith(phrase)) {
+      start += phrase.length;
+      break;
+    }
+  }
+  q = q.slice(start).trim();
+
+  // Strip trailing "and add … to corpus"
+  const qLow = toLowerAsciiish(q);
+  for (const tail of [
+    ' and add it to the corpus',
+    ' and add them to the corpus',
+    ' and add to the corpus',
+    ' and add it to corpus',
+    ' and add them to corpus',
+    ' and add to corpus',
+    ' to the corpus',
+    ' to corpus',
+  ]) {
+    if (qLow.endsWith(tail) || qLow.endsWith(`${tail}.`)) {
+      const cut = qLow.endsWith('.') ? tail.length + 1 : tail.length;
+      q = q.slice(0, q.length - cut).trim();
+      break;
+    }
+  }
+  return collapseWhitespace(q);
 }
 
-/**
- * Detect plural / corpus-wide asks vs one named work.
- */
 function isPluralCorpusAsk(goal) {
-  const g = String(goal || '').toLowerCase();
-  if (/\b(all|every|works by|books by|pdfs|articles|volumes by|complete works|corpus of)\b/.test(g)) {
-    return true;
+  const g = toLowerAsciiish(goal);
+  if (includesAny(g, [
+    'all ', 'every ', 'works by', 'books by', 'pdfs', 'articles', 'volumes by',
+    'complete works', 'corpus of',
+  ])) {
+    // "all"/"every" alone as substrings — check carefully via padded words
+    if (includesAny(` ${g} `, [' all ', ' every '])
+      || includesAny(g, ['works by', 'books by', 'pdfs', 'articles', 'volumes by', 'complete works', 'corpus of'])) {
+      return true;
+    }
   }
-  if (/\b(books|pdfs|articles|volumes|accounts|surveys|material|materials|sources|texts|writings|reports)\b/.test(g)
-    && !/\b(this|that|one|specific|titled|called|named)\b/.test(g)) {
+  const pluralNouns = [
+    'books', 'pdfs', 'articles', 'volumes', 'accounts', 'surveys',
+    'material', 'materials', 'sources', 'texts', 'writings', 'reports',
+  ];
+  if (includesAny(g, pluralNouns)
+    && !includesAny(g, ['this ', 'that ', 'one ', 'specific', 'titled', 'called', 'named'])) {
     return true;
   }
   return false;
 }
 
-/**
- * Generic descriptive phrases that are NEVER a book title — they signal an
- * author+topic ask ("ancient written accounts of X by Herodotus").
- */
 function isGenericDescription(title) {
-  return /^(ancient\s+)?(written\s+)?(accounts?|material|materials|sources?|texts?|writings?|reports?|surveys?|descriptions?|records?)\b/i
-    .test(String(title || '').trim());
+  let t = String(title || '').trim();
+  const low = toLowerAsciiish(t);
+  let rest = low;
+  if (rest.startsWith('ancient ')) rest = rest.slice(8);
+  if (rest.startsWith('written ')) rest = rest.slice(8);
+  for (const stem of GENERIC_DESC_STEMS) {
+    if (rest === stem || rest.startsWith(`${stem} `) || rest.startsWith(`${stem}.`)) return true;
+  }
+  return false;
 }
 
 function cleanAuthor(name) {
   if (!name) return null;
-  let a = String(name).trim()
-    .replace(/'s$/i, '')
-    .replace(/[.,;:!?]+$/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-  // Drop leading filler ("all", "every") if a capture over-reached.
-  a = a.replace(/^(all|every|of)\s+/i, '').trim();
+  let a = String(name).trim();
+  if (endsWithIgnoreCase(a, "'s")) a = a.slice(0, -2);
+  else if (endsWithIgnoreCase(a, '\u2019s')) a = a.slice(0, -2);
+  a = stripTrailingPunct(a);
+  a = collapseWhitespace(a);
+  const aLow = toLowerAsciiish(a);
+  for (const filler of ['all ', 'every ', 'of ']) {
+    if (aLow.startsWith(filler)) {
+      a = a.slice(filler.length).trim();
+      break;
+    }
+  }
   if (!a || significantTokens(a).length === 0) return null;
   return a;
 }
 
-/**
- * Topic keywords after "dealing with / about / regarding / on …".
- * Used by the topic-relevance contract for author+topic asks.
- */
+function endsWithIgnoreCase(s, suffix) {
+  return toLowerAsciiish(s).endsWith(toLowerAsciiish(suffix));
+}
+
 function extractTopic(goal) {
   const g = String(goal || '');
-  const m = g.match(/\b(?:dealing with|about|regarding|on|concerning)\s+(.+?)(?:[.!?]|$)/i);
-  if (!m) return null;
-  const toks = significantTokens(m[1]).filter((t) => t.length > 3);
-  return toks.length ? toks.slice(0, 8) : null;
+  const low = toLowerAsciiish(g);
+  const cues = ['dealing with ', 'about ', 'regarding ', 'on ', 'concerning '];
+  let best = null;
+  for (const cue of cues) {
+    let from = 0;
+    while (from < low.length) {
+      const idx = low.indexOf(cue, from);
+      if (idx < 0) break;
+      if (idx === 0 || !isAsciiLetter(low[idx - 1])) {
+        let end = g.length;
+        for (let i = idx + cue.length; i < g.length; i++) {
+          if (g[i] === '.' || g[i] === '!' || g[i] === '?') {
+            end = i;
+            break;
+          }
+        }
+        const slice = g.slice(idx + cue.length, end);
+        const toks = significantTokens(slice).filter((t) => t.length > 3);
+        if (toks.length) {
+          best = toks.slice(0, 8);
+        }
+      }
+      from = idx + cue.length;
+    }
+  }
+  return best;
+}
+
+/**
+ * Scan a capitalized person name starting at index.
+ * Allows particles (the/of/van…) between capital tokens.
+ * Returns { name, end } or null.
+ */
+function scanPersonName(text, start, opts = {}) {
+  const s = String(text || '');
+  const minTokens = opts.minTokens != null ? opts.minTokens : 1;
+  const maxTokens = opts.maxTokens != null ? opts.maxTokens : 6;
+  let i = start;
+  while (i < s.length && s[i] === ' ') i += 1;
+  if (i >= s.length) return null;
+  // First token must be capital letter (not particle-only)
+  if (s[i] < 'A' || s[i] > 'Z') return null;
+
+  const tokens = [];
+  while (i < s.length && tokens.length < maxTokens) {
+    if (tokens.length) {
+      if (s[i] !== ' ') break;
+      while (i < s.length && s[i] === ' ') i += 1;
+      if (i >= s.length) break;
+    }
+    // Particle?
+    let wordEnd = i;
+    while (wordEnd < s.length && isNameTokenChar(s[wordEnd])) wordEnd += 1;
+    if (wordEnd === i) break;
+    const tok = s.slice(i, wordEnd);
+    const tokLow = toLowerAsciiish(tok);
+    if (tokens.length && NAME_PARTICLES.has(tokLow)) {
+      tokens.push(tok);
+      i = wordEnd;
+      continue;
+    }
+    if (tok[0] < 'A' || tok[0] > 'Z') break;
+    tokens.push(tok);
+    i = wordEnd;
+  }
+  if (tokens.length < minTokens) return null;
+  // Drop trailing particle
+  while (tokens.length && NAME_PARTICLES.has(toLowerAsciiish(tokens[tokens.length - 1]))) {
+    tokens.pop();
+  }
+  if (tokens.length < minTokens) return null;
+  return { name: tokens.join(' '), end: i };
+}
+
+function startsWithWorkNoun(s) {
+  const low = toLowerAsciiish(String(s || '').trim());
+  for (const n of WORK_NOUN_STEMS) {
+    if (low === n || low.startsWith(`${n} `)) return true;
+  }
+  return false;
+}
+
+function findTrailingByAuthor(cleaned) {
+  const low = toLowerAsciiish(cleaned);
+  for (const cue of ['authored by ', 'written by ', 'by ']) {
+    const idx = low.lastIndexOf(cue);
+    if (idx < 0) continue;
+    if (idx > 0 && isAsciiLetter(low[idx - 1])) continue;
+    const scanned = scanPersonName(cleaned, idx + cue.length, { minTokens: 1, maxTokens: 6 });
+    if (!scanned) continue;
+    // Prefer end-anchored for bare "by"
+    const after = cleaned.slice(scanned.end).trim();
+    if (cue === 'by ' && after && after !== '.' && after !== '') {
+      // allow if only trailing punct
+      if (stripTrailingPunct(after) !== '') continue;
+    }
+    return scanned.name;
+  }
+  // Non-end authored/written by
+  for (const cue of ['authored by ', 'written by ']) {
+    const idx = low.indexOf(cue);
+    if (idx < 0) continue;
+    const scanned = scanPersonName(cleaned, idx + cue.length, { minTokens: 1, maxTokens: 6 });
+    if (scanned) return scanned.name;
+  }
+  return null;
+}
+
+function findAllNameWorks(cleaned) {
+  const low = toLowerAsciiish(cleaned);
+  for (const quant of ['all ', 'every ']) {
+    let from = 0;
+    while (from < low.length) {
+      const idx = low.indexOf(quant, from);
+      if (idx < 0) break;
+      if (idx > 0 && isAsciiLetter(low[idx - 1])) {
+        from = idx + quant.length;
+        continue;
+      }
+      let pos = idx + quant.length;
+      // optional "of "
+      if (low.slice(pos, pos + 3) === 'of ') pos += 3;
+
+      // Pattern A: all <Name> works
+      const nameA = scanPersonName(cleaned, pos, { minTokens: 2, maxTokens: 6 });
+      if (nameA) {
+        let after = cleaned.slice(nameA.end).trim();
+        if (startsWithIgnoreCase(after, "'s")) after = after.slice(2).trim();
+        else if (after.startsWith('\u2019s')) after = after.slice(2).trim();
+        // optional adjective before work noun
+        const afterLow = toLowerAsciiish(after);
+        let check = after;
+        if (!startsWithWorkNoun(check)) {
+          // skip one word
+          const sp = after.indexOf(' ');
+          if (sp > 0) check = after.slice(sp + 1);
+        }
+        if (startsWithWorkNoun(check)) return nameA.name;
+      }
+
+      // Pattern B: all works by <Name>
+      for (const noun of WORK_NOUN_STEMS) {
+        if (low.slice(pos, pos + noun.length) === noun) {
+          let p2 = pos + noun.length;
+          while (p2 < cleaned.length && cleaned[p2] === ' ') p2 += 1;
+          if (toLowerAsciiish(cleaned.slice(p2, p2 + 3)) === 'by ') {
+            const nameB = scanPersonName(cleaned, p2 + 3, { minTokens: 1, maxTokens: 6 });
+            if (nameB) return nameB.name;
+          }
+        }
+      }
+      from = idx + quant.length;
+    }
+  }
+
+  // "<Name>'s articles"
+  for (let i = 0; i < cleaned.length - 2; i++) {
+    if (cleaned[i] === "'" || cleaned[i] === '\u2019') {
+      if (toLowerAsciiish(cleaned[i + 1]) !== 's') continue;
+      if (i + 2 < cleaned.length && cleaned[i + 2] !== ' ') continue;
+      // walk back to find name start
+      let start = i - 1;
+      while (start > 0 && cleaned[start - 1] !== '.' && !(cleaned[start - 1] === ' ' && start > 1 && !isNameTokenChar(cleaned[start - 2]) && cleaned[start - 2] !== ' ')) {
+        // simpler: find whitespace-run before capitalized sequence
+        start -= 1;
+        if (start < 0) break;
+      }
+      // Find beginning of name: last stretch of name tokens before 's
+      let nameStart = i;
+      while (nameStart > 0) {
+        const ch = cleaned[nameStart - 1];
+        if (isNameTokenChar(ch) || ch === ' ') nameStart -= 1;
+        else break;
+      }
+      while (nameStart < i && cleaned[nameStart] === ' ') nameStart += 1;
+      const namePart = cleaned.slice(nameStart, i).trim();
+      const scanned = scanPersonName(namePart, 0, { minTokens: 1, maxTokens: 6 });
+      if (!scanned || scanned.name !== namePart) continue;
+      let after = cleaned.slice(i + 2).trim();
+      if (after.startsWith(' ')) after = after.trim();
+      // optional word then work noun
+      if (!startsWithWorkNoun(after)) {
+        const sp = after.indexOf(' ');
+        if (sp > 0) after = after.slice(sp + 1);
+      }
+      if (startsWithWorkNoun(after)) return scanned.name;
+    }
+  }
+  return null;
+}
+
+function parsePossessiveTitle(cleaned) {
+  // Author's Title
+  for (let i = 0; i < cleaned.length - 2; i++) {
+    if ((cleaned[i] === "'" || cleaned[i] === '\u2019') && toLowerAsciiish(cleaned[i + 1]) === 's') {
+      if (i + 2 < cleaned.length && cleaned[i + 2] !== ' ') continue;
+      let nameStart = i;
+      while (nameStart > 0) {
+        const ch = cleaned[nameStart - 1];
+        if (isNameTokenChar(ch) || ch === ' ') nameStart -= 1;
+        else break;
+      }
+      while (nameStart < i && cleaned[nameStart] === ' ') nameStart += 1;
+      if (nameStart !== 0) continue; // must be at start for this pattern
+      const namePart = cleaned.slice(0, i).trim();
+      const scanned = scanPersonName(namePart, 0, { minTokens: 1, maxTokens: 6 });
+      if (!scanned || collapseWhitespace(scanned.name) !== collapseWhitespace(namePart)) continue;
+      let title = cleaned.slice(i + 2).trim();
+      title = stripTrailingPunct(title);
+      for (const q of ['"', "'"]) {
+        while (title.endsWith(q)) title = title.slice(0, -1).trim();
+      }
+      if (!title || isGenericDescription(title) || startsWithWorkNoun(title)) continue;
+      return { author: cleanAuthor(scanned.name), title };
+    }
+  }
+  return null;
+}
+
+function parseTitleByAuthor(cleaned) {
+  const low = toLowerAsciiish(cleaned);
+  // Find " by " near the end with a name after
+  let from = 0;
+  let best = null;
+  while (from < low.length) {
+    const idx = low.indexOf(' by ', from);
+    if (idx < 0) break;
+    const left = cleaned.slice(0, idx).trim();
+    const scanned = scanPersonName(cleaned, idx + 4, { minTokens: 1, maxTokens: 6 });
+    if (scanned) {
+      const after = stripTrailingPunct(cleaned.slice(scanned.end).trim());
+      if (!after && left && !isGenericDescription(left)) {
+        let title = left;
+        if (startsWithIgnoreCase(title, 'the book ')) title = title.slice(9).trim();
+        best = { author: cleanAuthor(scanned.name), title };
+      }
+    }
+    from = idx + 4;
+  }
+  return best;
 }
 
 /**
@@ -162,96 +480,68 @@ function parseNamedWork(goal) {
   let author = null;
   let title = null;
 
-  // Author's Title…
-  let m = cleaned.match(
-    new RegExp(`^(${NAME_RE})'s\\s+(.+)$`),
-  );
-  if (m && !isGenericDescription(m[2]) && !new RegExp(`^${WORK_NOUNS}\\b`, 'i').test(m[2].trim())) {
-    author = cleanAuthor(m[1]);
-    title = m[2].replace(/[.!?"']+$/, '').trim();
+  const poss = parsePossessiveTitle(cleaned);
+  if (poss) {
+    author = poss.author;
+    title = poss.title;
   }
 
-  // Title by Author (only when the left side looks like a real title, not a
-  // generic "accounts of X by Author" description).
   if (!title) {
-    m = cleaned.match(new RegExp(`^(.+?)\\s+by\\s+(${NAME_RE})\\.?$`));
-    if (m && !isGenericDescription(m[1])) {
-      title = m[1].replace(/^(the\s+book\s+)/i, '').trim();
-      author = cleanAuthor(m[2]);
+    const by = parseTitleByAuthor(cleaned);
+    if (by) {
+      title = by.title;
+      author = by.author;
     }
   }
 
-  // Author+topic / authored-works asks — no single title, but the author is a
-  // hard contract. Fire for plurals AND for non-plural "accounts by X" shapes.
   if (!title || isGenericDescription(title)) {
     if (isGenericDescription(title)) title = null;
 
-    // "… (authored|written) by <Name>" / trailing "by <Name>"
-    let am = cleaned.match(new RegExp(`\\b(?:authored\\s+by|written\\s+by|by)\\s+(${NAME_RE})\\.?$`, 'i'));
-    if (!am) {
-      am = cleaned.match(new RegExp(`\\b(?:authored\\s+by|written\\s+by)\\s+(${NAME_RE})`, 'i'));
-    }
-    if (am) author = cleanAuthor(am[1]);
+    const byAuth = findTrailingByAuthor(cleaned);
+    if (byAuth) author = cleanAuthor(byAuth);
 
-    // "all <Name> articles…" / "every <Name> paper…"
     if (!author) {
-      am = cleaned.match(new RegExp(
-        `\\b(?:[Aa]ll|[Ee]very)\\s+(?:of\\s+)?(${MULTI_NAME_RE})(?:'s)?\\s+${WORK_NOUNS}\\b`,
-      ));
-      if (am) author = cleanAuthor(am[1]);
-    }
-
-    // "<Name>'s articles/reports…"
-    if (!author) {
-      am = cleaned.match(new RegExp(`\\b(${NAME_RE})'s\\s+(?:\\w+\\s+)?${WORK_NOUNS}\\b`));
-      if (am) author = cleanAuthor(am[1]);
-    }
-
-    // "all material by <Name>" / "all <Name> material"
-    if (!author) {
-      am = cleaned.match(new RegExp(`\\b(?:[Aa]ll|[Ee]very)\\s+${WORK_NOUNS}\\s+by\\s+(${NAME_RE})`, 'i'));
-      if (am) author = cleanAuthor(am[1]);
-    }
-    if (!author) {
-      am = cleaned.match(new RegExp(
-        `\\b(?:[Aa]ll|[Ee]very)\\s+(${MULTI_NAME_RE})\\s+${WORK_NOUNS}\\b`,
-      ));
-      if (am) author = cleanAuthor(am[1]);
+      const fromAll = findAllNameWorks(cleaned);
+      if (fromAll) author = cleanAuthor(fromAll);
     }
   }
 
-  // Fallback: remaining text after strip is the work name — ONLY when it does
-  // not look like a generic description and is not a plural ask.
   if (!title && !author && cleaned && cleaned.length >= 8 && !plural) {
-    title = cleaned.replace(/[.!?]+$/, '').trim();
+    title = stripTrailingPunct(cleaned);
     if (isGenericDescription(title)) {
       title = null;
     } else {
-      m = title.match(new RegExp(`^(${NAME_RE})'s\\s+(.+)$`));
-      if (m && !isGenericDescription(m[2])) {
-        author = cleanAuthor(m[1]);
-        title = m[2].trim();
+      const poss2 = parsePossessiveTitle(title);
+      if (poss2 && !isGenericDescription(poss2.title)) {
+        author = poss2.author;
+        title = poss2.title;
       }
     }
   }
 
+  const titleLow = toLowerAsciiish(title || '');
   const isSingularTitle = !plural && !!title && title.length >= 8
-    && !/\b(all|every)\b/i.test(title)
+    && !includesAny(` ${titleLow} `, [' all ', ' every '])
     && !isGenericDescription(title);
   const isAuthorWorks = !isSingularTitle && !!author;
   const topic = extractTopic(raw);
 
   let seekQuery = cleaned || raw;
   if (isSingularTitle) {
-    // Dequote first — titles carrying quotes would otherwise double-wrap
-    // into unusable search phrases like ""The Giza Power Plant" Dunn PDF".
-    const bare = title.replace(/["“”]/g, '').replace(/\s+PDF$/i, '').trim();
+    let bare = title;
+    for (const q of ['"', '\u201c', '\u201d']) bare = replaceAllLiteral(bare, q, '');
+    if (endsWithIgnoreCase(bare, ' PDF')) bare = bare.slice(0, -4).trim();
     const quoted = bare.includes(' ') ? `"${bare}"` : bare;
     seekQuery = [quoted, author, 'PDF'].filter(Boolean).join(' ').trim();
   } else if (isAuthorWorks) {
     const topicBit = topic && topic.length ? topic.slice(0, 4).join(' ') : '';
     seekQuery = [author, topicBit, 'PDF'].filter(Boolean).join(' ').trim();
-  } else if (seekQuery && !/\bpdf\b/i.test(seekQuery) && /book|volume|literature|text/i.test(raw)) {
+  } else if (
+    seekQuery
+    && !includesAny(` ${toLowerAsciiish(seekQuery)} `, [' pdf '])
+    && !toLowerAsciiish(seekQuery).endsWith(' pdf')
+    && includesAny(toLowerAsciiish(raw), ['book', 'volume', 'literature', 'text'])
+  ) {
     seekQuery = `${seekQuery} PDF`;
   }
 

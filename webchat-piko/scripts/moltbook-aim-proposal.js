@@ -22,6 +22,7 @@ const JOURNAL_FILE = path.join(DATA_DIR, 'moltbook-journal.md');
 const PENDING_PROPOSAL_FILE = path.join(DATA_DIR, 'moltbook-pending-proposal.txt');
 const PENDING_NOTIFICATIONS_FILE = path.join(DATA_DIR, 'pending-notifications.txt');
 const { ai } = require('../lib/llm');
+const { splitLines, splitMarkdownH2Loose, stripListPrefixLoose } = require('../lib/text');
 const JOURNAL_ENTRIES_READ = 10;
 
 function readAim() {
@@ -51,7 +52,7 @@ function readState() {
 function readLastJournalEntries(n) {
   try {
     const raw = fs.readFileSync(JOURNAL_FILE, 'utf8');
-    const blocks = raw.split(/\n##\s+/);
+    const blocks = splitMarkdownH2Loose(raw);
     const entries = [];
     for (let i = blocks.length - 1; i >= 0 && entries.length < n; i--) {
       const block = blocks[i].trim();
@@ -139,7 +140,7 @@ Output only the bullet points, one per line. No preamble.`;
     return;
   }
 
-  const bullets = proposal.split(/\n/).map((l) => l.trim()).filter((l) => l && /^[-*•]?\s*/.test(l) || l.length > 10).slice(0, 4);
+  const bullets = splitLines(proposal).map((l) => l.trim()).filter((l) => l && (stripListPrefixLoose(l).length > 0 || l.length > 10)).slice(0, 4);
   const text = bullets.length ? bullets.join('\n') : proposal.trim().slice(0, 500);
 
   fs.mkdirSync(DATA_DIR, { recursive: true });
