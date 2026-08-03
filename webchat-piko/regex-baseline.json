@@ -1,6 +1,6 @@
 {
-  "updated_at": "2026-08-03T08:54:05.431Z",
-  "total": 857,
+  "updated_at": "2026-08-03T08:54:34.430Z",
+  "total": 854,
   "files": {
     "lib/actionRouter.js": 0,
     "lib/activityLog.js": 0,
@@ -21,7 +21,7 @@
     "lib/agentRuns.js": 0,
     "lib/agentWorker.js": 0,
     "lib/answerLocal.js": 18,
-    "lib/apiAuth.js": 1,
+    "lib/apiAuth.js": 0,
     "lib/ausmakerForecast.js": 1,
     "lib/ausmakerRunbook.js": 30,
     "lib/ausmakerWeeklyDigest.js": 1,
@@ -100,7 +100,7 @@
     "lib/knowledgeBase.js": 22,
     "lib/knowledgeManifest.js": 1,
     "lib/laskoModeration.js": 1,
-    "lib/laskoModerationPatterns.js": 2,
+    "lib/laskoModerationPatterns.js": 0,
     "lib/legateChat.js": 9,
     "lib/legateTools.js": 11,
     "lib/legionAdapterDiscovery.js": 1,
