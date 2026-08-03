@@ -1,0 +1,49 @@
+[
+  {
+    "kind": "status",
+    "ok": true,
+    "mode": null,
+    "keys": [
+      "reply",
+      "route",
+      "legate"
+    ],
+    "reply": "Research campaign: ACTIVE \u00b7 mode=idle (backing off) \u00b7 cycles=742 \u00b7 keeps=66 \u00b7 unsures=0 \u00b7 pending leads=34\nNext cycle due: 2026-08-03T10:19:41.336Z (every 30m, idle_streak=3)\nLast 24h: cycles=163 \u00b7 seeks=254 \u00b7 keeps=13 \u00b7 leads_added=172 \u00b7 i"
+  },
+  {
+    "kind": "opinion",
+    "ok": true,
+    "mode": null,
+    "keys": [
+      "reply"
+    ],
+    "reply": "The Orion Correlation Theory proposes that the layout of the three main pyramids at Giza mirrors the belt stars of the constellation Orion. Some researchers suggest that this alignment is not a coincidence, but rather evidence of advanced k"
+  },
+  {
+    "kind": "musing",
+    "ok": true,
+    "mode": null,
+    "keys": [
+      "reply"
+    ],
+    "reply": "The Osireion at Abydos is indeed an fascinating site. It's one of the earliest and most important temples in ancient Egyptian history, dedicated to the god Osiris. The complex dates back to the 13th dynasty, around 1900 BCE. Many interestin"
+  },
+  {
+    "kind": "work",
+    "ok": true,
+    "mode": null,
+    "keys": [
+      "reply"
+    ],
+    "reply": "I've located a relevant PDF related to W.M. Flinders Petrie's work on the pyramids of Giza. I'll go ahead and add \"The Pyramids and Temples of Gizeh\" by W.M. Flinders Petrie to the corpus. The document should be available for future referen"
+  },
+  {
+    "kind": "control_non_op",
+    "ok": true,
+    "mode": null,
+    "keys": [
+      "reply"
+    ],
+    "reply": "/cursor pause."
+  }
+]

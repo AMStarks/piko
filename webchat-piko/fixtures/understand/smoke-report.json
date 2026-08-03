@@ -1,0 +1,15 @@
+{
+  "n": 80,
+  "accuracy": 0.9875,
+  "failed": 0,
+  "false_work_on_musing_status": 0,
+  "median_latency_ms": 5938,
+  "misses_sample": [
+    {
+      "expected": "work_order",
+      "predicted": "musing",
+      "text": "acceptance: musings demote LLM dispatch; regex never promotes answer→dispatch",
+      "failed": false
+    }
+  ]
+}
