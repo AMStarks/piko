@@ -1,7 +1,7 @@
 # WP9 — Rodimus VRAM Partition (Tier 3, the complete fix)
 
 Date: 2026-08-03
-Status: PLAN (not yet enacted)
+Status: ENACTED (2026-08-03; release `20260803-2151-ac4daa27`)
 Depends on: WP8 (understand() authoritative, deployed `20260803-1935-761b076f`)
 
 ## Problem statement (measured, not guessed)
