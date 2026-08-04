@@ -69,12 +69,38 @@ drain_worker() {
   # Prefer SIGUSR1; also touch drain file so in-process / orphaned workers honour it.
   signal_service "$worker" SIGUSR1
   ssh "$T_HOST" "mkdir -p '$T_DIR/data/agent-jobs' && : > '$T_DIR/data/agent-jobs/.drain' || true"
-  # If PIKO_DATA_DIR differs from $T_DIR/data, also touch under env (best-effort).
-  ssh "$T_HOST" "cd '$T_DIR' && (set -a; [ -f .env ] && . ./.env; set +a; d=\"\${PIKO_DATA_DIR:-$T_DIR/data}\"; mkdir -p \"\$d/agent-jobs\" && : > \"\$d/agent-jobs/.drain\") 2>/dev/null || true"
+  # If PIKO_DATA_DIR differs from $T_DIR/data, also touch under env (best-effort; parse, don't source).
+  ssh "$T_HOST" "cd '$T_DIR' && python3 - <<'PY'
+import pathlib, os
+env = {}
+p = pathlib.Path('.env')
+if p.exists():
+    for line in p.read_text().splitlines():
+        s = line.strip()
+        if s and not s.startswith('#') and '=' in s:
+            k, _, v = s.partition('=')
+            env[k.strip()] = v.strip().strip('\"').strip(\"'\")
+d = env.get('PIKO_DATA_DIR') or '$T_DIR/data'
+os.makedirs(os.path.join(d, 'agent-jobs'), exist_ok=True)
+pathlib.Path(d, 'agent-jobs', '.drain').write_text('')
+print(d)
+PY" >/dev/null 2>&1 || true
   local waited=0
   while (( waited < 90 )); do
     local running
-    running="$(ssh "$T_HOST" "cd '$T_DIR' && (set -a; [ -f .env ] && . ./.env; set +a; d=\"\${PIKO_DATA_DIR:-$T_DIR/data}\"; find \"\$d/agent-jobs/running\" -name '*.json' 2>/dev/null | wc -l)" || echo 0)"
+    running="$(ssh "$T_HOST" "cd '$T_DIR' && python3 - <<'PY'
+import pathlib
+env = {}
+p = pathlib.Path('.env')
+if p.exists():
+    for line in p.read_text().splitlines():
+        s = line.strip()
+        if s and not s.startswith('#') and '=' in s:
+            k, _, v = s.partition('=')
+            env[k.strip()] = v.strip().strip('\"').strip(\"'\")
+d = env.get('PIKO_DATA_DIR') or '$T_DIR/data'
+print(sum(1 for _ in pathlib.Path(d, 'agent-jobs', 'running').glob('*.json')) if pathlib.Path(d, 'agent-jobs', 'running').exists() else 0)
+PY" 2>/dev/null || echo 0)"
     running="$(echo "$running" | tr -d '[:space:]')"
     [[ "${running:-0}" == "0" ]] && { echo "-- drain idle after ${waited}s"; return 0; }
     sleep 3
@@ -95,13 +121,31 @@ restart_service "$T_SERVICE"
 sleep 12
 
 # On-box health probe: honour PIKO_HEALTH_API_KEY when set (handler requires it).
+# Parse .env with Python (never `source`) so unquoted spaces in values cannot break the shell,
+# and the key never crosses the ssh argv.
 health_curl() {
-  ssh "$T_HOST" "cd '$T_DIR' && (set -a; [ -f .env ] && . ./.env; set +a; \
-    if [ -n \"\${PIKO_HEALTH_API_KEY:-}\" ]; then \
-      curl -sf -m 20 -H \"Authorization: Bearer \${PIKO_HEALTH_API_KEY}\" '$T_HEALTH_URL'; \
-    else \
-      curl -sf -m 20 '$T_HEALTH_URL'; \
-    fi) >/dev/null"
+  ssh "$T_HOST" "cd '$T_DIR' && python3 - <<'PY'
+import pathlib, urllib.request, sys
+env = {}
+p = pathlib.Path('.env')
+if p.exists():
+    for line in p.read_text().splitlines():
+        s = line.strip()
+        if not s or s.startswith('#') or '=' not in s:
+            continue
+        k, _, v = s.partition('=')
+        env[k.strip()] = v.strip().strip('\"').strip(\"'\")
+url = '$T_HEALTH_URL'
+req = urllib.request.Request(url)
+hk = env.get('PIKO_HEALTH_API_KEY') or ''
+if hk:
+    req.add_header('Authorization', 'Bearer ' + hk)
+try:
+    urllib.request.urlopen(req, timeout=20).read()
+except Exception as e:
+    print(e, file=sys.stderr)
+    sys.exit(1)
+PY"
 }
 
 echo "-- health check"

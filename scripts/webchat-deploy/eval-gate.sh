@@ -49,13 +49,28 @@ gate_chat_post() {
     fi)" > "$out" 2>/dev/null
 }
 
-# 1. Health (PIKO_HEALTH_API_KEY required when set on the spine)
-ssh "$T_HOST" "cd '$T_DIR' && (set -a; [ -f .env ] && . ./.env; set +a; \
-  if [ -n \"\${PIKO_HEALTH_API_KEY:-}\" ]; then \
-    curl -sf -m 15 -H \"Authorization: Bearer \${PIKO_HEALTH_API_KEY}\" '$BASE/api/health'; \
-  else \
-    curl -sf -m 15 '$BASE/api/health'; \
-  fi)" >/dev/null \
+# 1. Health (PIKO_HEALTH_API_KEY required when set on the spine; parse .env, never source)
+ssh "$T_HOST" "cd '$T_DIR' && python3 - <<'PY'
+import pathlib, urllib.request, sys
+env = {}
+p = pathlib.Path('.env')
+if p.exists():
+    for line in p.read_text().splitlines():
+        s = line.strip()
+        if s and not s.startswith('#') and '=' in s:
+            k, _, v = s.partition('=')
+            env[k.strip()] = v.strip().strip('\"').strip(\"'\")
+url = '$BASE/api/health'
+req = urllib.request.Request(url)
+hk = env.get('PIKO_HEALTH_API_KEY') or ''
+if hk:
+    req.add_header('Authorization', 'Bearer ' + hk)
+try:
+    urllib.request.urlopen(req, timeout=15).read()
+except Exception as e:
+    print(e, file=sys.stderr)
+    sys.exit(1)
+PY" >/dev/null \
   && note "health: OK" || { note "health: FAIL"; FAIL=1; }
 
 # 2. Chat smoke + operator-voice floor
