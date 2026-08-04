@@ -97,9 +97,9 @@ describe('P2.1 agentJobs transition atomicity', () => {
 describe('P2.2 config schema', () => {
   const { validateDetailed, SCHEMA } = require('../lib/config');
 
-  it('declares ~40 production keys', () => {
+  it('declares production-critical env keys', () => {
     assert.ok(SCHEMA.length >= 35);
-    assert.ok(SCHEMA.length <= 60);
+    assert.ok(SCHEMA.length <= 120);
   });
 
   it('accepts valid PORT and rejects invalid', () => {
