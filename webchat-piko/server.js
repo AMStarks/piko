@@ -3088,24 +3088,15 @@ async function handleRequest(req, res) {
     })) return;
   }
 
-  if (req.method === 'GET' && pathname === '/api/notifications/recent') {
-    try {
-      const u = new URL(req.url, 'http://localhost');
-      const limit = Math.min(100, Math.max(1, parseInt(u.searchParams.get('limit') || '40', 10) || 40));
-      const { readMergedNotifications, getCategoryMeta } = require('./lib/notificationFeed');
-      const { polishNotificationText } = require('./lib/operatorVoice');
-      const items = readMergedNotifications(limit).map((n) => ({
-        ...n,
-        text: polishNotificationText(n.text),
-      }));
-      return send(res, 200, JSON.stringify({
-        ok: true,
-        items,
-        categories: getCategoryMeta(),
-      }));
-    } catch (e) {
-      return send(res, 500, JSON.stringify({ ok: false, error: e.message || 'notifications failed' }));
-    }
+  // —— Notifications / pending (extracted: routes/notifications.js) ——
+  {
+    const { tryHandleNotifications } = require('./routes/notifications');
+    if (await tryHandleNotifications(req, res, {
+      pathname,
+      send,
+      fs,
+      pendingNotificationsFile: PENDING_NOTIFICATIONS_FILE,
+    })) return;
   }
 
   // —— Agents / missions / jobs (extracted: routes/agents.js) ——
@@ -4084,16 +4075,6 @@ async function handleRequest(req, res) {
     } catch (e) {
       return send(res, 500, JSON.stringify({ ok: false, error: e.message || 'read failed' }));
     }
-  }
-
-  if (req.method === 'GET' && pathname === '/api/pending') {
-    let pending = [];
-    try {
-      const raw = fs.readFileSync(PENDING_NOTIFICATIONS_FILE, 'utf8');
-      pending = raw.split('\n').filter(Boolean);
-      fs.writeFileSync(PENDING_NOTIFICATIONS_FILE, '', 'utf8');
-    } catch (_) {}
-    return send(res, 200, JSON.stringify({ pending }));
   }
 
   // —— Phase 4: CLI /api/intents (read-only for piko intents) ——
