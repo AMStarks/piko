@@ -3256,17 +3256,6 @@ async function handleRequest(req, res) {
     })) return;
   }
 
-  /** Corpus edit lock: if PIKO_CORPUS_EDIT_ALLOWED_IP or PIKO_CORPUS_EDIT_HEADER is set, require match. */
-  function canEditCorpus(req) {
-    const allowedIps = (process.env.PIKO_CORPUS_EDIT_ALLOWED_IP || '').split(',').map((s) => s.trim()).filter(Boolean);
-    const headerName = (process.env.PIKO_CORPUS_EDIT_HEADER || '').trim().toLowerCase();
-    if (allowedIps.length === 0 && !headerName) return true;
-    const clientIp = (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || (req.socket && req.socket.remoteAddress) || '';
-    if (allowedIps.length && allowedIps.some((ip) => clientIp === ip || clientIp === `::ffff:${ip}`)) return true;
-    if (headerName && req.headers[headerName] !== undefined && req.headers[headerName] !== '') return true;
-    return false;
-  }
-
   // —— State API (extracted: routes/state.js) ——
   {
     const { tryHandleState } = require('./routes/state');
@@ -3316,111 +3305,25 @@ async function handleRequest(req, res) {
     })) return;
   }
 
-  if (req.method === 'GET' && pathname === '/api/mind') {
-    try {
-      const mind = loadMind();
-      const identity = mind.self_model.identity || {};
-      const out = {
-        primary_human: identity.primary_human || '',
-        values: mind.self_model.values || [],
-        constraints: mind.self_model.constraints || [],
-        beliefs: mind.beliefs || [],
-        goals: mind.goals || [],
-        tensions: mind.tensions || [],
-      };
-      return send(res, 200, JSON.stringify(out));
-    } catch (e) {
-      return send(res, 500, JSON.stringify({ error: e.message }));
-    }
+  // —— Mind / corpus / wisdom (extracted: routes/mind.js) ——
+  {
+    const { tryHandleMind } = require('./routes/mind');
+    if (await tryHandleMind(req, res, {
+      pathname,
+      send,
+      readBody,
+      matchPath,
+      loadMind,
+      saveSelfModel,
+      saveBeliefs,
+      loadCorpus,
+      regenerateSummary,
+      getTruthStats,
+      corpusDocs: CORPUS_DOCS,
+      corpusDir: CORPUS_DIR,
+    })) return;
   }
-  if ((req.method === 'POST' && pathname === '/api/mind/primary-human') || (req.method === 'PUT' && pathname === '/api/mind')) {
-    readBody(req)
-      .then((body) => {
-        let data = {};
-        try {
-          data = body ? JSON.parse(body) : {};
-        } catch (_) {
-          return send(res, 400, JSON.stringify({ error: 'Invalid JSON' }));
-        }
-        try {
-          if (pathname === '/api/mind/primary-human' && data.primary_human !== undefined) {
-            saveSelfModel({ primary_human: data.primary_human });
-            return send(res, 200, JSON.stringify({ ok: true }));
-          }
-          if (pathname === '/api/mind' && req.method === 'PUT') {
-            const selfUpdates = {};
-            if (data.primary_human !== undefined) selfUpdates.primary_human = data.primary_human;
-            if (data.values !== undefined) selfUpdates.values = data.values;
-            if (data.constraints !== undefined) selfUpdates.constraints = data.constraints;
-            if (Object.keys(selfUpdates).length) saveSelfModel(selfUpdates);
-            if (data.beliefs !== undefined) saveBeliefs(data.beliefs);
-            return send(res, 200, JSON.stringify({ ok: true }));
-          }
-          return send(res, 400, JSON.stringify({ error: 'Missing body or path' }));
-        } catch (e) {
-          return send(res, 500, JSON.stringify({ error: e.message }));
-        }
-      })
-      .catch((e) => send(res, 500, JSON.stringify({ error: e.message })));
-    return;
-  }
-  if (req.method === 'GET' && pathname === '/api/corpus') {
-    try {
-      const { index, docs } = loadCorpus();
-      return send(res, 200, JSON.stringify({ index, documents: docs }));
-    } catch (e) {
-      return send(res, 500, JSON.stringify({ error: e.message }));
-    }
-  }
-  if (req.method === 'POST' && pathname === '/api/corpus/regenerate-summary') {
-    if (!canEditCorpus(req)) return send(res, 403, JSON.stringify({ error: 'Corpus edit not allowed from this client' }));
-    regenerateSummary()
-      .then((result) => send(res, 200, JSON.stringify(result)))
-      .catch((e) => send(res, 500, JSON.stringify({ ok: false, error: e.message })));
-    return;
-  }
-  const corpusDocMatch = pathname && matchPath(pathname, '/api/corpus/documents/*');
-  if (req.method === 'PUT' && corpusDocMatch) {
-    if (!canEditCorpus(req)) return send(res, 403, JSON.stringify({ error: 'Corpus edit not allowed from this client' }));
-    const docName = decodeURIComponent(corpusDocMatch.rest);
-    if (!CORPUS_DOCS.includes(docName)) {
-      return send(res, 400, JSON.stringify({ error: 'Invalid document name' }));
-    }
-    readBody(req)
-      .then((body) => {
-        let content = typeof body === 'string' ? body : '';
-        try {
-          const j = body ? JSON.parse(body) : null;
-          if (j && j.content !== undefined) content = String(j.content);
-        } catch (_) {}
-        try {
-          fs.mkdirSync(CORPUS_DIR, { recursive: true });
-          fs.writeFileSync(path.join(CORPUS_DIR, docName), content, 'utf8');
-        } catch (e) {
-          return send(res, 500, JSON.stringify({ error: e.message }));
-        }
-        regenerateSummary()
-          .then((result) => send(res, 200, JSON.stringify({ ok: true, ...result })))
-          .catch((e) => send(res, 500, JSON.stringify({ ok: false, error: e.message })));
-      })
-      .catch((e) => send(res, 500, JSON.stringify({ error: e.message })));
-    return;
-  }
-  if (req.method === 'GET' && pathname === '/api/wisdom/truth-stats') {
-    try {
-      const stats = getTruthStats();
-      return send(res, 200, JSON.stringify(stats));
-    } catch (e) {
-      return send(res, 500, JSON.stringify({ error: e.message }));
-    }
-  }
-  if (req.method === 'POST' && pathname === '/api/wisdom/run-nightly') {
-    const runNightly = require('./scripts/nightly_wisdom').runNightlyWisdom;
-    runNightly()
-      .then((result) => send(res, 200, JSON.stringify(result)))
-      .catch((e) => send(res, 500, JSON.stringify({ ok: false, error: e.message })));
-    return;
-  }
+
   if (req.method === 'GET' && pathname === '/api/metrics') {
     try {
       const { getMetrics } = require('./lib/metrics');

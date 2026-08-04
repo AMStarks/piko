@@ -53,24 +53,48 @@ async function tryHandleHq(req, res, ctx = {}) {
   const pathname = ctx.pathname || '';
   if (!isHqPath(pathname)) return false;
 
-  if (req.method === 'GET' && pathname === '/api/observe/summary') return handleObserveSummary(req, res, ctx);
-  if (req.method === 'GET' && pathname === '/api/mgmt/config') return handleMgmtConfig(req, res, ctx);
-  if (req.method === 'POST' && pathname === '/api/mgmt/deploy/trigger') return handleMgmtDeployTrigger(req, res, ctx);
-  if (req.method === 'GET' && pathname === '/api/hq/status') return handleHqStatus(req, res, ctx);
-  if (req.method === 'GET' && pathname === '/api/hq/registry') return handleHqRegistry(req, res, ctx);
-  if (req.method === 'POST' && pathname === '/api/hq/tenants') return handleHqTenantsCreate(req, res, ctx);
+  // Keep method/path checks spaced so routeParity discovery windows do not cross-associate.
+  if (req.method === 'GET' && pathname === '/api/observe/summary') {
+    return handleObserveSummary(req, res, ctx);
+  }
+
+  if (req.method === 'GET' && pathname === '/api/mgmt/config') {
+    return handleMgmtConfig(req, res, ctx);
+  }
+
+  if (req.method === 'POST' && pathname === '/api/mgmt/deploy/trigger') {
+    return handleMgmtDeployTrigger(req, res, ctx);
+  }
+
+  if (req.method === 'GET' && pathname === '/api/hq/status') {
+    return handleHqStatus(req, res, ctx);
+  }
+
+  if (req.method === 'GET' && pathname === '/api/hq/registry') {
+    return handleHqRegistry(req, res, ctx);
+  }
+
+  if (req.method === 'POST' && pathname === '/api/hq/tenants') {
+    return handleHqTenantsCreate(req, res, ctx);
+  }
 
   const { matchPath } = ctx;
   if (!matchPath) return false;
 
   const hqConfigMatch = matchPath(pathname, '/api/hq/tenants/:id/config-push');
-  if (req.method === 'POST' && hqConfigMatch) return handleHqConfigPush(req, res, ctx, hqConfigMatch);
+  if (req.method === 'POST' && hqConfigMatch) {
+    return handleHqConfigPush(req, res, ctx, hqConfigMatch);
+  }
 
   const hqReleaseMatch = matchPath(pathname, '/api/hq/tenants/:id/release');
-  if (req.method === 'POST' && hqReleaseMatch) return handleHqRelease(req, res, ctx, hqReleaseMatch);
+  if (req.method === 'POST' && hqReleaseMatch) {
+    return handleHqRelease(req, res, ctx, hqReleaseMatch);
+  }
 
   const hqTenantSetupMatch = matchPath(pathname, '/api/hq/tenants/:id/setup');
-  if (req.method === 'POST' && hqTenantSetupMatch) return handleHqTenantSetup(req, res, ctx, hqTenantSetupMatch);
+  if (req.method === 'POST' && hqTenantSetupMatch) {
+    return handleHqTenantSetup(req, res, ctx, hqTenantSetupMatch);
+  }
 
   return false;
 }
