@@ -2958,29 +2958,16 @@ async function handleRequest(req, res) {
     })) return;
   }
 
-  if (req.method === 'GET' && pathname === '/api/exports/reorder-csv') {
-    const { getUrl } = require('./lib/legionRunPoller');
-    const csvUrl = `${stripTrailingSlash(AUSMAKER_BASE_URL)}/api/forecast/csv`;
-    try {
-      const upstream = await getUrl(csvUrl);
-      if (upstream.statusCode !== 200) {
-        return send(res, upstream.statusCode || 502, JSON.stringify({ ok: false, error: 'AusMaker CSV unavailable' }), 'application/json');
-      }
-      const data = JSON.parse(upstream.body || '{}');
-      if (!data.success || !data.csv_content) {
-        return send(res, 404, JSON.stringify({ ok: false, error: data.error || 'No CSV data' }), 'application/json');
-      }
-      const stamp = new Date().toISOString().slice(0, 10);
-      res.writeHead(200, {
-        'Content-Type': 'text/csv; charset=utf-8',
-        'Content-Disposition': `attachment; filename="reorder-report-${stamp}.csv"`,
-        'Cache-Control': 'no-store',
-      });
-      res.end(data.csv_content);
-      return;
-    } catch (e) {
-      return send(res, 500, JSON.stringify({ ok: false, error: e.message || 'Export failed' }), 'application/json');
-    }
+  // —— AusMaker export/telemetry/reorders (extracted: routes/ausmaker.js) ——
+  {
+    const { tryHandleAusmaker } = require('./routes/ausmaker');
+    if (await tryHandleAusmaker(req, res, {
+      pathname,
+      send,
+      parseUrl,
+      stripTrailingSlash,
+      ausmakerBaseUrl: AUSMAKER_BASE_URL,
+    })) return;
   }
 
   // P4.1: under PIKO_ENV_STRICT, unconfigured admin gate fails closed (503).
@@ -3633,130 +3620,6 @@ async function handleRequest(req, res) {
       rootDir: __dirname,
       legionAdapterBase: LEGION_ADAPTER_API_BASE,
     })) return;
-  }
-
-  // —— AusMaker telemetry (read-only) ——
-  // Purpose: surface compact business signals for Sovereign HUD without duplicating AusMaker logic in Python/iOS.
-  if (req.method === 'GET' && pathname === '/api/ausmaker/telemetry') {
-    try {
-      const { query } = parseUrl(req.url);
-      const period = String((query && query.period) || 'today').trim().toLowerCase();
-      const safePeriod = ['today', 'week', 'month'].includes(period) ? period : 'today';
-      const base = stripTrailingSlash(AUSMAKER_BASE_URL);
-
-      const { getUrl } = require('./lib/legionRunPoller');
-
-      async function fetchSalesSummary(p) {
-        const res = await getUrl(`${base}/api/sales/summary?period=${encodeURIComponent(p)}`);
-        if (res.statusCode !== 200) return { ok: false, statusCode: res.statusCode, data: null };
-        try { return { ok: true, statusCode: res.statusCode, data: JSON.parse(res.body || '{}') }; } catch (_) { return { ok: false, statusCode: res.statusCode, data: null }; }
-      }
-
-      // Multi-period momentum (T/W/M). Keep the existing `sales` object as the requested period payload for backward compatibility.
-      const salesToday = await fetchSalesSummary('today');
-      const salesWeek = await fetchSalesSummary('week');
-      const salesMonth = await fetchSalesSummary('month');
-      const salesPeriodPayload = safePeriod === 'week' ? salesWeek : (safePeriod === 'month' ? salesMonth : salesToday);
-      const sales = salesPeriodPayload.ok ? salesPeriodPayload.data : null;
-      const sales_periods = {
-        today: salesToday.ok && salesToday.data ? (Number(salesToday.data.total_units_sold) || 0) : 0,
-        week: salesWeek.ok && salesWeek.data ? (Number(salesWeek.data.total_units_sold) || 0) : 0,
-        month: salesMonth.ok && salesMonth.data ? (Number(salesMonth.data.total_units_sold) || 0) : 0,
-      };
-
-      // Forecast cached is cheaper and enough for “inventory health” heuristics.
-      const forecastRes = await getUrl(`${base}/api/forecast/cached`);
-      let forecast = null;
-      if (forecastRes.statusCode === 200) {
-        try { forecast = JSON.parse(forecastRes.body || '{}'); } catch (_) { forecast = null; }
-      }
-
-      const recs = (forecast && (forecast.purchase_recommendations || forecast.purchase_order_items)) || [];
-      const reorderCount = Array.isArray(recs) ? recs.filter((r) => String(r.flag || r.status || '').toLowerCase() === 'reorder').length : 0;
-      const reviewCount = Array.isArray(recs) ? recs.filter((r) => String(r.flag || r.status || '').toLowerCase() === 'review').length : 0;
-      const orderedCount = Array.isArray(recs) ? recs.filter((r) => String(r.flag || r.status || '').toLowerCase() === 'ordered').length : 0;
-
-      // Simple health heuristic for HUD:
-      // - RED if any reorder items exist
-      // - YELLOW if any review items exist
-      // - GREEN otherwise
-      let health = 'GREEN';
-      if (reorderCount > 0) health = 'RED';
-      else if (reviewCount > 0) health = 'YELLOW';
-
-      // Best-effort “operational sync” timestamp. AusMaker cached forecast includes last_synced_at in the cache key inputs,
-      // and may include `_cached_at` in some code paths. We surface whatever exists.
-      const sync_ts = (forecast && (forecast.last_synced_at || forecast.last_synced || forecast._cached_at || forecast.timestamp)) || null;
-
-      return send(res, 200, JSON.stringify({
-        ok: true,
-        source: 'ausmaker',
-        baseUrl: base,
-        period: safePeriod,
-        sales: sales,
-        sales_periods,
-        forecast: {
-          has_cached: !!forecast,
-          reorderCount,
-          reviewCount,
-          orderedCount,
-        },
-        sync_ts,
-        health,
-        updated_at: new Date().toISOString(),
-      }));
-    } catch (e) {
-      return send(res, 500, JSON.stringify({ ok: false, error: e.message || 'Telemetry failed' }));
-    }
-  }
-
-  // —— AusMaker drill-down: reorder list (read-only) ——
-  // Purpose: “Zoom” for HUD RED state — list the SKUs driving reorderCount without loading the full forecast into chat context.
-  if (req.method === 'GET' && pathname === '/api/ausmaker/reorders') {
-    try {
-      const { query } = parseUrl(req.url);
-      const limit = Math.min(200, Math.max(1, parseInt((query && query.limit) || '50', 10) || 50));
-      const base = stripTrailingSlash(AUSMAKER_BASE_URL);
-      const { getUrl } = require('./lib/legionRunPoller');
-
-      const forecastRes = await getUrl(`${base}/api/forecast/cached`);
-      if (forecastRes.statusCode === 204) {
-        return send(res, 200, JSON.stringify({ ok: true, count: 0, items: [], note: 'No cached forecast yet (204). Run a low stock scan to prime the cache.' }));
-      }
-      if (forecastRes.statusCode !== 200) {
-        return send(res, 502, JSON.stringify({ ok: false, error: `AusMaker forecast cached returned ${forecastRes.statusCode}`, statusCode: forecastRes.statusCode }));
-      }
-      let forecast = null;
-      try { forecast = JSON.parse(forecastRes.body || '{}'); } catch (_) { forecast = null; }
-      const recs = (forecast && (forecast.purchase_recommendations || forecast.purchase_order_items)) || [];
-      const reorderItems = Array.isArray(recs)
-        ? recs.filter((r) => String(r.flag || r.status || '').toLowerCase() === 'reorder')
-        : [];
-
-      const items = reorderItems.slice(0, limit).map((r) => {
-        const sku = (r.shopify_sku || r.sku || r.cin7_sku || r.SKU || '').toString().trim();
-        return {
-          sku,
-          cin7_sku: (r.cin7_sku || '').toString().trim() || undefined,
-          shopify_sku: (r.shopify_sku || r.sku || '').toString().trim() || undefined,
-          flag: (r.flag || '').toString(),
-          current_inventory: r.current_inventory ?? r.soh ?? undefined,
-          on_order: r.on_order ?? undefined,
-          forecasted_demand: r.forecasted_demand ?? r.total_forecasted_units ?? undefined,
-          recommended_quantity: r.recommended_quantity ?? r.quantity ?? r.qty ?? undefined,
-        };
-      }).filter((x) => x.sku);
-
-      return send(res, 200, JSON.stringify({
-        ok: true,
-        count: reorderItems.length,
-        limit,
-        items,
-        updated_at: new Date().toISOString(),
-      }));
-    } catch (e) {
-      return send(res, 500, JSON.stringify({ ok: false, error: e.message || 'Reorders drill-down failed' }));
-    }
   }
 
   if (req.method === 'GET' && pathname === '/api/mind') {
