@@ -363,12 +363,24 @@ async function runSteps(steps, ctx = {}) {
         : `Step ${displayN}/${totalLabel}: running ${label}…`,
     });
     try {
+      // P2.5c: cap seek/harvest tool time against remaining job budget.
+      let deadlineFrag = {};
+      if (ctx.job) {
+        try {
+          const { deadlineOptsForJob } = require('./jobDeadline');
+          const toolDefault = (step.tool === 'seek_files' || step.tool === 'seek')
+            ? Number(process.env.PIKO_EI_SEEK_FILES_TIMEOUT_MS || 600000)
+            : Number(process.env.PIKO_EI_TOOL_TIMEOUT_MS || 300000);
+          deadlineFrag = deadlineOptsForJob(ctx.job, toolDefault);
+        } catch (_) { /* optional */ }
+      }
       const out = await toolFn(step.tool, step.args || {}, {
         goal,
         rootDir: ctx.rootDir,
         source: ctx.source || 'ei_worker',
         pikoUserId: ctx.pikoUserId || 'agent:ei-worker',
         shouldAbort: ctx.shouldAbort,
+        ...deadlineFrag,
       });
       const row = {
         tool: step.tool,
@@ -469,6 +481,7 @@ async function runEiWorker(opts = {}) {
     runToolFn: opts.runToolFn,
     totalSteps: steps.length,
     shouldAbort: opts.shouldAbort,
+    job: opts.job || null,
   });
 
   if (stepResults.some((s) => s && s.cancelled)) {
@@ -523,6 +536,7 @@ async function runEiWorker(opts = {}) {
         stepOffset: stepResults.length,
         totalSteps: stepResults.length + extra.length,
         shouldAbort: opts.shouldAbort,
+        job: opts.job || null,
       });
       stepResults = stepResults.concat(extraResults);
       if (extraResults.some((s) => s && s.cancelled)) {

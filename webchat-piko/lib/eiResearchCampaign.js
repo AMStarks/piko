@@ -361,8 +361,8 @@ function clearRunningLockAtBoot() {
 function saveState(state) {
   const rev = Number(state.revision || 0) + 1;
   const s = { ...state, revision: rev, updated_at: new Date().toISOString() };
-  fs.mkdirSync(path.dirname(statePath()), { recursive: true });
-  fs.writeFileSync(statePath(), JSON.stringify(s, null, 2));
+  const { atomicWriteJson } = require('./atomicJson');
+  atomicWriteJson(statePath(), s);
   return s;
 }
 

@@ -28,8 +28,8 @@ function readJson(file, defaultValue) {
 }
 
 function writeJson(file, data) {
-  fs.mkdirSync(MIND_DIR, { recursive: true });
-  fs.writeFileSync(mindPath(file), JSON.stringify(data, null, 2), 'utf8');
+  const { atomicWriteJson } = require('./atomicJson');
+  atomicWriteJson(mindPath(file), data);
 }
 
 /**

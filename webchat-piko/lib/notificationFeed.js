@@ -1,15 +1,20 @@
 /**
- * Unified notification feed — every outbound alert logs here for dashboard parity with Telegram.
+ * Unified notification feed — append-only JSONL with compaction (P2.1d).
+ * Every outbound alert logs here for dashboard parity with Telegram.
  */
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { atomicAppendJsonl } = require('./atomicJson');
 
 const MAX_LINES = Number(process.env.PIKO_NOTIFICATION_FEED_MAX || 500);
 const DEDUPE_TTL_MS = Math.max(
   60_000,
   Number(process.env.PIKO_NOTIFICATION_DEDUPE_TTL_MS || 24 * 60 * 60 * 1000) || (24 * 60 * 60 * 1000),
 );
+
+/** Serialize append/compact so concurrent notify calls don't race. */
+let writeChain = Promise.resolve();
 
 const CATEGORIES = {
   proactive_update: { label: 'Proactive Update (Last 30 Days)', icon: '🧠' },
@@ -46,27 +51,39 @@ function newId() {
   return `n_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function trimFeedLines(lines) {
-  if (lines.length <= MAX_LINES) return lines;
-  return lines.slice(-MAX_LINES);
+function readAllLines() {
+  const logPath = getFeedPath();
+  if (!fs.existsSync(logPath)) return [];
+  try {
+    return fs.readFileSync(logPath, 'utf8').trim().split('\n').filter(Boolean);
+  } catch (_) {
+    return [];
+  }
 }
 
-/**
- * @param {Object} input
- * @param {string} input.text
- * @param {string} [input.category]
- * @param {string} [input.title]
- * @param {'info'|'warn'|'error'} [input.severity]
- * @param {string} [input.source]
- * @param {Object} [input.channels]
- * @param {Object} [input.meta]
- */
 function notificationDedupeKey(entry) {
   const meta = (entry && entry.meta) || {};
   const subject = meta.task_id || meta.subject || entry.title || '';
   return `${entry.source || ''}::${subject}`;
 }
 
+function compactFeedSync() {
+  const lines = readAllLines();
+  if (lines.length <= MAX_LINES) return lines.length;
+  const kept = lines.slice(-MAX_LINES);
+  const logPath = getFeedPath();
+  // Rewrite via temp+rename of a text blob (not JSON object).
+  const dir = path.dirname(logPath);
+  fs.mkdirSync(dir, { recursive: true });
+  const tmp = path.join(dir, `${path.basename(logPath)}.tmp.${process.pid}`);
+  fs.writeFileSync(tmp, `${kept.join('\n')}\n`, 'utf8');
+  fs.renameSync(tmp, logPath);
+  return kept.length;
+}
+
+/**
+ * @param {Object} input
+ */
 function recordNotification(input = {}) {
   const category = String(input.category || 'system');
   const catMeta = CATEGORIES[category] || CATEGORIES.system;
@@ -92,17 +109,15 @@ function recordNotification(input = {}) {
       ...(tag.profile ? { profile: tag.profile } : {}),
     },
   };
+
+  // Synchronous path for callers that expect an immediate return (legacy).
+  // Dedupe scans recent lines; append is single-line (no RMW of whole file).
   try {
-    const logPath = getFeedPath();
-    fs.mkdirSync(path.dirname(logPath), { recursive: true });
-    const existing = fs.existsSync(logPath)
-      ? trimFeedLines(fs.readFileSync(logPath, 'utf8').trim().split('\n').filter(Boolean))
-      : [];
-    // Dedupe on (source, task_id|subject) within TTL — suppresses nightly spam.
     if (input.dedupe !== false) {
       const key = notificationDedupeKey(entry);
       const now = Date.parse(entry.ts) || Date.now();
       if (key && key !== '::') {
+        const existing = readAllLines();
         for (let i = existing.length - 1; i >= 0; i -= 1) {
           try {
             const prev = JSON.parse(existing[i]);
@@ -116,8 +131,14 @@ function recordNotification(input = {}) {
         }
       }
     }
-    existing.push(JSON.stringify(entry));
-    fs.writeFileSync(logPath, trimFeedLines(existing).join('\n') + '\n', 'utf8');
+    atomicAppendJsonl(getFeedPath(), entry);
+    // Compact asynchronously so hot path stays append-only.
+    writeChain = writeChain.then(() => {
+      try {
+        const n = readAllLines().length;
+        if (n > MAX_LINES + 50) compactFeedSync();
+      } catch (_) { /* ok */ }
+    }).catch(() => {});
   } catch (e) {
     if (process.env.PIKO_LOG_PLANNER === '1') console.warn('[notificationFeed]', e.message);
   }
@@ -126,10 +147,7 @@ function recordNotification(input = {}) {
 
 function readRecentNotifications(limit = 50) {
   try {
-    const logPath = getFeedPath();
-    if (!fs.existsSync(logPath)) return [];
-    const raw = fs.readFileSync(logPath, 'utf8');
-    const lines = raw.trim().split('\n').filter(Boolean);
+    const lines = readAllLines();
     return lines.slice(-Math.max(1, limit)).map((line) => {
       try {
         return JSON.parse(line);
@@ -209,5 +227,7 @@ module.exports = {
   getCategoryMeta,
   getFeedPath,
   mapProactiveDelivery,
+  compactFeedSync,
+  notificationDedupeKey,
   CATEGORIES,
 };

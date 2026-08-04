@@ -5,7 +5,9 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const os = require('os');
 const { dataDir } = require('./agentRegistry');
+const { atomicWriteJson } = require('./atomicJson');
 
 const MAX_DONE = Math.max(50, Number(process.env.PIKO_AGENT_JOBS_MAX || 300));
 /** Cap pending jobs per type (WP5.3). */
@@ -16,6 +18,11 @@ const JOB_TIMEOUT_MS = Math.max(
   Number(process.env.PIKO_AGENT_JOB_TIMEOUT_MS || 20 * 60 * 1000) || (20 * 60 * 1000),
 );
 const STALE_GRACE_MS = Math.max(0, Number(process.env.PIKO_AGENT_JOB_STALE_GRACE_MS || 60_000) || 60_000);
+
+/** P2.5d: claim ownership stamp so two workers don't fight over the same job. */
+function claimOwnerId() {
+  return `${os.hostname()}:${process.pid}`;
+}
 
 function jobsRoot() {
   return path.join(dataDir(), 'agent-jobs');
@@ -40,6 +47,10 @@ function jobPath(status, id) {
   return path.join(dirFor(status), `${id}.json`);
 }
 
+/**
+ * P2.1c: write destination first, then unlink other buckets.
+ * Never unlink-then-write (crash mid-transition lost the job record).
+ */
 function writeJob(job, status) {
   ensureDirs();
   const st = status || job.status || 'pending';
@@ -48,15 +59,20 @@ function writeJob(job, status) {
     status: st,
     updated_at: new Date().toISOString(),
   };
-  // Remove from other buckets
+  const dest = jobPath(st, entry.id);
+  atomicWriteJson(dest, entry);
   for (const s of ['pending', 'running', 'done']) {
+    if (s === st) continue;
     const p = jobPath(s, entry.id);
-    if (s !== st && fs.existsSync(p)) {
-      try { fs.unlinkSync(p); } catch (_) {}
+    if (fs.existsSync(p)) {
+      try { fs.unlinkSync(p); } catch (_) { /* dest already durable */ }
     }
   }
-  fs.writeFileSync(jobPath(st, entry.id), JSON.stringify(entry, null, 2), 'utf8');
   if (st === 'done') trimDone();
+  try {
+    const { recordJobTransition } = require('./opsMetrics');
+    recordJobTransition(entry);
+  } catch (_) { /* optional */ }
   return entry;
 }
 
@@ -152,8 +168,9 @@ function listJobs(limit = 30) {
   return rows.slice(0, Math.max(1, limit));
 }
 
-function claimNextPending() {
+function claimNextPending(opts = {}) {
   ensureDirs();
+  const owner = opts.owner || claimOwnerId();
   const dir = dirFor('pending');
   const files = fs.readdirSync(dir).filter((f) => f.endsWith('.json')).sort();
   for (const f of files) {
@@ -170,15 +187,23 @@ function claimNextPending() {
       }, 'done');
       continue;
     }
-    // naive claim: move to running
+    // Claim: rename pending → running (atomic on POSIX), then stamp owner.
+    const runningPath = jobPath('running', job.id);
     try {
-      fs.renameSync(p, jobPath('running', job.id));
+      fs.renameSync(p, runningPath);
     } catch (_) {
       continue; // raced
     }
     job.status = 'running';
     job.started_at = new Date().toISOString();
-    fs.writeFileSync(jobPath('running', job.id), JSON.stringify({ ...job, updated_at: new Date().toISOString() }, null, 2), 'utf8');
+    job.claim_owner = owner;
+    job.claimed_at = job.started_at;
+    job.deadline_at = new Date(Date.now() + JOB_TIMEOUT_MS).toISOString();
+    atomicWriteJson(runningPath, { ...job, updated_at: new Date().toISOString() });
+    try {
+      const { recordJobTransition } = require('./opsMetrics');
+      recordJobTransition(job);
+    } catch (_) { /* optional */ }
     return job;
   }
   return null;
@@ -298,6 +323,7 @@ function reapStaleRunning(opts = {}) {
   const timeoutMs = opts.timeoutMs != null ? Number(opts.timeoutMs) : JOB_TIMEOUT_MS;
   const graceMs = opts.graceMs != null ? Number(opts.graceMs) : STALE_GRACE_MS;
   const cutoff = Date.now() - (timeoutMs + graceMs);
+  const owner = opts.owner || null;
   const reaped = [];
   try {
     const dir = dirFor('running');
@@ -306,8 +332,24 @@ function reapStaleRunning(opts = {}) {
       try { job = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')); } catch (_) { continue; }
       const started = Date.parse(job.started_at || '') || 0;
       if (!started || started > cutoff) continue;
+      // P2.5d: a worker only reaps jobs it owns; unowned/foreign → always reaper-ok.
+      if (owner && job.claim_owner && job.claim_owner === owner) {
+        // Owning worker should cancel cooperatively rather than hard-reap itself.
+        // Still mark cancel_requested so shouldAbort trips.
+        writeJob({
+          ...job,
+          cancel_requested: true,
+          cancel_requested_at: new Date().toISOString(),
+          cancel_reason: 'stale_timeout',
+        }, 'running');
+        continue;
+      }
+      // P2.5b: stamp cancel_requested so a still-attached worker stops at next boundary.
       reaped.push(writeJob({
         ...job,
+        cancel_requested: true,
+        cancel_requested_at: new Date().toISOString(),
+        cancelled: true,
         result: { ok: false, timeout: true, orphaned: true },
         error: 'orphaned_timeout',
         finished_at: new Date().toISOString(),
@@ -360,6 +402,7 @@ module.exports = {
   reapOrphanedRunning,
   reapStaleRunning,
   countPendingOfType,
+  claimOwnerId,
   PENDING_CAP_PER_TYPE,
   JOB_TIMEOUT_MS,
   STALE_GRACE_MS,

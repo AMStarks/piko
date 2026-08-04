@@ -29,8 +29,8 @@ function getConfig() {
   const configPath = getConfigPath();
   try {
     if (!fs.existsSync(configPath)) {
-      fs.mkdirSync(path.dirname(configPath), { recursive: true });
-      fs.writeFileSync(configPath, JSON.stringify(DEFAULTS, null, 2));
+      const { atomicWriteJson } = require('./atomicJson');
+      atomicWriteJson(configPath, DEFAULTS);
       return { ...DEFAULTS };
     }
     const raw = fs.readFileSync(configPath, 'utf8');
@@ -61,9 +61,8 @@ function updateConfig(key, value) {
     return `Error: Configuration key '${key}' does not exist. Valid keys are: ${Object.keys(DEFAULTS).join(', ')}`;
   }
   config[key] = coerceValue(key, value);
-  const configPath = getConfigPath();
-  fs.mkdirSync(path.dirname(configPath), { recursive: true });
-  fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+  const { atomicWriteJson } = require('./atomicJson');
+  atomicWriteJson(getConfigPath(), config);
   return `Successfully updated ${key} to ${config[key]}.`;
 }
 

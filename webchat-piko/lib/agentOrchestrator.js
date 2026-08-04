@@ -125,6 +125,8 @@ async function runAgent(agentId, brief, opts = {}) {
         plan: opts.plan || null,
         onProgress: reportProgress,
         shouldAbort: opts.shouldAbort,
+        runToolFn: opts.runToolFn,
+        job: opts.job || null,
       });
     } else {
       reportProgress({ stage: 'running', message: 'Swarm agent running…' });

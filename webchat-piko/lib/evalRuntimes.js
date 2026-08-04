@@ -41,6 +41,8 @@ register('ei-worker', async (agent, brief, ctx) => {
     plan: ctx.plan || null,
     onProgress: ctx.onProgress,
     shouldAbort: ctx.shouldAbort,
+    runToolFn: ctx.runToolFn,
+    job: ctx.job || null,
   });
   return {
     status: out.cancelled ? 'failed' : normalizeStatus(out.status),

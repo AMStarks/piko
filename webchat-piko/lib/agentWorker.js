@@ -13,6 +13,7 @@ const {
   enqueueJob,
   reapOrphanedRunning,
   reapStaleRunning,
+  claimOwnerId,
   JOB_TIMEOUT_MS,
 } = require('./agentJobs');
 const { getTenantBackgroundProfile } = require('./tenantBackgroundJobs');
@@ -201,6 +202,7 @@ async function processOneJob(job, rootDir) {
       decide: payload.chat_origin ? 'llm' : 'api',
       chatOrigin: !!payload.chat_origin,
       shouldAbort: () => isCancelRequested(job),
+      job,
     });
     const report = (out.run && (out.run.result || out.run.report))
       || (out.result && out.result.report)
@@ -373,7 +375,8 @@ function handleJobEscalation(job, result, rootDir) {
 async function tick(rootDir, opts = {}) {
   if (busy) return;
   if (!isAgentOrchEnabled(rootDir)) return;
-  const job = claimNextPending();
+  const owner = opts.owner || claimOwnerId();
+  const job = claimNextPending({ owner });
   if (!job) return;
   busy = true;
   const processFn = typeof opts.processOne === 'function' ? opts.processOne : processOneJob;
@@ -516,7 +519,8 @@ function startAgentWorker(rootDir) {
   const reaperMs = Math.max(5_000, Number(process.env.PIKO_AGENT_STALE_REAPER_MS || 30_000) || 30_000);
   reaperTimer = setInterval(() => {
     try {
-      for (const job of reapStaleRunning({ timeoutMs: JOB_TIMEOUT_MS })) {
+      // P2.5d: reaper handles foreign/unowned jobs; own jobs get cancel_requested only.
+      for (const job of reapStaleRunning({ timeoutMs: JOB_TIMEOUT_MS, owner: claimOwnerId() })) {
         console.log(`[agent-worker] reaped stale job ${job.id} (${job.error})`);
         notifyChatTimeout(job);
         handleJobEscalation(job, { orphaned: true, timeout: true }, root);

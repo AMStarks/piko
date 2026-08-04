@@ -34,9 +34,8 @@ function loadIntents() {
 
 function saveIntents(intents) {
   try {
-    const dir = path.dirname(getIntentsFilePath());
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(getIntentsFilePath(), JSON.stringify(intents, null, 2), 'utf8');
+    const { atomicWriteJson } = require('./atomicJson');
+    atomicWriteJson(getIntentsFilePath(), intents);
     return true;
   } catch (e) {
     console.error('[intents] save failed:', e.message);
