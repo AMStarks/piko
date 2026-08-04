@@ -1,7 +1,6 @@
 /**
  * Chat HTTP routes (P3.1b) — history/inject + dispatch into handleApiChat.
- * The chat pipeline body remains createChatHandlers()-ready; handleApiChat is
- * injected from server.js until the closure-heavy body is factory-extracted.
+ * handleApiChat is injected from server.js via createHandleApiChat (lib/chatPipeline.js).
  */
 function registerChatRoutes(registry, ctx) {
   const wrap = (fn) => async (req, res, routeCtx) => {
