@@ -1,0 +1,21 @@
+[Unit]
+Description=Piko agent worker (customer-01 / AusMaker)
+After=network.target
+# Prefer starting after webchat so DATA_DIR / orch env is already live.
+Wants=piko-webchat.service
+
+[Service]
+Type=simple
+User=chief
+WorkingDirectory=/home/chief/webchat-piko
+ExecStart=/usr/bin/node scripts/agent-worker.js
+Restart=on-failure
+RestartSec=5
+Environment=PIKO_AGENT_ORCH=1
+Environment=PIKO_WORKER_STANDALONE=1
+# Prefer EnvironmentFile for tenant secrets / DATA_DIR (do not commit .env).
+EnvironmentFile=-/home/chief/webchat-piko/.env
+# Drain: systemctl kill -s SIGUSR1 piko-worker.service
+
+[Install]
+WantedBy=multi-user.target

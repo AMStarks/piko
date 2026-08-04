@@ -1,9 +1,11 @@
 /**
  * Piko activity log — append-only JSONL for audit and recall.
  * Schema: { ts, action, intentId?, type?, objective?, schedule?, source?, outcome? }
+ * P3.2e: size-capped + tail-read on the hot path.
  */
 const fs = require('fs');
 const path = require('path');
+const { appendJsonlBounded, readJsonlTail } = require('./jsonlBounded');
 
 function getActivityLogPath() {
   const dataDir = String(process.env.PIKO_DATA_DIR || '').trim() || path.join(__dirname, '..', 'data');
@@ -25,7 +27,8 @@ function logActivity(action, data = {}) {
       action,
       ...data,
     };
-    fs.appendFileSync(logPath, JSON.stringify(entry) + '\n', 'utf8');
+    const maxLines = Number(process.env.PIKO_ACTIVITY_JSONL_MAX || 2000) || 2000;
+    appendJsonlBounded(logPath, entry, { maxLines });
   } catch (e) {
     if (process.env.PIKO_LOG_PLANNER === '1') {
       console.warn('[activityLog]', e.message);
@@ -40,18 +43,7 @@ function logActivity(action, data = {}) {
  */
 function readRecentActivity(lines = 50) {
   try {
-    const logPath = getActivityLogPath();
-    if (!fs.existsSync(logPath)) return [];
-    const raw = fs.readFileSync(logPath, 'utf8');
-    const all = raw.trim().split('\n').filter(Boolean);
-    const recent = all.slice(-Math.max(1, lines));
-    return recent.map((line) => {
-      try {
-        return JSON.parse(line);
-      } catch (_) {
-        return null;
-      }
-    }).filter(Boolean);
+    return readJsonlTail(getActivityLogPath(), lines);
   } catch (_) {
     return [];
   }

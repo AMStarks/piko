@@ -1,0 +1,18 @@
+[Unit]
+Description=Piko agent worker (customer-03 / Egyptian Insights)
+After=network.target
+Wants=piko-webchat-customer-03.service
+
+[Service]
+Type=simple
+WorkingDirectory=/home/chief/webchat-piko-customer-03
+ExecStart=/usr/bin/node scripts/agent-worker.js
+Restart=on-failure
+RestartSec=5
+Environment=PIKO_AGENT_ORCH=1
+Environment=PIKO_WORKER_STANDALONE=1
+EnvironmentFile=-/home/chief/webchat-piko-customer-03/.env
+# Drain: systemctl --user kill -s SIGUSR1 piko-worker-customer-03.service
+
+[Install]
+WantedBy=default.target

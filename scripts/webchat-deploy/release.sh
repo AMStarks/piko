@@ -43,15 +43,54 @@ echo "-- deps + release stamp"
 ssh "$T_HOST" "cd '$T_DIR' && npm install --omit=dev --no-audit --no-fund --loglevel=error && printf '{\"version\":\"%s\",\"tenant\":\"%s\",\"released_at\":\"%s\"}\n' '$VERSION' '$TENANT' \"\$(date -Is)\" > '$T_DIR/RELEASE.json'"
 
 restart_service() {
+  local svc="${1:-$T_SERVICE}"
   if [[ "$T_SERVICE_SCOPE" == "user" ]]; then
-    ssh "$T_HOST" "systemctl --user restart '$T_SERVICE'"
+    ssh "$T_HOST" "systemctl --user restart '$svc'"
   else
-    ssh "$T_ROOT_HOST" "systemctl restart '$T_SERVICE'"
+    ssh "$T_ROOT_HOST" "systemctl restart '$svc'"
   fi
 }
 
-echo "-- restart $T_SERVICE"
-restart_service
+signal_service() {
+  local svc="$1"
+  local sig="$2"
+  if [[ "$T_SERVICE_SCOPE" == "user" ]]; then
+    ssh "$T_HOST" "systemctl --user kill -s '$sig' '$svc' 2>/dev/null || true"
+  else
+    ssh "$T_ROOT_HOST" "systemctl kill -s '$sig' '$svc' 2>/dev/null || true"
+  fi
+}
+
+# P3.2d: drain standalone worker before restart (stop claiming; wait for running jobs).
+drain_worker() {
+  local worker="${T_WORKER_SERVICE:-}"
+  [[ -n "$worker" ]] || return 0
+  echo "-- drain worker $worker (up to 90s)"
+  # Prefer SIGUSR1; also touch drain file so in-process / orphaned workers honour it.
+  signal_service "$worker" SIGUSR1
+  ssh "$T_HOST" "mkdir -p '$T_DIR/data/agent-jobs' && : > '$T_DIR/data/agent-jobs/.drain' || true"
+  # If PIKO_DATA_DIR differs from $T_DIR/data, also touch under env (best-effort).
+  ssh "$T_HOST" "cd '$T_DIR' && (set -a; [ -f .env ] && . ./.env; set +a; d=\"\${PIKO_DATA_DIR:-$T_DIR/data}\"; mkdir -p \"\$d/agent-jobs\" && : > \"\$d/agent-jobs/.drain\") 2>/dev/null || true"
+  local waited=0
+  while (( waited < 90 )); do
+    local running
+    running="$(ssh "$T_HOST" "cd '$T_DIR' && (set -a; [ -f .env ] && . ./.env; set +a; d=\"\${PIKO_DATA_DIR:-$T_DIR/data}\"; find \"\$d/agent-jobs/running\" -name '*.json' 2>/dev/null | wc -l)" || echo 0)"
+    running="$(echo "$running" | tr -d '[:space:]')"
+    [[ "${running:-0}" == "0" ]] && { echo "-- drain idle after ${waited}s"; return 0; }
+    sleep 3
+    waited=$((waited + 3))
+  done
+  echo "-- drain wait timed out with running jobs still present (reaper will clean orphans)"
+}
+
+echo "-- pre-restart drain"
+drain_worker || true
+
+echo "-- restart worker + $T_SERVICE"
+if [[ -n "${T_WORKER_SERVICE:-}" ]]; then
+  restart_service "$T_WORKER_SERVICE" || echo "(worker restart skipped — unit may not be installed yet)"
+fi
+restart_service "$T_SERVICE"
 # Settle: agent-worker reap + first campaign tick + Ollama warm can exceed 4s.
 sleep 12
 

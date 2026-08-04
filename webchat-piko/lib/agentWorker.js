@@ -22,6 +22,56 @@ const { runWithContext } = require('./requestContext');
 let timer = null;
 let reaperTimer = null;
 let busy = false;
+let drainRequested = false;
+
+function drainPath(rootDir) {
+  const dataDir = String(process.env.PIKO_DATA_DIR || '').trim()
+    || path.join(rootDir || path.join(__dirname, '..'), 'data');
+  return path.join(dataDir, 'agent-jobs', '.drain');
+}
+
+function isDrainActive(rootDir) {
+  if (drainRequested) return true;
+  try {
+    return fs.existsSync(drainPath(rootDir));
+  } catch (_) {
+    return false;
+  }
+}
+
+function requestDrain(rootDir) {
+  drainRequested = true;
+  const p = drainPath(rootDir);
+  try {
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, `${new Date().toISOString()}\n`, 'utf8');
+  } catch (e) {
+    console.warn('[agent-worker] drain file write failed:', e.message);
+  }
+  return p;
+}
+
+function clearDrain(rootDir) {
+  drainRequested = false;
+  try {
+    const p = drainPath(rootDir);
+    if (fs.existsSync(p)) fs.unlinkSync(p);
+  } catch (_) { /* ok */ }
+}
+
+function countRunningJobs() {
+  try {
+    const { listJobs } = require('./agentJobs');
+    return listJobs(200).filter((j) => j && j.status === 'running').length;
+  } catch (_) {
+    return 0;
+  }
+}
+
+function isStandaloneWorkerMode() {
+  const v = String(process.env.PIKO_WORKER_STANDALONE || '').trim().toLowerCase();
+  return v === '1' || v === 'true' || v === 'on' || v === 'yes';
+}
 
 function isCancelRequested(job) {
   if (!job) return false;
@@ -280,6 +330,46 @@ async function processOneJob(job, rootDir) {
       reply_snip: String(out.artifact_text || '').slice(0, 800),
     };
   }
+  // P3.2c: heavy consolidation work runs in the worker, not the chat process.
+  if (job.type === 'belief_consolidation') {
+    const beliefLoop = require('./beliefLoop');
+    const memory = require('./memory');
+    await beliefLoop.runBeliefConsolidation();
+    await memory.pruneEpisodicOlderThanDays();
+    await beliefLoop.resolveBeliefConflicts();
+    return { ok: true, kind: 'belief_consolidation' };
+  }
+  if (job.type === 'memory_consolidation') {
+    await require('../scripts/memoryConsolidation').consolidateSoul();
+    return { ok: true, kind: 'memory_consolidation' };
+  }
+  if (job.type === 'weekly_retro') {
+    const { weeklyRetro } = require('./metrics');
+    const report = weeklyRetro();
+    const dataDir = String(process.env.PIKO_DATA_DIR || '').trim()
+      || path.join(root, 'data');
+    if (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) {
+      const https = require('https');
+      const body = JSON.stringify({ chat_id: process.env.TELEGRAM_CHAT_ID, text: report });
+      const u = new URL(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`);
+      await new Promise((resolve, reject) => {
+        const req = https.request({
+          hostname: u.hostname,
+          path: u.pathname + u.search,
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+        }, () => resolve());
+        req.on('error', reject);
+        req.write(body);
+        req.end();
+      });
+    } else {
+      const retroPath = path.join(dataDir, 'learning', 'weekly-retro.md');
+      fs.mkdirSync(path.dirname(retroPath), { recursive: true });
+      fs.appendFileSync(retroPath, `\n\n---\n${new Date().toISOString()}\n\n${report}`, 'utf8');
+    }
+    return { ok: true, kind: 'weekly_retro', chars: String(report || '').length };
+  }
   throw new Error(`unknown job type: ${job.type}`);
 }
 
@@ -375,6 +465,12 @@ function handleJobEscalation(job, result, rootDir) {
 async function tick(rootDir, opts = {}) {
   if (busy) return;
   if (!isAgentOrchEnabled(rootDir)) return;
+  if (isDrainActive(rootDir)) {
+    if (process.env.PIKO_LOG_PLANNER === '1') {
+      console.log('[agent-worker] drain active — not claiming');
+    }
+    return;
+  }
   const owner = opts.owner || claimOwnerId();
   const job = claimNextPending({ owner });
   if (!job) return;
@@ -472,17 +568,7 @@ function workerEnabled() {
   return true;
 }
 
-function startAgentWorker(rootDir) {
-  if (!workerEnabled()) return { started: false, reason: 'PIKO_AGENT_WORKER off' };
-  if (!isAgentOrchEnabled(rootDir)) return { started: false, reason: 'orch disabled' };
-  if (timer) return { started: true, reason: 'already running' };
-
-  const ms = Math.max(500, Number(process.env.PIKO_AGENT_WORKER_INTERVAL_MS || 2000));
-  const root = rootDir || path.join(__dirname, '..');
-  const profile = getTenantBackgroundProfile(root);
-
-  // Jobs stranded mid-run by the previous process would show "running"
-  // forever; close them out and let the originating chat know.
+function bootReapOrphans(root) {
   try {
     for (const job of reapOrphanedRunning()) {
       console.log(`[agent-worker] reaped orphaned job ${job.id} (${job.error})`);
@@ -495,27 +581,23 @@ function startAgentWorker(rootDir) {
             'assistant',
             `Heads up — a task I was running ("${String(p.operator_message || p.brief || 'previous task').slice(0, 120)}") was interrupted by a restart and didn't finish. Ask me again if you still want it.`,
           );
-        } catch (_) {}
+        } catch (_) { /* optional */ }
       }
     }
-  } catch (_) {}
-  // A restart mid campaign-cycle strands the campaign running lock, stalling
-  // cycles for STALE_RUNNING_MS. Any lock at boot is stale — clear it.
+  } catch (_) { /* ok */ }
+  const profile = getTenantBackgroundProfile(root);
   if (profile.isCulture) {
     try {
       const { clearRunningLockAtBoot } = require('./eiResearchCampaign');
       if (clearRunningLockAtBoot().cleared) {
         console.log('[agent-worker] cleared stale campaign running lock (restart mid-cycle)');
       }
-    } catch (_) {}
+    } catch (_) { /* ok */ }
   }
-  timer = setInterval(() => {
-    tick(root).catch((e) => {
-      if (process.env.PIKO_LOG_PLANNER === '1') console.warn('[agent-worker]', e.message);
-    });
-  }, ms);
-  if (typeof timer.unref === 'function') timer.unref();
+}
 
+function startStaleReaper(root) {
+  if (reaperTimer) return;
   const reaperMs = Math.max(5_000, Number(process.env.PIKO_AGENT_STALE_REAPER_MS || 30_000) || 30_000);
   reaperTimer = setInterval(() => {
     try {
@@ -530,11 +612,61 @@ function startAgentWorker(rootDir) {
     }
   }, reaperMs);
   if (typeof reaperTimer.unref === 'function') reaperTimer.unref();
+}
+
+/**
+ * Chat-process entry: claim loop unless PIKO_WORKER_STANDALONE=1 (then reaper only).
+ */
+function startAgentWorker(rootDir) {
+  if (!workerEnabled()) return { started: false, reason: 'PIKO_AGENT_WORKER off' };
+  if (!isAgentOrchEnabled(rootDir)) return { started: false, reason: 'orch disabled' };
+
+  const root = rootDir || path.join(__dirname, '..');
+  const profile = getTenantBackgroundProfile(root);
+  bootReapOrphans(root);
+  startStaleReaper(root);
+
+  // P3.2b: standalone worker owns claiming; chat keeps reaper only.
+  if (isStandaloneWorkerMode()) {
+    console.log(`[agent-worker] standalone mode — claim loop off (reaper on) tenant=${profile.tenant_id}`);
+    return { started: false, reaper: true, reason: 'standalone' };
+  }
+
+  if (timer) return { started: true, reason: 'already running' };
+
+  const ms = Math.max(500, Number(process.env.PIKO_AGENT_WORKER_INTERVAL_MS || 2000));
+  timer = setInterval(() => {
+    tick(root).catch((e) => {
+      if (process.env.PIKO_LOG_PLANNER === '1') console.warn('[agent-worker]', e.message);
+    });
+  }, ms);
+  if (typeof timer.unref === 'function') timer.unref();
 
   console.log(`[agent-worker] started interval=${ms}ms tenant=${profile.tenant_id}`);
-  // Kick once immediately
   tick(root).catch(() => {});
   return { started: true, interval_ms: ms };
+}
+
+/** Standalone process entry — always runs the claim loop (ignores STANDALONE flag). */
+function startStandaloneWorker(rootDir) {
+  if (!isAgentOrchEnabled(rootDir)) return { started: false, reason: 'orch disabled' };
+  const root = rootDir || path.join(__dirname, '..');
+  const profile = getTenantBackgroundProfile(root);
+  bootReapOrphans(root);
+  startStaleReaper(root);
+  if (timer) return { started: true, reason: 'already running' };
+
+  const ms = Math.max(500, Number(process.env.PIKO_AGENT_WORKER_INTERVAL_MS || 2000));
+  timer = setInterval(() => {
+    tick(root).catch((e) => {
+      if (process.env.PIKO_LOG_PLANNER === '1') console.warn('[agent-worker]', e.message);
+    });
+  }, ms);
+  if (typeof timer.unref === 'function') timer.unref();
+
+  console.log(`[agent-worker] standalone process interval=${ms}ms tenant=${profile.tenant_id}`);
+  tick(root).catch(() => {});
+  return { started: true, interval_ms: ms, standalone: true };
 }
 
 function stopAgentWorker() {
@@ -554,8 +686,15 @@ module.exports = {
   maybeRunDirectToolPlan,
   tick,
   startAgentWorker,
+  startStandaloneWorker,
   stopAgentWorker,
   workerEnabled,
+  isStandaloneWorkerMode,
+  isDrainActive,
+  requestDrain,
+  clearDrain,
+  drainPath,
+  countRunningJobs,
   alertAgentJobFailure,
   handleJobEscalation,
   isCancelRequested,

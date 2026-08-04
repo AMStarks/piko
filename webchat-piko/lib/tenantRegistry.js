@@ -65,8 +65,9 @@ function readSiteHeartbeat(dataDir) {
 
 function appendAuditLog(dataDir, entry) {
   const p = path.join(dataDir, 'hq-audit.jsonl');
-  const line = JSON.stringify({ ts: new Date().toISOString(), ...entry }) + '\n';
-  fs.appendFileSync(p, line);
+  const { appendJsonlBounded } = require('./jsonlBounded');
+  const maxLines = Number(process.env.PIKO_HQ_AUDIT_JSONL_MAX || 2000) || 2000;
+  appendJsonlBounded(p, { ts: new Date().toISOString(), ...entry }, { maxLines });
 }
 
 function fetchJson(url, timeoutMs = 10000, opts = {}) {

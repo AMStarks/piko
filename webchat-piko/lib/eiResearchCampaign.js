@@ -260,7 +260,9 @@ function appendCycleLog(entry) {
   try {
     const p = cycleLogPath();
     fs.mkdirSync(path.dirname(p), { recursive: true });
-    fs.appendFileSync(p, `${JSON.stringify(entry)}\n`);
+    const { appendJsonlBounded } = require('./jsonlBounded');
+    const maxLines = Number(process.env.PIKO_CAMPAIGN_CYCLES_JSONL_MAX || 2000) || 2000;
+    appendJsonlBounded(p, entry, { maxLines });
   } catch (_) { /* best-effort */ }
 }
 
@@ -2327,7 +2329,9 @@ function maybeAppendScorecardSnapshot(state, opts = {}) {
   const card = learningScorecard(s);
   try {
     fs.mkdirSync(path.dirname(scorecardPath()), { recursive: true });
-    fs.appendFileSync(scorecardPath(), `${JSON.stringify(card)}\n`, 'utf8');
+    const { appendJsonlBounded } = require('./jsonlBounded');
+    const maxLines = Number(process.env.PIKO_SCORECARD_JSONL_MAX || 500) || 500;
+    appendJsonlBounded(scorecardPath(), card, { maxLines });
     s.last_scorecard_at = card.at;
   } catch (e) {
     return { ok: false, error: String(e.message || e).slice(0, 160) };

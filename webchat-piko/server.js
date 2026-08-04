@@ -9291,15 +9291,19 @@ server.listen(PORT, '0.0.0.0', () => {
       }
     },
   });
+  // P3.2c: enqueue-only — heavy belief/memory/retro work runs in the agent worker.
   bootScheduler.register({
     id: 'belief-consolidation',
     cronExpr: '0 3 * * *',
     tenantGate: always,
     fn: async () => {
       if (!isJobEnabled('belief-consolidation')) return;
-      await beliefLoop.runBeliefConsolidation();
-      await memory.pruneEpisodicOlderThanDays();
-      await beliefLoop.resolveBeliefConflicts();
+      const { enqueueAgentJob } = require('./lib/agentOrchestrator');
+      const { listJobs } = require('./lib/agentJobs');
+      const pending = listJobs(60).some((j) => j.type === 'belief_consolidation'
+        && ['pending', 'running'].includes(j.status));
+      if (pending) return;
+      enqueueAgentJob('belief_consolidation', { source: 'scheduler' }, { rootDir: __dirname });
     },
   });
   bootScheduler.register({
@@ -9308,7 +9312,12 @@ server.listen(PORT, '0.0.0.0', () => {
     tenantGate: always,
     fn: async () => {
       if (!isJobEnabled('memory-consolidation')) return;
-      await require('./scripts/memoryConsolidation').consolidateSoul();
+      const { enqueueAgentJob } = require('./lib/agentOrchestrator');
+      const { listJobs } = require('./lib/agentJobs');
+      const pending = listJobs(60).some((j) => j.type === 'memory_consolidation'
+        && ['pending', 'running'].includes(j.status));
+      if (pending) return;
+      enqueueAgentJob('memory_consolidation', { source: 'scheduler' }, { rootDir: __dirname });
     },
   });
   bootScheduler.register({
@@ -9317,28 +9326,12 @@ server.listen(PORT, '0.0.0.0', () => {
     tenantGate: always,
     fn: async () => {
       if (!isJobEnabled('weekly-retro')) return;
-      const { weeklyRetro } = require('./lib/metrics');
-      const report = weeklyRetro();
-      if (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) {
-        const https = require('https');
-        const body = JSON.stringify({ chat_id: process.env.TELEGRAM_CHAT_ID, text: report });
-        const u = new URL(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`);
-        await new Promise((resolve, reject) => {
-          const req = https.request({
-            hostname: u.hostname,
-            path: u.pathname + u.search,
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-          }, () => resolve());
-          req.on('error', reject);
-          req.write(body);
-          req.end();
-        });
-      } else {
-        const retroPath = path.join(DATA_DIR, 'learning', 'weekly-retro.md');
-        fs.mkdirSync(path.dirname(retroPath), { recursive: true });
-        fs.appendFileSync(retroPath, `\n\n---\n${new Date().toISOString()}\n\n${report}`, 'utf8');
-      }
+      const { enqueueAgentJob } = require('./lib/agentOrchestrator');
+      const { listJobs } = require('./lib/agentJobs');
+      const pending = listJobs(60).some((j) => j.type === 'weekly_retro'
+        && ['pending', 'running'].includes(j.status));
+      if (pending) return;
+      enqueueAgentJob('weekly_retro', { source: 'scheduler' }, { rootDir: __dirname });
     },
   });
   bootScheduler.register({
