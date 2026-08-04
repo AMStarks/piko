@@ -46,6 +46,9 @@ const FEW_SHOT_IDS = new Set([
   'fewshot-status-campaign',
   'fewshot-control-selfcorrect',
   'fewshot-opinion-orion',
+  'fewshot-opinion-osireion-conclusions',
+  'fewshot-opinion-ingested',
+  'fewshot-opinion-sphinx-land',
 ]);
 
 function getUnderstandModel(opts = {}) {
@@ -223,6 +226,10 @@ Critical distinctions:
 - "Pause the campaign" → campaign_control action=pause
 - "Pause the campaign — actually no, just tell me how it's going" → status_question (self-correction wins)
 - "What do you make of the Orion correlation?" → opinion_question
+- "Have you come to any conclusions on the Osireion and its possible origins?" → opinion_question (judgment on ingested material — NOT learning_question)
+- "What do you think, given what you have ingested?" → opinion_question
+- "Where do you land on the Sphinx erosion debate after all that reading?" → opinion_question
+- "What have you learned about the Osireion?" → learning_question (digest/recall — NOT opinion)
 - "How's it going?" without research/campaign anchors → conversation (or status only if campaign context is clear)
 - Possessive titles like "Petrie's Pyramids" with find/add → work_order; contractions How's/It's are NOT possessives
 
@@ -253,7 +260,13 @@ User: "How's the research campaign going?"
 User: "Pause the campaign — actually no, just give me an update"
 {"intent":"status_question","confidence":0.93,"control":null,"work":null,"schedule":null,"constraints":null,"slots":{},"is_question":true}
 User: "What do you make of the Orion correlation?"
-{"intent":"opinion_question","confidence":0.96,"control":null,"work":null,"schedule":null,"constraints":null,"slots":{},"is_question":true}`;
+{"intent":"opinion_question","confidence":0.96,"control":null,"work":null,"schedule":null,"constraints":null,"slots":{},"is_question":true}
+User: "Have you come to any conclusions on the Osireion and its possible origins?"
+{"intent":"opinion_question","confidence":0.97,"control":null,"work":null,"schedule":null,"constraints":null,"slots":{},"is_question":true}
+User: "What do you think, given what you have ingested?"
+{"intent":"opinion_question","confidence":0.96,"control":null,"work":null,"schedule":null,"constraints":null,"slots":{},"is_question":true}
+User: "Where do you land on the Sphinx erosion debate after all that reading?"
+{"intent":"opinion_question","confidence":0.97,"control":null,"work":null,"schedule":null,"constraints":null,"slots":{},"is_question":true}`;
 }
 
 function logUnderstanding(message, result, mode) {

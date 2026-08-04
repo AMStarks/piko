@@ -193,6 +193,7 @@ test('F1: mutating intent still surfaces DECIDE_FAIL_REPLY on decide fail', asyn
 
 test('F3: opinion understanding skips decide entirely', async () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'piko-wp10-f3-'));
+  // WP11: expert-opinion lane is default-on for culture — disable to assert WP10 fallthrough.
   await withEnv({
     PIKO_DATA_DIR: tmp,
     PIKO_TENANT_ID: 'customer-03',
@@ -200,6 +201,7 @@ test('F3: opinion understanding skips decide entirely', async () => {
     PIKO_LEGATE_CHAT: '1',
     PIKO_AGENT_ORCH: '1',
     PIKO_UNDERSTAND_AUTHORITATIVE: '1',
+    PIKO_EXPERT_OPINION: '0',
   }, async () => {
     const understandPath = require.resolve('../lib/understand');
     const legatePath = require.resolve('../lib/legateChat');

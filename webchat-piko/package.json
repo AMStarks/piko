@@ -13,6 +13,8 @@
     "understand:battery": "node scripts/generate-understand-battery.js",
     "understand:eval": "node scripts/understand-eval.js",
     "understand:eval:offline": "PIKO_UNDERSTAND_EVAL_OFFLINE=1 node scripts/understand-eval.js",
+    "opinion:eval": "node scripts/opinion-quality-eval.js",
+    "opinion:eval:dry": "PIKO_OPINION_EVAL_DRY=1 node scripts/opinion-quality-eval.js",
     "phase1:smoke": "node scripts/proactive-phase1-smoke.js",
     "phase2:smoke": "node scripts/proactive-phase2-smoke.js",
     "phase3:smoke": "node scripts/proactive-phase3-connectors-smoke.js",

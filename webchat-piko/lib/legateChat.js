@@ -843,6 +843,174 @@ function fallthroughFromUnderstanding(understanding, reason) {
   };
 }
 
+/** WP11: expert-opinion lane — default ON for culture; PIKO_EXPERT_OPINION=0 disables. */
+function isExpertOpinionEnabled(rootDir) {
+  const v = String(process.env.PIKO_EXPERT_OPINION ?? '').trim().toLowerCase();
+  if (v === '0' || v === 'false' || v === 'off' || v === 'no') return false;
+  if (v === '1' || v === 'true' || v === 'on' || v === 'yes') return true;
+  try {
+    return !!getTenantBackgroundProfile(rootDir || path.join(__dirname, '..')).isCulture;
+  } catch (_) {
+    return true;
+  }
+}
+
+const OPINION_HEDGE_PHRASES = [
+  'without further context',
+  'without further conversation',
+  'difficult to say without',
+  'difficult without further',
+  'would like more context',
+  'need more context',
+  'hard to say without',
+  'cannot form an opinion without',
+  "can't form an opinion without",
+  'more information would be needed',
+  'i would need more',
+  "i'd need more",
+];
+
+function opinionHedgeRefusal(text) {
+  return includesAny(toLowerAsciiish(text), OPINION_HEDGE_PHRASES);
+}
+
+function getExpertOpinionModel() {
+  return process.env.PIKO_LEGATE_MODEL
+    || process.env.PIKO_UNDERSTAND_MODEL
+    || process.env.OLLAMA_MODEL
+    || 'qwen3.6:27b';
+}
+
+function buildExpertOpinionPrompt(message, materialBlock, hasMaterial) {
+  const material = hasMaterial
+    ? materialBlock
+    : '(No matching corpus notes or stance file for this topic.)';
+  return `You are Piko, asked for YOUR judgment on material you have studied for Egyptian Insights.
+
+REQUIRED:
+1. State where you land in the first two sentences — take a position.
+2. Give 2–3 reasons drawn from the CORPUS MATERIAL below (name the works/authors).
+3. Name what would change your mind or what the corpus leaves open.
+4. Hedge ONLY where the corpus genuinely conflicts — and say what conflicts.
+5. If the corpus has nothing on the topic, say exactly that and offer to research it. Do not invent citations.
+
+Do not dump digests. Do not say "without further context" when material is supplied. No "thinking…" filler. At most ~6 short sentences.
+
+CORPUS MATERIAL:
+${material}
+
+USER: ${String(message || '').slice(0, 800)}`;
+}
+
+/**
+ * WP11 W1/W4 — grounded opinion on the 27B Legate lane.
+ * Fail-open to fallthrough on any error.
+ */
+async function answerExpertOpinion(message, understanding, opts = {}) {
+  const root = opts.rootDir || path.join(__dirname, '..');
+  try {
+    const { gatherOpinionMaterial } = require('./eiStancePositions');
+    let learningExtra = '';
+    try {
+      const data = runLookups(['learning'], { rootDir: root });
+      const recent = (data.learning && data.learning.recent_notes) || [];
+      if (recent.length) {
+        learningExtra = recent.slice(0, 3).map((n) => {
+          return `• ${n.title || 'untitled'}${n.author ? ` — ${n.author}` : ''}${n.summary ? `: ${String(n.summary).slice(0, 160)}` : ''}`;
+        }).join('\n');
+      }
+    } catch (_) { /* optional */ }
+
+    const material = gatherOpinionMaterial(message, { top: 6 });
+    let block = material.block || '';
+    if (learningExtra && !material.has_material) {
+      block = `Recent learning notes:\n${learningExtra}`;
+    } else if (learningExtra) {
+      block = `${block}\n\nRecent learning (supplemental):\n${learningExtra}`.slice(0, 5000);
+    }
+    const hasMaterial = material.has_material || !!learningExtra;
+
+    const model = opts.opinionModel || getExpertOpinionModel();
+    const msgs = [
+      {
+        role: 'system',
+        content: 'You are Piko giving a grounded expert opinion from your ingested corpus. Commit to a stance when material exists.',
+      },
+      { role: 'user', content: buildExpertOpinionPrompt(message, block, hasMaterial) },
+    ];
+    const chatOpts = {
+      temperature: 0.4,
+      max_tokens: 500,
+      num_ctx: Number(process.env.PIKO_LEGATE_NUM_CTX || 8192),
+      timeoutMs: Math.max(5000, Number(process.env.PIKO_LEGATE_TIMEOUT_MS || 60000)),
+      priority: 'user',
+      lane: 'chat',
+      tag: 'expertOpinion',
+    };
+    const base = getLegateOllamaBaseUrl();
+    if (base) chatOpts.ollamaBaseUrl = base;
+
+    const chatFn = opts.chatFn || ollamaNativeChat;
+    let raw = await chatFn(model, msgs, chatOpts);
+    let reply = String(raw || '').trim();
+
+    // W4: one de-hedge retry when material exists but draft refuses
+    if (hasMaterial && reply && opinionHedgeRefusal(reply)) {
+      console.log(JSON.stringify({
+        tag: 'opinion_hedge',
+        ts: new Date().toISOString(),
+        msg_hash: crypto.createHash('sha256').update(String(message || '')).digest('hex').slice(0, 12),
+        draft_head: reply.slice(0, 160),
+      }));
+      const retryMsgs = msgs.concat([
+        { role: 'assistant', content: reply.slice(0, 800) },
+        {
+          role: 'user',
+          content: 'You have the material above. Commit. State your stance in the first two sentences and cite the works. Do not ask for more context.',
+        },
+      ]);
+      try {
+        raw = await chatFn(model, retryMsgs, chatOpts);
+        const retry = String(raw || '').trim();
+        if (retry) reply = retry;
+      } catch (_) { /* keep first draft */ }
+    }
+
+    if (!reply) {
+      return fallthroughFromUnderstanding(understanding, 'expert_opinion_empty');
+    }
+    return {
+      reply,
+      mode: 'answer',
+      fallthrough: false,
+      inject_campaign_state: false,
+      decision: {
+        mode: 'answer',
+        reply: '',
+        lookups: ['learning'],
+        reason: opts.reason || 'expert_opinion',
+        source: opts.source || 'expert_opinion',
+        agent_id: null,
+        control_action: null,
+      },
+      opinion_material: {
+        has_material: hasMaterial,
+        thread: material.thread,
+        notes: (material.notes || []).length,
+        has_stance: !!material.position,
+      },
+      understanding: understanding || null,
+    };
+  } catch (e) {
+    console.log(JSON.stringify({
+      tag: 'expert_opinion_fail',
+      ts: new Date().toISOString(),
+      error: String(e && e.message ? e.message : e).slice(0, 200),
+    }));
+    return fallthroughFromUnderstanding(understanding, 'expert_opinion_fail');
+  }
+}
+
 /**
  * WP10 F1: when decide failed but understand already classified a non-mutating
  * intent, recover instead of surfacing DECIDE_FAIL_REPLY.
@@ -858,12 +1026,22 @@ async function recoverDecideFailWithUnderstanding(message, understanding, opts =
       source: 'understand_recover',
     });
   }
-  // learning / opinion / musing / conversation / feedback / identity → persona
+  if (intent === 'opinion_question' && isExpertOpinionEnabled(opts.rootDir)) {
+    return answerExpertOpinion(message, understanding, {
+      rootDir: opts.rootDir,
+      understanding,
+      reason: 'decide_fail_recover_opinion',
+      source: 'expert_opinion',
+      chatFn: opts.chatFn,
+    });
+  }
+  // learning / musing / conversation / feedback / identity → persona
   return fallthroughFromUnderstanding(understanding, `decide_fail_recover:${intent}`);
 }
 
 /**
  * WP10 F3: skip decide entirely for non-mutating authoritative understandings.
+ * WP11: opinion_question → expert-opinion lane (grounded 27B) when enabled.
  */
 async function routeNonMutatingUnderstanding(message, understanding, opts = {}) {
   const intent = String((understanding && understanding.intent) || '');
@@ -885,7 +1063,16 @@ async function routeNonMutatingUnderstanding(message, understanding, opts = {}) 
       source: 'understand_skip_decide',
     });
   }
-  // conversation / musing / opinion / feedback / identity_capability
+  if (intent === 'opinion_question' && isExpertOpinionEnabled(opts.rootDir)) {
+    return answerExpertOpinion(message, understanding, {
+      rootDir: opts.rootDir,
+      understanding,
+      reason: 'opinion_question',
+      source: 'expert_opinion',
+      chatFn: opts.chatFn,
+    });
+  }
+  // conversation / musing / feedback / identity_capability (and opinion when gated off)
   return fallthroughFromUnderstanding(understanding, intent);
 }
 
@@ -925,10 +1112,12 @@ async function handleLegateChatTurn(message, opts = {}) {
   }
 
   // WP10 F3: non-mutating intents skip decide — one 27B call (understand) only.
+  // WP11: opinion_question uses a second 27B call (expert opinion) when enabled.
   if (authoritative && isNonMutatingUnderstanding(understanding)) {
     return routeNonMutatingUnderstanding(message, understanding, {
       rootDir: root,
       model: opts.model,
+      chatFn: opts.chatFn,
     });
   }
 
@@ -1150,9 +1339,12 @@ module.exports = {
   applyVetoFloors,
   isValidDecidePayload,
   isNonMutatingUnderstanding,
+  isExpertOpinionEnabled,
+  answerExpertOpinion,
   getLegateOllamaBaseUrl,
   DECIDE_FAIL_REPLY,
   NON_MUTATING_INTENTS,
   LEGATE_DISPATCH_AGENTS,
+  OPINION_HEDGE_PHRASES,
   __testSetFloorModule,
 };

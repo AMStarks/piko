@@ -1,55 +1,43 @@
-{"id":"status_question-791c38ce0b","text":"How i sthe research campaign going?","intended":"status_question","floor":"conversation","tags":["status","typo"]}
 {"id":"status_question-403211d57b","text":"Hey mate — Give me an update cheers","intended":"status_question","floor":"conversation","tags":["status","aussie"]}
-{"id":"status_question-c30c1c0676","text":"How i singestion progressing?","intended":"status_question","floor":"conversation","tags":["status","typo"]}
 {"id":"status_question-528c5830f8","text":"how are the keeps looking this week?","intended":"status_question","floor":"conversation","tags":["status","lower"]}
-{"id":"status_question-c128a75ae6","text":"What' sprogress on the corpus?","intended":"status_question","floor":"conversation","tags":["status","typo"]}
 {"id":"status_question-700878d9ee","text":"How many cycles have we run?","intended":"status_question","floor":"conversation","tags":["status","terse"]}
-{"id":"status_question-427bc19a7c","text":"update on pending leads?","intended":"status_question","floor":"conversation","tags":["status","lower"]}
 {"id":"opinion_question-f0fc589551","text":"What od you think about Giza?","intended":"opinion_question","floor":"conversation","tags":["opinion","typo"]}
 {"id":"opinion_question-6fc2338c0c","text":"How d oyou interpret Younger Dryas?","intended":"opinion_question","floor":"conversation","tags":["opinion","typo"]}
-{"id":"opinion_question-52294ddc01","text":"Reckon Thoughts on Puma Punku thanks","intended":"opinion_question","floor":"conversation","tags":["opinion","aussie"]}
 {"id":"opinion_question-24c40a2d32","text":"How d oyou feel about Dunn?","intended":"opinion_question","floor":"conversation","tags":["opinion","typo"]}
 {"id":"opinion_question-0d9b678c55","text":"Your htoughts on Gilgamesh flood?","intended":"opinion_question","floor":"conversation","tags":["opinion","typo"]}
 {"id":"opinion_question-26a21c76c0","text":"Do yo ureckon Osireion is real?","intended":"opinion_question","floor":"conversation","tags":["opinion","typo"]}
 {"id":"opinion_question-30f2089f0d","text":"What od you think about Abydos?","intended":"opinion_question","floor":"conversation","tags":["opinion","typo"]}
 {"id":"opinion_question-4f8a255ec8","text":"How d oyou interpret Petrie?","intended":"opinion_question","floor":"conversation","tags":["opinion","typo"]}
-{"id":"opinion_question-342038047a","text":"Mate, Thoughts on Dunn, yeah?","intended":"opinion_question","floor":"conversation","tags":["opinion","aussie"]}
 {"id":"opinion_question-f902be995f","text":"How d oyou feel about scablands?","intended":"opinion_question","floor":"conversation","tags":["opinion","typo"]}
 {"id":"opinion_question-408871e1e9","text":"Your htoughts on Hall of Records?","intended":"opinion_question","floor":"conversation","tags":["opinion","typo"]}
 {"id":"opinion_question-3719d65328","text":"Do yo ureckon Göbekli Tepe is real?","intended":"opinion_question","floor":"conversation","tags":["opinion","typo"]}
 {"id":"opinion_question-4e6d68624d","text":"What od you think about Atlantis?","intended":"opinion_question","floor":"conversation","tags":["opinion","typo"]}
 {"id":"opinion_question-a297fb4754","text":"How d oyou interpret Umm el-Qaab?","intended":"opinion_question","floor":"conversation","tags":["opinion","typo"]}
-{"id":"opinion_question-6b1e381931","text":"Hey mate — Thoughts on scablands cheers","intended":"opinion_question","floor":"conversation","tags":["opinion","aussie"]}
 {"id":"opinion_question-3cf5046361","text":"How d oyou feel about Sphinx water erosion?","intended":"opinion_question","floor":"conversation","tags":["opinion","typo"]}
 {"id":"opinion_question-120532a504","text":"Your htoughts on Orion correlation?","intended":"opinion_question","floor":"conversation","tags":["opinion","typo"]}
 {"id":"opinion_question-aba4bc90dd","text":"Do yo ureckon Puma Punku is real?","intended":"opinion_question","floor":"conversation","tags":["opinion","typo"]}
 {"id":"opinion_question-363a40edd4","text":"What od you think about Karahan Tepe?","intended":"opinion_question","floor":"conversation","tags":["opinion","typo"]}
 {"id":"opinion_question-418168f407","text":"How d oyou interpret Tiwanaku?","intended":"opinion_question","floor":"conversation","tags":["opinion","typo"]}
-{"id":"opinion_question-a5278d2614","text":"Mate, Thoughts on Sphinx water erosion, yeah?","intended":"opinion_question","floor":"conversation","tags":["opinion","aussie"]}
 {"id":"opinion_question-15c829f190","text":"How d oyou feel about Giza?","intended":"opinion_question","floor":"conversation","tags":["opinion","typo"]}
 {"id":"opinion_question-e7a1384133","text":"Your htoughts on Younger Dryas?","intended":"opinion_question","floor":"conversation","tags":["opinion","typo"]}
 {"id":"opinion_question-85ed36f06f","text":"Do yo ureckon Dunn is real?","intended":"opinion_question","floor":"conversation","tags":["opinion","typo"]}
 {"id":"opinion_question-3c174cb7ec","text":"What od you think about Gilgamesh flood?","intended":"opinion_question","floor":"conversation","tags":["opinion","typo"]}
 {"id":"opinion_question-b1d35c0ae6","text":"How d oyou interpret Osireion?","intended":"opinion_question","floor":"conversation","tags":["opinion","typo"]}
-{"id":"opinion_question-af2f76ba1a","text":"Mate, Thoughts on Giza, yeah?","intended":"opinion_question","floor":"conversation","tags":["opinion","aussie"]}
 {"id":"opinion_question-0e3b341e62","text":"How d oyou feel about Abydos?","intended":"opinion_question","floor":"conversation","tags":["opinion","typo"]}
 {"id":"opinion_question-bc4caf63d2","text":"Your htoughts on Petrie?","intended":"opinion_question","floor":"conversation","tags":["opinion","typo"]}
 {"id":"opinion_question-dde6263b88","text":"Do yo ureckon scablands is real?","intended":"opinion_question","floor":"conversation","tags":["opinion","typo"]}
 {"id":"opinion_question-4e9eec8671","text":"What od you think about Hall of Records?","intended":"opinion_question","floor":"conversation","tags":["opinion","typo"]}
 {"id":"opinion_question-4afbda9701","text":"How d oyou interpret Göbekli Tepe?","intended":"opinion_question","floor":"conversation","tags":["opinion","typo"]}
-{"id":"opinion_question-fc00dfebf9","text":"Reckon Thoughts on Abydos thanks","intended":"opinion_question","floor":"conversation","tags":["opinion","aussie"]}
 {"id":"opinion_question-68ae2e5237","text":"How d oyou feel about Atlantis?","intended":"opinion_question","floor":"conversation","tags":["opinion","typo"]}
 {"id":"opinion_question-487e71f567","text":"Your htoughts on Umm el-Qaab?","intended":"opinion_question","floor":"conversation","tags":["opinion","typo"]}
 {"id":"opinion_question-aae1fc429f","text":"Do yo ureckon Sphinx water erosion is real?","intended":"opinion_question","floor":"conversation","tags":["opinion","typo"]}
 {"id":"opinion_question-907b8a1caf","text":"What od you think about Orion correlation?","intended":"opinion_question","floor":"conversation","tags":["opinion","typo"]}
 {"id":"opinion_question-d41c84044e","text":"How d oyou interpret Puma Punku?","intended":"opinion_question","floor":"conversation","tags":["opinion","typo"]}
-{"id":"opinion_question-e7e237693e","text":"Mate, Thoughts on Atlantis, yeah?","intended":"opinion_question","floor":"conversation","tags":["opinion","aussie"]}
 {"id":"opinion_question-661d6869bc","text":"How d oyou feel about Karahan Tepe?","intended":"opinion_question","floor":"conversation","tags":["opinion","typo"]}
 {"id":"opinion_question-1f30bae7f2","text":"Your htoughts on Tiwanaku?","intended":"opinion_question","floor":"conversation","tags":["opinion","typo"]}
 {"id":"opinion_question-9c35da3f72","text":"Do yo ureckon Giza is real?","intended":"opinion_question","floor":"conversation","tags":["opinion","typo"]}
 {"id":"opinion_question-30cf527071","text":"What od you think about Younger Dryas?","intended":"opinion_question","floor":"conversation","tags":["opinion","typo"]}
 {"id":"opinion_question-d2e9bb4908","text":"How d oyou interpret Dunn?","intended":"opinion_question","floor":"conversation","tags":["opinion","typo"]}
-{"id":"opinion_question-7836864188","text":"Mate, Thoughts on Karahan Tepe, yeah?","intended":"opinion_question","floor":"conversation","tags":["opinion","aussie"]}
 {"id":"opinion_question-e749f7d67a","text":"How d oyou feel about Gilgamesh flood?","intended":"opinion_question","floor":"conversation","tags":["opinion","typo"]}
 {"id":"opinion_question-340d0a294e","text":"Your htoughts on Osireion?","intended":"opinion_question","floor":"conversation","tags":["opinion","typo"]}
 {"id":"opinion_question-275e18e1df","text":"Do yo ureckon Abydos is real?","intended":"opinion_question","floor":"conversation","tags":["opinion","typo"]}
@@ -65,10 +53,50 @@
 {"id":"opinion_question-ea58555d3a","text":"Do yo ureckon Karahan Tepe is real?","intended":"opinion_question","floor":"conversation","tags":["opinion","typo"]}
 {"id":"opinion_question-7d659a5e45","text":"What od you think about Tiwanaku?","intended":"opinion_question","floor":"conversation","tags":["opinion","typo"]}
 {"id":"opinion_question-1ac0e98779","text":"How d oyou interpret Giza?","intended":"opinion_question","floor":"conversation","tags":["opinion","typo"]}
-{"id":"opinion_question-b2d171eea3","text":"Hey mate — Thoughts on Orion correlation cheers","intended":"opinion_question","floor":"conversation","tags":["opinion","aussie"]}
 {"id":"opinion_question-fc08e777da","text":"How d oyou feel about Younger Dryas?","intended":"opinion_question","floor":"conversation","tags":["opinion","typo"]}
 {"id":"opinion_question-4a59bfd4bd","text":"Your htoughts on Dunn?","intended":"opinion_question","floor":"conversation","tags":["opinion","typo"]}
 {"id":"opinion_question-1311e32164","text":"Do yo ureckon Gilgamesh flood is real?","intended":"opinion_question","floor":"conversation","tags":["opinion","typo"]}
+{"id":"opinion_question-7bb38ca9c7","text":"Have you come to any conclusions on Osireion?","intended":"opinion_question","floor":"conversation","tags":["opinion","conclusions_family","base"]}
+{"id":"opinion_question-0e9a0ddae5","text":"Have oyu come to any conclusions on Giza and its possible origins?","intended":"opinion_question","floor":"conversation","tags":["opinion","conclusions_family","typo"]}
+{"id":"opinion_question-cb507ecea7","text":"where do you land on abydos after all that reading?","intended":"opinion_question","floor":"conversation","tags":["opinion","conclusions_family","lower"]}
+{"id":"opinion_question-9bb88ab692","text":"Where do you land on the Younger Dryas debate after all that reading?","intended":"opinion_question","floor":"conversation","tags":["opinion","conclusions_family","base"]}
+{"id":"opinion_question-702cfd2a6c","text":"Any cnoclusions yet on Puma Punku?","intended":"opinion_question","floor":"conversation","tags":["opinion","conclusions_family","typo"]}
+{"id":"opinion_question-cf282ff71c","text":"What's your verdict on Atlantis from the corpus?","intended":"opinion_question","floor":"conversation","tags":["opinion","conclusions_family","terse"]}
+{"id":"opinion_question-b606349635","text":"After everything you've read, where do you stand on Petrie?","intended":"opinion_question","floor":"conversation","tags":["opinion","conclusions_family","aussie"]}
+{"id":"opinion_question-847f61bfad","text":"given your reading, do you have a position on dunn?","intended":"opinion_question","floor":"conversation","tags":["opinion","conclusions_family","lower"]}
+{"id":"opinion_question-4d9453c6fd","text":"Have you formed a view on Karahan Tepe?","intended":"opinion_question","floor":"conversation","tags":["opinion","conclusions_family","base"]}
+{"id":"opinion_question-ebd26402be","text":"So whree have you landed on Umm el-Qaab?","intended":"opinion_question","floor":"conversation","tags":["opinion","conclusions_family","typo"]}
+{"id":"opinion_question-db2ebe8975","text":"Have you come to any conclusions on scablands?","intended":"opinion_question","floor":"conversation","tags":["opinion","conclusions_family","terse"]}
+{"id":"opinion_question-d485446528","text":"Hey mate — Have you come to any conclusions on Gilgamesh flood and its possible origins? cheers","intended":"opinion_question","floor":"conversation","tags":["opinion","conclusions_family","aussie"]}
+{"id":"opinion_question-f04c60bf76","text":"Whered o you land on Hall of Records after all that reading?","intended":"opinion_question","floor":"conversation","tags":["opinion","conclusions_family","typo"]}
+{"id":"opinion_question-7221c53304","text":"Where do you land on the Osireion debate after all that reading?","intended":"opinion_question","floor":"conversation","tags":["opinion","conclusions_family","terse"]}
+{"id":"opinion_question-a145426fe3","text":"Mate, Any conclusions yet on Giza?, yeah?","intended":"opinion_question","floor":"conversation","tags":["opinion","conclusions_family","aussie"]}
+{"id":"opinion_question-e498fa97f9","text":"what's your verdict on orion correlation from the corpus?","intended":"opinion_question","floor":"conversation","tags":["opinion","conclusions_family","lower"]}
+{"id":"opinion_question-b4be7552db","text":"After everything you've read, where do you stand on Göbekli Tepe?","intended":"opinion_question","floor":"conversation","tags":["opinion","conclusions_family","base"]}
+{"id":"opinion_question-76bf804a49","text":"Giveny our reading, do you have a position on Abydos?","intended":"opinion_question","floor":"conversation","tags":["opinion","conclusions_family","typo"]}
+{"id":"opinion_question-d69188f458","text":"Have you formed a view on Younger Dryas?","intended":"opinion_question","floor":"conversation","tags":["opinion","conclusions_family","terse"]}
+{"id":"opinion_question-55d838d5d2","text":"So where have you landed on Puma Punku?","intended":"opinion_question","floor":"conversation","tags":["opinion","conclusions_family","aussie"]}
+{"id":"opinion_question-d92789c2da","text":"have you come to any conclusions on atlantis?","intended":"opinion_question","floor":"conversation","tags":["opinion","conclusions_family","lower"]}
+{"id":"opinion_question-d119c6eabd","text":"Have you come to any conclusions on Petrie and its possible origins?","intended":"opinion_question","floor":"conversation","tags":["opinion","conclusions_family","base"]}
+{"id":"opinion_question-dc50d49a49","text":"What od you think, given what you have ingested about Dunn?","intended":"opinion_question","floor":"conversation","tags":["opinion","conclusions_family","typo"]}
+{"id":"opinion_question-e247954431","text":"Mate, Where do you land on Umm el-Qaab after all that reading?, yeah?","intended":"opinion_question","floor":"conversation","tags":["opinion","conclusions_family","aussie"]}
+{"id":"opinion_question-42e7f0f549","text":"where do you land on the scablands debate after all that reading?","intended":"opinion_question","floor":"conversation","tags":["opinion","conclusions_family","lower"]}
+{"id":"opinion_question-0dd439a086","text":"Any conclusions yet on Gilgamesh flood?","intended":"opinion_question","floor":"conversation","tags":["opinion","conclusions_family","base"]}
+{"id":"opinion_question-158bebf803","text":"What' syour verdict on Tiwanaku from the corpus?","intended":"opinion_question","floor":"conversation","tags":["opinion","conclusions_family","typo"]}
+{"id":"opinion_question-3e972e6d8d","text":"After everything you've read, where do you stand on Sphinx water erosion?","intended":"opinion_question","floor":"conversation","tags":["opinion","conclusions_family","terse"]}
+{"id":"opinion_question-1fe79cd057","text":"Reckon Given your reading, do you have a position on Hall of Records? thanks","intended":"opinion_question","floor":"conversation","tags":["opinion","conclusions_family","aussie"]}
+{"id":"opinion_question-0430ffaeb0","text":"have you formed a view on osireion?","intended":"opinion_question","floor":"conversation","tags":["opinion","conclusions_family","lower"]}
+{"id":"opinion_question-dd11079a78","text":"So where have you landed on Giza?","intended":"opinion_question","floor":"conversation","tags":["opinion","conclusions_family","base"]}
+{"id":"opinion_question-7d69cfef35","text":"Have oyu come to any conclusions on Orion correlation?","intended":"opinion_question","floor":"conversation","tags":["opinion","conclusions_family","typo"]}
+{"id":"opinion_question-f3d03b76d7","text":"Have you come to any conclusions on Göbekli Tepe and its possible origins?","intended":"opinion_question","floor":"conversation","tags":["opinion","conclusions_family","terse"]}
+{"id":"opinion_question-3d38a9fa54","text":"Where do you land on Puma Punku after all that reading?","intended":"opinion_question","floor":"conversation","tags":["opinion","conclusions_family","base"]}
+{"id":"opinion_question-d5f3c2c491","text":"Whered o you land on the Atlantis debate after all that reading?","intended":"opinion_question","floor":"conversation","tags":["opinion","conclusions_family","typo"]}
+{"id":"opinion_question-ab5b34640a","text":"Any conclusions yet on Petrie?","intended":"opinion_question","floor":"conversation","tags":["opinion","conclusions_family","terse"]}
+{"id":"opinion_question-777edc2481","text":"Mate, What's your verdict on Dunn from the corpus?, yeah?","intended":"opinion_question","floor":"conversation","tags":["opinion","conclusions_family","aussie"]}
+{"id":"opinion_question-b2085b88cf","text":"after everything you've read, where do you stand on karahan tepe?","intended":"opinion_question","floor":"conversation","tags":["opinion","conclusions_family","lower"]}
+{"id":"opinion_question-4cdb584969","text":"Given your reading, do you have a position on Umm el-Qaab?","intended":"opinion_question","floor":"conversation","tags":["opinion","conclusions_family","base"]}
+{"id":"opinion_question-51e00beb99","text":"Have oyu formed a view on scablands?","intended":"opinion_question","floor":"conversation","tags":["opinion","conclusions_family","typo"]}
+{"id":"opinion_question-761f91aa35","text":"So where have you landed on Gilgamesh flood?","intended":"opinion_question","floor":"conversation","tags":["opinion","conclusions_family","terse"]}
 {"id":"musing-9c0465a455","text":"Thinknig about Puma Punku but not ready yet","intended":"musing","floor":"conversation","tags":["musing","typo"]}
 {"id":"musing-01abac480f","text":"Been owndering about Umm el-Qaab","intended":"musing","floor":"conversation","tags":["musing","typo"]}
 {"id":"musing-980a12fc78","text":"Sometmie I'd like to explore Abydos","intended":"musing","floor":"conversation","tags":["musing","typo"]}
@@ -99,46 +127,42 @@
 {"id":"campaign_control-8dbd57fcf9","text":"kick off a cycle now","intended":"campaign_control","floor":"conversation","tags":["control","lower"]}
 {"id":"campaign_control-8ef78eb984","text":"Execuet a campaign cycle now","intended":"campaign_control","floor":"conversation","tags":["control","typo"]}
 {"id":"campaign_control-d8fd696366","text":"trigger a research cycle now","intended":"campaign_control","floor":"conversation","tags":["control","lower"]}
-{"id":"campaign_control-2b2ce89917","text":"Reckon Run the research campaign (26) thanks","intended":"campaign_control","floor":"work_order","tags":["control","aussie"]}
+{"id":"campaign_control-2b2ce89917","text":"Reckon Run the research campaign (26) thanks","intended":"campaign_control","floor":"conversation","tags":["control","aussie"]}
 {"id":"campaign_control-3421f5581e","text":"Resum ethe campaign (29)","intended":"campaign_control","floor":"conversation","tags":["control","typo"]}
-{"id":"campaign_control-7c05c5c098","text":"run the research campaign (35)","intended":"campaign_control","floor":"work_order","tags":["control","lower"]}
+{"id":"campaign_control-7c05c5c098","text":"run the research campaign (35)","intended":"campaign_control","floor":"conversation","tags":["control","lower"]}
 {"id":"campaign_control-3594a4fb7c","text":"Startt he research campaign (41)","intended":"campaign_control","floor":"conversation","tags":["control","typo"]}
-{"id":"campaign_control-34014f749b","text":"Run the research campaign (44)","intended":"campaign_control","floor":"work_order","tags":["control","base"]}
+{"id":"campaign_control-34014f749b","text":"Run the research campaign (44)","intended":"campaign_control","floor":"conversation","tags":["control","base"]}
 {"id":"campaign_control-b7d48d1c40","text":"Pauset he campaign (45)","intended":"campaign_control","floor":"conversation","tags":["control","typo"]}
 {"id":"campaign_control-205817fe12","text":"Startt he campaign (49)","intended":"campaign_control","floor":"conversation","tags":["control","typo"]}
-{"id":"campaign_control-27376bd6da","text":"Run teh research campaign (53)","intended":"campaign_control","floor":"work_order","tags":["control","typo"]}
-{"id":"campaign_control-dde1e0e361","text":"Reckon Run the research campaign (62) thanks","intended":"campaign_control","floor":"work_order","tags":["control","aussie"]}
+{"id":"campaign_control-27376bd6da","text":"Run teh research campaign (53)","intended":"campaign_control","floor":"conversation","tags":["control","typo"]}
+{"id":"campaign_control-dde1e0e361","text":"Reckon Run the research campaign (62) thanks","intended":"campaign_control","floor":"conversation","tags":["control","aussie"]}
 {"id":"campaign_control-c74934f638","text":"Resum ethe campaign (65)","intended":"campaign_control","floor":"conversation","tags":["control","typo"]}
-{"id":"campaign_control-1b2556e3cf","text":"run the research campaign (71)","intended":"campaign_control","floor":"work_order","tags":["control","lower"]}
+{"id":"campaign_control-1b2556e3cf","text":"run the research campaign (71)","intended":"campaign_control","floor":"conversation","tags":["control","lower"]}
 {"id":"campaign_control-84867a64ba","text":"Startt he research campaign (77)","intended":"campaign_control","floor":"conversation","tags":["control","typo"]}
-{"id":"campaign_control-233df9b945","text":"Run the research campaign (80)","intended":"campaign_control","floor":"work_order","tags":["control","base"]}
+{"id":"campaign_control-233df9b945","text":"Run the research campaign (80)","intended":"campaign_control","floor":"conversation","tags":["control","base"]}
 {"id":"campaign_control-19f412d83d","text":"Pauset he campaign (81)","intended":"campaign_control","floor":"conversation","tags":["control","typo"]}
 {"id":"campaign_control-bddcffa9b8","text":"Startt he campaign (85)","intended":"campaign_control","floor":"conversation","tags":["control","typo"]}
-{"id":"campaign_control-d6e16d1bf9","text":"Run teh research campaign (89)","intended":"campaign_control","floor":"work_order","tags":["control","typo"]}
-{"id":"campaign_control-d96727cfa7","text":"Reckon Run the research campaign (98) thanks","intended":"campaign_control","floor":"work_order","tags":["control","aussie"]}
+{"id":"campaign_control-d6e16d1bf9","text":"Run teh research campaign (89)","intended":"campaign_control","floor":"conversation","tags":["control","typo"]}
+{"id":"campaign_control-d96727cfa7","text":"Reckon Run the research campaign (98) thanks","intended":"campaign_control","floor":"conversation","tags":["control","aussie"]}
 {"id":"campaign_control-42d8741ea1","text":"Resum ethe campaign (101)","intended":"campaign_control","floor":"conversation","tags":["control","typo"]}
-{"id":"campaign_control-7573472005","text":"run the research campaign (107)","intended":"campaign_control","floor":"work_order","tags":["control","lower"]}
+{"id":"campaign_control-7573472005","text":"run the research campaign (107)","intended":"campaign_control","floor":"conversation","tags":["control","lower"]}
 {"id":"campaign_control-9814f8559c","text":"Startt he research campaign (113)","intended":"campaign_control","floor":"conversation","tags":["control","typo"]}
-{"id":"campaign_control-e5543b914b","text":"Run the research campaign (116)","intended":"campaign_control","floor":"work_order","tags":["control","base"]}
+{"id":"campaign_control-e5543b914b","text":"Run the research campaign (116)","intended":"campaign_control","floor":"conversation","tags":["control","base"]}
 {"id":"campaign_control-e0c7c5e0c2","text":"Pauset he campaign (117)","intended":"campaign_control","floor":"conversation","tags":["control","typo"]}
 {"id":"campaign_control-718c132f50","text":"Startt he campaign (121)","intended":"campaign_control","floor":"conversation","tags":["control","typo"]}
-{"id":"campaign_control-7e84545c49","text":"Run teh research campaign (125)","intended":"campaign_control","floor":"work_order","tags":["control","typo"]}
-{"id":"campaign_control-7e1f50d9b0","text":"Run the research campaign (134)","intended":"campaign_control","floor":"work_order","tags":["control","aussie"]}
+{"id":"campaign_control-7e84545c49","text":"Run teh research campaign (125)","intended":"campaign_control","floor":"conversation","tags":["control","typo"]}
+{"id":"campaign_control-7e1f50d9b0","text":"Run the research campaign (134)","intended":"campaign_control","floor":"conversation","tags":["control","aussie"]}
 {"id":"campaign_control-d3228d9697","text":"Resum ethe campaign (137)","intended":"campaign_control","floor":"conversation","tags":["control","typo"]}
-{"id":"campaign_control-584f18f380","text":"run the research campaign (143)","intended":"campaign_control","floor":"work_order","tags":["control","lower"]}
+{"id":"campaign_control-584f18f380","text":"run the research campaign (143)","intended":"campaign_control","floor":"conversation","tags":["control","lower"]}
 {"id":"campaign_control-673260c736","text":"Startt he research campaign (149)","intended":"campaign_control","floor":"conversation","tags":["control","typo"]}
-{"id":"campaign_control-a270a4d0f8","text":"Run the research campaign (152)","intended":"campaign_control","floor":"work_order","tags":["control","base"]}
+{"id":"campaign_control-a270a4d0f8","text":"Run the research campaign (152)","intended":"campaign_control","floor":"conversation","tags":["control","base"]}
 {"id":"campaign_control-a3831f3bc6","text":"Pauset he campaign (153)","intended":"campaign_control","floor":"conversation","tags":["control","typo"]}
 {"id":"campaign_control-06396a97e8","text":"Startt he campaign (157)","intended":"campaign_control","floor":"conversation","tags":["control","typo"]}
-{"id":"campaign_control-87b9047994","text":"Run teh research campaign (161)","intended":"campaign_control","floor":"work_order","tags":["control","typo"]}
-{"id":"campaign_control-4aa36483cd","text":"Run the research campaign (170)","intended":"campaign_control","floor":"work_order","tags":["control","aussie"]}
+{"id":"campaign_control-87b9047994","text":"Run teh research campaign (161)","intended":"campaign_control","floor":"conversation","tags":["control","typo"]}
+{"id":"campaign_control-4aa36483cd","text":"Run the research campaign (170)","intended":"campaign_control","floor":"conversation","tags":["control","aussie"]}
 {"id":"campaign_control-eaafa283f9","text":"Resum ethe campaign (173)","intended":"campaign_control","floor":"conversation","tags":["control","typo"]}
-{"id":"campaign_control-985fffede2","text":"run the research campaign (179)","intended":"campaign_control","floor":"work_order","tags":["control","lower"]}
-{"id":"status_question-0efeb79efe","text":"Pause the campaign — actually no, just tell me how it's going","intended":"status_question","floor":"campaign_control","tags":["self_correct","base"]}
-{"id":"status_question-1ba84c47c5","text":"Mate, Stop the campaign, wait, ignore that — give me an update, yeah?","intended":"status_question","floor":"campaign_control","tags":["self_correct","aussie"]}
+{"id":"campaign_control-985fffede2","text":"run the research campaign (179)","intended":"campaign_control","floor":"conversation","tags":["control","lower"]}
 {"id":"status_question-0eee822a5c","text":"start the campaign… actually just what's the status?","intended":"status_question","floor":"campaign_control","tags":["self_correct","lower"]}
-{"id":"status_question-81b8a9506c","text":"Hey mate — Pause the campaign — actually no, just tell me how it's going cheers","intended":"status_question","floor":"campaign_control","tags":["self_correct","aussie"]}
-{"id":"status_question-413785c610","text":"stop the campaign, wait, ignore that — give me an update","intended":"status_question","floor":"campaign_control","tags":["self_correct","lower"]}
 {"id":"status_question-a0cd28533a","text":"Mate, Start the campaign… actually just what's the status?, yeah?","intended":"status_question","floor":"campaign_control","tags":["self_correct","aussie"]}
-{"id":"status_question-defa4c243f","text":"How's the campaign?","intended":"status_question","floor":"conversation","tags":["edge","contraction_status"]}
-{"id":"fewshot-control-selfcorrect","text":"Pause the campaign — actually no, just give me an update","intended":"status_question","floor":"campaign_control","tags":["fewshot"]}
+{"id":"fewshot-opinion-osireion-conclusions","text":"Have you come to any conclusions on the Osireion and its possible origins?","intended":"opinion_question","floor":"conversation","tags":["fewshot","conclusions_family"]}
+{"id":"fewshot-opinion-sphinx-land","text":"Where do you land on the Sphinx erosion debate after all that reading?","intended":"opinion_question","floor":"conversation","tags":["fewshot","conclusions_family"]}

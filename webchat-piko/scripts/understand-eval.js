@@ -73,6 +73,7 @@ async function main() {
     failed: 0,
     false_work_on_musing_status: 0,
     by_intent: {},
+    by_tag: {},
     misses: [],
   };
 
@@ -117,6 +118,13 @@ async function main() {
         tags: row.tags,
       });
     }
+    // WP11: track conclusions_family (and other tagged families)
+    for (const tag of (row.tags || [])) {
+      if (!tag || tag === 'base' || tag === 'typo' || tag === 'terse' || tag === 'aussie' || tag === 'lower') continue;
+      if (!stats.by_tag[tag]) stats.by_tag[tag] = { n: 0, correct: 0 };
+      stats.by_tag[tag].n += 1;
+      if (ok) stats.by_tag[tag].correct += 1;
+    }
 
     if (
       (row.intent === 'musing' || row.intent === 'status_question')
@@ -140,6 +148,13 @@ async function main() {
         correct: v.correct,
         accuracy: v.n ? v.correct / v.n : 0,
         failed: v.failed,
+      }]),
+    ),
+    by_tag: Object.fromEntries(
+      Object.entries(stats.by_tag).map(([k, v]) => [k, {
+        n: v.n,
+        correct: v.correct,
+        accuracy: v.n ? v.correct / v.n : 0,
       }]),
     ),
     miss_count: stats.misses.length,

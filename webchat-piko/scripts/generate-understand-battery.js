@@ -118,6 +118,22 @@ function buildSynthetic(target = 2000) {
     (t) => `How do you feel about ${t}?`,
   ];
 
+  // WP11 W2 — conclusions / judgment-on-ingested family → opinion_question
+  const conclusionsTemplates = [
+    (t) => `Have you come to any conclusions on ${t}?`,
+    (t) => `Have you come to any conclusions on ${t} and its possible origins?`,
+    (t) => `What do you think, given what you have ingested about ${t}?`,
+    (t) => `What do you think, given what you have ingested?`,
+    (t) => `Where do you land on ${t} after all that reading?`,
+    (t) => `Where do you land on the ${t} debate after all that reading?`,
+    (t) => `Any conclusions yet on ${t}?`,
+    (t) => `What's your verdict on ${t} from the corpus?`,
+    (t) => `After everything you've read, where do you stand on ${t}?`,
+    (t) => `Given your reading, do you have a position on ${t}?`,
+    (t) => `Have you formed a view on ${t}?`,
+    (t) => `So where have you landed on ${t}?`,
+  ];
+
   // --- musing ---
   const musingTemplates = [
     (t) => `I've been thinking about getting into ${t} sometime`,
@@ -227,6 +243,16 @@ function buildSynthetic(target = 2000) {
     const t = opinionTemplates[i % opinionTemplates.length](topic);
     const kind = ['', 'typo', 'aussie', 'lower'][i % 4];
     push('opinion_question', kind ? perturb(t, kind) : t, { tags: ['opinion', kind || 'base'] });
+  }
+
+  // WP11 W2 — conclusions / judgment-on-ingested (≥12 + perturbations)
+  for (let i = 0; i < 48; i++) {
+    const topic = TOPICS[i % TOPICS.length];
+    const t = conclusionsTemplates[i % conclusionsTemplates.length](topic);
+    const kind = ['', 'typo', 'terse', 'aussie', 'lower'][i % 5];
+    push('opinion_question', kind ? perturb(t, kind) : t, {
+      tags: ['opinion', 'conclusions_family', kind || 'base'],
+    });
   }
 
   // Musing
@@ -382,6 +408,21 @@ function buildSynthetic(target = 2000) {
     id: 'fewshot-opinion-orion',
     exclude_from_scoring: true,
     tags: ['fewshot'],
+  }));
+  rows.push(caseRow('opinion_question', 'Have you come to any conclusions on the Osireion and its possible origins?', {
+    id: 'fewshot-opinion-osireion-conclusions',
+    exclude_from_scoring: true,
+    tags: ['fewshot', 'conclusions_family'],
+  }));
+  rows.push(caseRow('opinion_question', 'What do you think, given what you have ingested?', {
+    id: 'fewshot-opinion-ingested',
+    exclude_from_scoring: true,
+    tags: ['fewshot', 'conclusions_family'],
+  }));
+  rows.push(caseRow('opinion_question', 'Where do you land on the Sphinx erosion debate after all that reading?', {
+    id: 'fewshot-opinion-sphinx-land',
+    exclude_from_scoring: true,
+    tags: ['fewshot', 'conclusions_family'],
   }));
 
   // Dedupe by text, then pad/trim to target

@@ -30,6 +30,7 @@ const JOB_DEFS = {
   history_dump: { profiles: ['ausmaker', 'culture', 'generic'] },
   ei_platform_eval: { profiles: ['culture'] },
   ei_engineering_queue: { profiles: ['culture'] },
+  ei_stance_synthesis: { profiles: ['culture'] },
 };
 
 let cached = null;

@@ -12617,6 +12617,21 @@ server.listen(PORT, '0.0.0.0', () => {
       }
     });
   }
+  // WP11 W3 — stance synthesis (position papers) daily 4:15 AM culture spine
+  if (isBackgroundJobEnabled('ei_stance_synthesis', __dirname)) {
+    cron.schedule('15 4 * * *', async () => {
+      try {
+        const { runStanceSynthesis } = require('./lib/eiStancePositions');
+        const out = await runStanceSynthesis({});
+        log('info', 'ei_stance_synthesis', {
+          rebuilt: out.rebuilt,
+          skipped: (out.skipped || []).length,
+        }, null);
+      } catch (e) {
+        log('error', 'ei_stance_synthesis', { message: e.message }, null);
+      }
+    });
+  }
   // Nightly Quant Agent — 1 AM: AusMaker inventory forecasts only
   if (isBackgroundJobEnabled('nightly_quant', __dirname)) {
     cron.schedule('0 1 * * *', async () => {
