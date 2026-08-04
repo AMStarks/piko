@@ -49,15 +49,22 @@ gate_chat_post() {
     fi)" > "$out" 2>/dev/null
 }
 
-# 1. Health
-ssh "$T_HOST" "curl -sf -m 15 '$BASE/api/health'" >/dev/null \
+# 1. Health (PIKO_HEALTH_API_KEY required when set on the spine)
+ssh "$T_HOST" "cd '$T_DIR' && (set -a; [ -f .env ] && . ./.env; set +a; \
+  if [ -n \"\${PIKO_HEALTH_API_KEY:-}\" ]; then \
+    curl -sf -m 15 -H \"Authorization: Bearer \${PIKO_HEALTH_API_KEY}\" '$BASE/api/health'; \
+  else \
+    curl -sf -m 15 '$BASE/api/health'; \
+  fi)" >/dev/null \
   && note "health: OK" || { note "health: FAIL"; FAIL=1; }
 
 # 2. Chat smoke + operator-voice floor
 # 180s: cold 27B + Ollama queue after restart often exceeds 90s on culture tenants.
-REPLY="$(ssh "$T_HOST" "curl -s -m 180 -X POST '$BASE/api/chat' -H 'Content-Type: application/json' -d '{\"message\":\"Quick status check — all good?\",\"session_id\":\"eval-gate\"}'" | python3 -c 'import json,sys
+# Strict auth spines need X-Piko-Key — gate_chat_post reads it on-box.
+gate_chat_post "Quick status check — all good?" "eval-gate" /tmp/gate-chat-smoke.json 180 || true
+REPLY="$(python3 -c 'import json,sys
 try:
-    print(json.load(sys.stdin).get("reply",""))
+    print(json.load(open("/tmp/gate-chat-smoke.json")).get("reply",""))
 except Exception:
     print("")' )"
 if [[ -z "$REPLY" ]]; then

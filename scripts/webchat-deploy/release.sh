@@ -94,8 +94,18 @@ restart_service "$T_SERVICE"
 # Settle: agent-worker reap + first campaign tick + Ollama warm can exceed 4s.
 sleep 12
 
+# On-box health probe: honour PIKO_HEALTH_API_KEY when set (handler requires it).
+health_curl() {
+  ssh "$T_HOST" "cd '$T_DIR' && (set -a; [ -f .env ] && . ./.env; set +a; \
+    if [ -n \"\${PIKO_HEALTH_API_KEY:-}\" ]; then \
+      curl -sf -m 20 -H \"Authorization: Bearer \${PIKO_HEALTH_API_KEY}\" '$T_HEALTH_URL'; \
+    else \
+      curl -sf -m 20 '$T_HEALTH_URL'; \
+    fi) >/dev/null"
+}
+
 echo "-- health check"
-if ssh "$T_HOST" "curl -sf -m 20 '$T_HEALTH_URL' >/dev/null" && "$SCRIPT_DIR/eval-gate.sh" "$TENANT"; then
+if health_curl && "$SCRIPT_DIR/eval-gate.sh" "$TENANT"; then
   echo "-- health + eval gate OK"
   HEALTH_OK=true
 else
@@ -103,7 +113,7 @@ else
   ssh "$T_HOST" "tar -xzf '$PRE_TAR' -C '$(dirname "$T_DIR")'"
   restart_service
   sleep 4
-  ssh "$T_HOST" "curl -sf -m 20 '$T_HEALTH_URL' >/dev/null" \
+  health_curl \
     && echo "-- rollback OK, spine healthy on previous release" \
     || echo "!! ROLLBACK HEALTH ALSO FAILED — manual intervention required"
   HEALTH_OK=false
