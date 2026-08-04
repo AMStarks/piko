@@ -1,0 +1,18 @@
+[Unit]
+Description=Piko agent worker (staging / Egyptian Insights pre-prod)
+After=network.target
+Wants=piko-webchat-staging.service
+
+[Service]
+Type=simple
+WorkingDirectory=/home/chief/webchat-piko-staging
+ExecStart=/usr/bin/node scripts/agent-worker.js
+Restart=on-failure
+RestartSec=5
+Environment=PIKO_AGENT_ORCH=1
+Environment=PIKO_WORKER_STANDALONE=1
+EnvironmentFile=-/home/chief/webchat-piko-staging/.env
+# Drain: systemctl --user kill -s SIGUSR1 piko-worker-staging.service
+
+[Install]
+WantedBy=default.target

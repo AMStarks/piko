@@ -13,6 +13,42 @@ BASE="http://127.0.0.1:$T_PORT"
 FAIL=0
 note() { echo "  [gate] $*"; }
 
+is_culture_tenant() {
+  case "$TENANT" in
+    staging|customer-03|ei) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# P3.3b: /api/agents (and cultures campaign) need the tenant API key once protected.
+# Read key on-box so it never crosses the ssh command line.
+gate_curl() {
+  local path="$1"
+  local out="$2"
+  ssh "$T_HOST" "cd '$T_DIR' && (set -a; [ -f .env ] && . ./.env; set +a; \
+    if [ -n \"\${PIKO_API_KEY:-}\" ]; then \
+      curl -sf -m 15 -H \"X-Piko-Key: \${PIKO_API_KEY}\" '$BASE$path'; \
+    else \
+      curl -sf -m 15 '$BASE$path'; \
+    fi)" > "$out" 2>/dev/null
+}
+
+gate_chat_post() {
+  local message="$1"
+  local session_id="$2"
+  local out="$3"
+  local timeout="${4:-180}"
+  local payload payload_esc
+  payload="$(python3 -c 'import json,sys; print(json.dumps({"message": sys.argv[1], "session_id": sys.argv[2]}))' "$message" "$session_id")"
+  payload_esc="${payload//\'/\'\\\'\'}"
+  ssh "$T_HOST" "cd '$T_DIR' && (set -a; [ -f .env ] && . ./.env; set +a; \
+    if [ -n \"\${PIKO_API_KEY:-}\" ]; then \
+      curl -s -m ${timeout} -X POST '$BASE/api/chat' -H 'Content-Type: application/json' -H \"X-Piko-Key: \${PIKO_API_KEY}\" -d '${payload_esc}'; \
+    else \
+      curl -s -m ${timeout} -X POST '$BASE/api/chat' -H 'Content-Type: application/json' -d '${payload_esc}'; \
+    fi)" > "$out" 2>/dev/null
+}
+
 # 1. Health
 ssh "$T_HOST" "curl -sf -m 15 '$BASE/api/health'" >/dev/null \
   && note "health: OK" || { note "health: FAIL"; FAIL=1; }
@@ -72,18 +108,6 @@ if missing:
 print(f"pipeline audit: OK ({j.get('id')} decide={pipe.get('decide')} plan={pipe.get('plan')} review={pipe.get('review')})")
 PY
 )
-# P3.3b: /api/agents (and cultures campaign) need the tenant API key once protected.
-# Read key on-box so it never crosses the ssh command line.
-gate_curl() {
-  local path="$1"
-  local out="$2"
-  ssh "$T_HOST" "cd '$T_DIR' && (set -a; [ -f .env ] && . ./.env; set +a; \
-    if [ -n \"\${PIKO_API_KEY:-}\" ]; then \
-      curl -sf -m 15 -H \"X-Piko-Key: \${PIKO_API_KEY}\" '$BASE$path'; \
-    else \
-      curl -sf -m 15 '$BASE$path'; \
-    fi)" > "$out" 2>/dev/null
-}
 
 if gate_curl '/api/agents/jobs' /tmp/gate-jobs.json; then
   note "agents api: OK"
@@ -93,16 +117,64 @@ else
   note "agents api: SKIP (endpoint absent or auth failed on this generation)"
 fi
 
-# 4. Grounded status probe (culture tenants): a campaign status *question* must
+# 4. Culture-tenant retrieval golden probes (P3.5)
+if is_culture_tenant; then
+  OSIREION_MSG='Have you come to any conclusions on the Osireion and its possible origins?'
+  if gate_chat_post "$OSIREION_MSG" 'eval-gate-osireion' /tmp/gate-osireion.json 180; then
+    OSIREION_OK="$(python3 -c 'import json,sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    print("parse_fail"); sys.exit(0)
+reply = str(d.get("reply") or "").strip()
+if not reply:
+    print("empty"); sys.exit(0)
+if "insufficient corpus" in reply.lower():
+    print("insufficient_corpus"); sys.exit(0)
+print("ok")' /tmp/gate-osireion.json)"
+    if [[ "$OSIREION_OK" == "ok" ]]; then
+      note "osireion opinion: OK"
+    else
+      note "osireion opinion: FAIL ($OSIREION_OK — must answer from corpus, not empty/insufficient)"; FAIL=1
+    fi
+  else
+    note "osireion opinion: FAIL (no chat response)"; FAIL=1
+  fi
+
+  # Soft check: exact thread-alias resolution (no LLM).
+  ALIAS_JSON="$(ssh "$T_HOST" "cd '$T_DIR' && node -e \"
+    const d = require('./lib/eiThreadDossiers');
+    console.log(JSON.stringify({
+      osireion: d.resolveThreadAlias('osireion'),
+      unknown: d.resolveThreadAlias('atlantis-moonbase')
+    }));
+  \"" 2>/dev/null || echo '{}')"
+  ALIAS_OK="$(python3 -c 'import json,sys
+try:
+    a = json.loads(sys.argv[1] or "{}")
+except Exception:
+    print("parse_fail"); sys.exit(0)
+if a.get("osireion") == "abydos" and a.get("unknown") in (None, ""):
+    print("ok")
+else:
+    print("bad", a)' "$ALIAS_JSON" 2>/dev/null || echo "parse_fail")"
+  if [[ "$ALIAS_OK" == "ok" ]]; then
+    note "thread-alias (soft): OK (osireion→abydos, invented→unknown)"
+  else
+    note "thread-alias (soft): WARN ($ALIAS_OK — non-blocking)"
+  fi
+fi
+
+# 5. Grounded status probe (culture tenants): a campaign status *question* must
 # answer (not dispatch) and quote a real number from live campaign state.
-if gate_curl '/api/cultures/campaign' /tmp/gate-campaign.json; then
+if is_culture_tenant && gate_curl '/api/cultures/campaign' /tmp/gate-campaign.json; then
   CYCLES="$(python3 -c 'import json,sys
 try:
     s = json.load(sys.stdin).get("status") or {}
     print(s.get("cycle_count", ""))
 except Exception:
     print("")' < /tmp/gate-campaign.json)"
-  STATUS_RESP="$(ssh "$T_HOST" "curl -s -m 120 -X POST '$BASE/api/chat' -H 'Content-Type: application/json' -d '{\"message\":\"Status of the research campaign\",\"session_id\":\"eval-gate-status\"}'")"
+  STATUS_RESP="$(gate_chat_post 'Status of the research campaign' 'eval-gate-status' /tmp/gate-status.json 120 && cat /tmp/gate-status.json || true)"
   GROUNDED_OK="$(GATE_CYCLES="$CYCLES" python3 -c 'import json,os,sys
 try:
     d = json.loads(sys.stdin.read() or "{}")

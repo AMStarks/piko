@@ -1,0 +1,14 @@
+[Unit]
+Description=Piko webchat tenant staging (Egyptian Insights pre-prod)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/chief/webchat-piko-staging
+EnvironmentFile=-/home/chief/webchat-piko-staging/.env
+ExecStart=/usr/bin/node /home/chief/webchat-piko-staging/server.js
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
