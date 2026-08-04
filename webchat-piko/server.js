@@ -3099,16 +3099,17 @@ async function handleRequest(req, res) {
   if (adminAuth.isEnabled()) {
     if (adminAuth.isProtectedApiPath(pathname, req.method) && !adminAuth.isMonitorBypass(req, pathname, req.method)) {
       const session = adminAuth.getSessionFromRequest(req, DATA_DIR);
-      // /api/chat/inject may authenticate with PIKO_API_KEY instead of a session.
-      let injectKeyOk = false;
-      if (!session && pathname === '/api/chat/inject') {
+      // Operator automation: valid PIKO_API_KEY satisfies admin-protected API paths
+      // (eval-gate, adapters, workers). Browser HQ still uses the session cookie.
+      let apiKeyOk = false;
+      if (!session) {
         try {
           const { keyMatches, presentedKey } = require('./lib/apiAuth');
           const { query: q } = parseUrl(req.url);
-          injectKeyOk = keyMatches(presentedKey(req, q));
-        } catch (_) { injectKeyOk = false; }
+          apiKeyOk = keyMatches(presentedKey(req, q));
+        } catch (_) { apiKeyOk = false; }
       }
-      if (!session && !injectKeyOk) {
+      if (!session && !apiKeyOk) {
         return send(res, 401, JSON.stringify({ ok: false, error: 'Unauthorized', login: '/admin/login' }));
       }
       if (session && session.role === 'client' && adminAuth.isOperatorOnlyApiPath(pathname)) {
