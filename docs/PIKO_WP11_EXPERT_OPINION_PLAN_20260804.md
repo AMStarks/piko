@@ -1,8 +1,24 @@
 # WP11 — Expert opinion: grounded stances from the ingested corpus
 
 Date: 2026-08-04
-Status: PLAN
+Status: ENACTED
+Release: `20260804-1011-2e17a09d` (customer-03)
 Depends on: WP10 (release `20260804-0816-5be618ed` — single-comprehension turns, decide-fail honesty)
+
+## Enactment notes (2026-08-04)
+
+| Check | Result |
+|---|---|
+| `npm test` + `lint:regex --zero` | PASS (655) |
+| conclusions_family understand eval | **46/46 (100%)** |
+| stratified understand sample (n=120) | 94.2% overall — misses concentrated in rare `agent_command`/`config_change`; `opinion_question` 14/14. Full-battery ≥97% not re-run (cost). |
+| Deploy customer-03 | PASS (`20260804-1011-2e17a09d`) |
+| Live probes a–e | PASS (stance + citations; follow-up stays on Osireion; absent topic honest; work dispatches; status grounded) |
+| Rodimus journals during probes | No `loading model` / unload; 8B @11434 and 27B @11435 resident |
+| W3 positions | `abydos` + `giza` written; Abydos opinion reused stance points (Temenos / Kha-kau-ra) |
+| Opinion quality sample (n=8) | stance/grounded/honest-absence/hedge targets met on sample; report-only |
+
+Commits: `fa58cf4` (core WP11), `99bb496` (follow-up continuity via lastAssistant/history).
 
 ## Why (measured, not guessed)
 
