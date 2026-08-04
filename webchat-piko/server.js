@@ -3299,11 +3299,6 @@ async function handleRequest(req, res) {
     })) return;
   }
 
-  // —— State API (read-only; localhost only) ——
-  function isLocal(req) {
-    const addr = req.socket && req.socket.remoteAddress;
-    return addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1';
-  }
   /** Corpus edit lock: if PIKO_CORPUS_EDIT_ALLOWED_IP or PIKO_CORPUS_EDIT_HEADER is set, require match. */
   function canEditCorpus(req) {
     const allowedIps = (process.env.PIKO_CORPUS_EDIT_ALLOWED_IP || '').split(',').map((s) => s.trim()).filter(Boolean);
@@ -3315,6 +3310,19 @@ async function handleRequest(req, res) {
     return false;
   }
 
+  // —— State API (extracted: routes/state.js) ——
+  {
+    const { tryHandleState } = require('./routes/state');
+    if (await tryHandleState(req, res, {
+      pathname,
+      send,
+      parseUrl,
+      loadIntents,
+      loadSessionsConfig,
+      loadAllowlist,
+      loadedSkills,
+    })) return;
+  }
 
   if (req.method === 'GET' && pathname === '/api/observe/summary') {
     try {
@@ -3617,33 +3625,6 @@ async function handleRequest(req, res) {
     }
   }
 
-
-  if (req.method === 'GET' && pathname === '/api/state/intents') {
-    if (!isLocal(req)) return send(res, 403, JSON.stringify({ error: 'State API is localhost only' }));
-    const { query } = parseUrl(req.url);
-    let intents = loadIntents();
-    const statusFilter = query && query.status;
-    if (statusFilter && statusFilter !== 'all') intents = intents.filter((i) => i.status === statusFilter);
-    return send(res, 200, JSON.stringify({ intents }));
-  }
-  if (req.method === 'GET' && pathname === '/api/state/sessions') {
-    if (!isLocal(req)) return send(res, 403, JSON.stringify({ error: 'State API is localhost only' }));
-    const sessions = loadSessionsConfig();
-    return send(res, 200, JSON.stringify({ sessions }));
-  }
-  if (req.method === 'GET' && pathname === '/api/state/allowlist') {
-    if (!isLocal(req)) return send(res, 403, JSON.stringify({ error: 'State API is localhost only' }));
-    const allowlist = loadAllowlist();
-    return send(res, 200, JSON.stringify({ allowlist }));
-  }
-  if (req.method === 'GET' && pathname === '/api/state/skills') {
-    if (!isLocal(req)) return send(res, 403, JSON.stringify({ error: 'State API is localhost only' }));
-    const skills = loadedSkills.map((s, i) => ({
-      id: s.id || s.name || 'skill_' + i,
-      pattern: typeof s.pattern === 'string' ? s.pattern : (s.pattern && s.pattern.toString ? s.pattern.toString() : ''),
-    }));
-    return send(res, 200, JSON.stringify({ skills }));
-  }
 
   // —— Health / site-context / command-centre (extracted: routes/ops.js) ——
   if (req.method === 'GET' && (pathname === '/api/health' || pathname === '/api/site-context' || pathname === '/api/command-centre/clients')) {
