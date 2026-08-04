@@ -451,7 +451,11 @@ async function runEiWorker(opts = {}) {
     let clarification = opts.clarification || '';
     try {
       const notes = require('./eiCorpusNotes').getNotesContextForGoal(goal);
-      if (notes) clarification = [clarification, notes].filter(Boolean).join('\n\n').slice(0, 2800);
+      if (notes) {
+        const { wrapQuotedMaterial, SYSTEM_INSTRUCTION } = require('./promptBoundary');
+        const wrapped = `${SYSTEM_INSTRUCTION}\n${wrapQuotedMaterial(notes, { source: 'corpus_notes', maxChars: 2400 })}`;
+        clarification = [clarification, wrapped].filter(Boolean).join('\n\n').slice(0, 3200);
+      }
     } catch (_) { /* optional */ }
     plan = await planFn(goal, {
       clarification,

@@ -26,11 +26,34 @@ function isAgentsPath(pathname) {
   return pathname === '/api/agents' || pathname.startsWith('/api/agents/');
 }
 
+function assertWorkPlaneOrDeny(req, res, send) {
+  try {
+    const { assertPlaneAllowed } = require('../lib/privilegePlanes');
+    const { resolvePrincipal } = require('../lib/sessionOwner');
+    const principal = resolvePrincipal(req, { dataDir: process.env.PIKO_DATA_DIR });
+    const check = assertPlaneAllowed('work', { principal });
+    if (!check.ok) {
+      send(res, check.status || 403, JSON.stringify({
+        ok: false,
+        error: check.error || 'plane_denied',
+        plane: check.plane,
+      }));
+      return false;
+    }
+  } catch (_) { /* fail open only if modules missing — auth still gates */ }
+  return true;
+}
+
 async function tryHandleAgents(req, res, ctx = {}) {
   const pathname = ctx.pathname || '';
   if (!isAgentsPath(pathname)) return false;
   const { send, readBody, rootDir, matchPath } = ctx;
   const orch = () => require('../lib/agentOrchestrator');
+
+  // P3.4a: mutating agent routes require the work plane.
+  if (String(req.method || '').toUpperCase() !== 'GET') {
+    if (!assertWorkPlaneOrDeny(req, res, send)) return true;
+  }
 
   if (req.method === 'GET' && pathname === '/api/agents') {
     try {

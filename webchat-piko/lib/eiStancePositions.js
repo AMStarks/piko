@@ -367,12 +367,19 @@ function gatherOpinionMaterial(query, opts = {}) {
       if (ragBlock) parts.push(ragBlock.slice(0, 2000));
     } catch (_) { /* optional */ }
   }
+  let block = parts.join('\n\n').slice(0, 5000);
+  if (block) {
+    try {
+      const { wrapQuotedMaterial, SYSTEM_INSTRUCTION } = require('./promptBoundary');
+      block = `${SYSTEM_INSTRUCTION}\n${wrapQuotedMaterial(block, { source: 'opinion_material', maxChars: 5000 })}`;
+    } catch (_) { /* optional */ }
+  }
   return {
     position,
     notes,
     ragHits: ragHits || [],
     has_material: !!(position || notes.length || (ragHits && ragHits.length)),
-    block: parts.join('\n\n').slice(0, 5000),
+    block,
     thread: thread || null,
   };
 }

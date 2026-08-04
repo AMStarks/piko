@@ -177,7 +177,8 @@ function formatRagBlock(hits) {
     body = body.slice(0, 500);
     lines.push(`\n[${cite}]\n${body}`);
   }
-  return lines.join('\n');
+  const { wrapQuotedMaterial, SYSTEM_INSTRUCTION } = require('./promptBoundary');
+  return `${SYSTEM_INSTRUCTION}\n${wrapQuotedMaterial(lines.join('\n'), { source: 'corpus_rag', maxChars: 4000 })}`;
 }
 
 async function getCorpusRagContext(query) {
