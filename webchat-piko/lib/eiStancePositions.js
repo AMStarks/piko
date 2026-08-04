@@ -6,7 +6,7 @@
 const fs = require('fs');
 const path = require('path');
 const { culturesDataRoot } = require('./culturesCorpusApi');
-const { THREAD_DEFS, notesForThread, matchThreadId, getThreadDef } = require('./eiThreadDossiers');
+const { notesForThread, matchThreadId, getThreadDef, activeThreadDefs } = require('./eiThreadDossiers');
 const { notesForQuery } = require('./eiCorpusNotes');
 const { ollamaNativeChat } = require('./llm');
 const { extractJsonObject } = require('./routingParse');
@@ -250,7 +250,7 @@ async function runStanceSynthesis(opts = {}) {
   const max = Math.max(1, Number(opts.maxThreads || process.env.PIKO_STANCE_SYNTHESIS_MAX || 3));
   const rebuilt = [];
   const skipped = [];
-  for (const def of THREAD_DEFS) {
+  for (const def of activeThreadDefs()) {
     if (rebuilt.length >= max) break;
     const notes = notesForThread(def.id, { limit: 100 });
     if (notes.length < MIN_NOTES) {

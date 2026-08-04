@@ -1,0 +1,94 @@
+{
+  "profile": "culture",
+  "threads": [
+    {
+      "id": "giza",
+      "label": "Giza / precision engineering",
+      "aliases": [
+        "giza",
+        "gizeh",
+        "great pyramid",
+        "khufu",
+        "sphinx"
+      ]
+    },
+    {
+      "id": "abydos",
+      "label": "Abydos / Oserion",
+      "aliases": [
+        "abydos",
+        "oserion",
+        "osireion",
+        "osiris temple",
+        "temenos of osiris",
+        "umm el-qaab",
+        "umm el qaab",
+        "seti i",
+        "seti temple"
+      ]
+    },
+    {
+      "id": "gobekli-tepe",
+      "label": "Göbekli Tepe",
+      "aliases": [
+        "gobekli",
+        "göbekli",
+        "karahan",
+        "tas tepeler",
+        "taș tepeler"
+      ]
+    },
+    {
+      "id": "tiahuanaco",
+      "label": "Tiahuanaco / Puma Punku",
+      "aliases": [
+        "tiahuanaco",
+        "tiwanaku",
+        "puma punku",
+        "pumapunku",
+        "andine"
+      ]
+    },
+    {
+      "id": "cataclysm",
+      "label": "Younger Dryas / megafloods",
+      "aliases": [
+        "cataclysm",
+        "younger dryas",
+        "scabland",
+        "channeled scabland",
+        "megaflood",
+        "meltwater",
+        "firestone",
+        "bretz"
+      ]
+    },
+    {
+      "id": "flood-myths",
+      "label": "Flood myths / comparative deluge literature",
+      "aliases": [
+        "flood myth",
+        "flood myths",
+        "great flood",
+        "the deluge",
+        "deluge myth",
+        "timaeus",
+        "critias",
+        "popol vuh",
+        "gilgamesh",
+        "atrahasis"
+      ]
+    },
+    {
+      "id": "atlantis",
+      "label": "Atlantis / antediluvian",
+      "aliases": [
+        "atlantis",
+        "antediluvian",
+        "atlantean",
+        "donnelly",
+        "plato atlantis"
+      ]
+    }
+  ]
+}

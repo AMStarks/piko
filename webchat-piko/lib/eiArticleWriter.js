@@ -5,7 +5,7 @@
 const fs = require('fs');
 const path = require('path');
 const { culturesDataRoot, getItem } = require('./culturesCorpusApi');
-const { loadDossier, matchThreadId, notesForThread, THREAD_DEFS } = require('./eiThreadDossiers');
+const { loadDossier, matchThreadId, notesForThread, activeThreadDefs } = require('./eiThreadDossiers');
 const { notesForQuery, loadNote } = require('./eiCorpusNotes');
 const { searchCorpus } = require('./eiCorpusRag');
 const { ollamaNativeChat } = require('./llm');
@@ -571,7 +571,7 @@ function maybeEnqueueAutoArticle(state, opts = {}) {
     if (ageH < minH) return { enqueued: false, reason: 'interval' };
   }
   const articles = listArticles();
-  for (const def of THREAD_DEFS) {
+  for (const def of activeThreadDefs()) {
     const cov = (state.thread_coverage || {})[def.id] || {};
     if ((cov.keeps || 0) < 3) continue;
     const dossier = loadDossier(def.id);

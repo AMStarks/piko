@@ -10,8 +10,14 @@ const { normalizeTitle } = require('./eiGoalParse');
 const { ollamaNativeChat } = require('./llm');
 const { extractJsonObject } = require('./routingParse');
 const { aliasMatch, collapseWhitespace, toLowerAsciiish, extractAlnumTokens } = require('./text');
+const {
+  getOntologyPack,
+  getThreadDefs,
+  resetOntologyCache,
+  resolveThreadAliasFromDefs,
+} = require('./ontologyPack');
 
-const THREAD_DEFS = [
+const DEFAULT_THREAD_DEFS = [
   {
     id: 'giza',
     label: 'Giza / precision engineering',
@@ -67,6 +73,19 @@ const THREAD_DEFS = [
 /** Short single-token aliases only match near-exact topic queries (≤3 tokens). */
 const SHORT_ALIAS_MAX = 5;
 
+function webchatRootDir() {
+  return path.join(__dirname, '..');
+}
+
+function activeThreadDefs() {
+  return getThreadDefs(webchatRootDir()) || DEFAULT_THREAD_DEFS;
+}
+
+function activeAliasMap() {
+  const pack = getOntologyPack(webchatRootDir());
+  return (pack && pack.aliases) || null;
+}
+
 function envFlagOn(name, defaultOn = true) {
   const v = String(process.env[name] ?? '').trim().toLowerCase();
   if (v === '0' || v === 'false' || v === 'off' || v === 'no') return false;
@@ -84,7 +103,7 @@ function dossierPath(threadId) {
 
 function getThreadDef(threadId) {
   const id = String(threadId || '').trim().toLowerCase();
-  return THREAD_DEFS.find((t) => t.id === id) || null;
+  return activeThreadDefs().find((t) => t.id === id) || null;
 }
 
 /**
@@ -92,18 +111,7 @@ function getThreadDef(threadId) {
  * Does NOT fuzzy-match topics — invented ids like "atlantis-moonbase" stay unknown.
  */
 function resolveThreadAlias(input) {
-  const raw = String(input || '').trim().toLowerCase();
-  if (!raw) return null;
-  if (getThreadDef(raw)) return raw;
-  const norm = normalizeTitle(raw);
-  if (!norm) return null;
-  for (const t of THREAD_DEFS) {
-    if (normalizeTitle(t.id) === norm) return t.id;
-    for (const a of t.aliases) {
-      if (normalizeTitle(a) === norm) return t.id;
-    }
-  }
-  return null;
+  return resolveThreadAliasFromDefs(input, activeThreadDefs(), activeAliasMap());
 }
 
 function matchThreadId(topic) {
@@ -117,7 +125,7 @@ function matchThreadId(topic) {
   let best = null;
   let bestScore = 0;
 
-  for (const t of THREAD_DEFS) {
+  for (const t of activeThreadDefs()) {
     let score = 0;
     for (const a of t.aliases) {
       const na = collapseWhitespace(toLowerAsciiish(normalizeTitle(a)));
@@ -315,7 +323,7 @@ async function refreshDossiers(opts = {}) {
   const max = Math.max(1, Math.min(5, Number(opts.max) || 2));
   const rebuilt = [];
   const skipped = [];
-  for (const def of THREAD_DEFS) {
+  for (const def of activeThreadDefs()) {
     if (rebuilt.length >= max) break;
     const notes = notesForThread(def.id, { limit: 100 });
     if (!notes.length) {
@@ -386,7 +394,11 @@ function dossierWantedLeads(max = 2, opts = {}) {
 }
 
 module.exports = {
-  THREAD_DEFS,
+  get THREAD_DEFS() {
+    return activeThreadDefs();
+  },
+  DEFAULT_THREAD_DEFS,
+  activeThreadDefs,
   notesForThread,
   buildDossier,
   postProcessDossier,
@@ -401,4 +413,5 @@ module.exports = {
   getThreadDef,
   dossiersDir,
   envFlagOn,
+  resetOntologyCache,
 };
