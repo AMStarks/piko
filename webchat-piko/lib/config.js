@@ -35,7 +35,7 @@ const SCHEMA = [
   { key: 'PIKO_WEBHOOK_SECRET', type: 'string', default: '', description: 'Shared webhook bearer/key', requiredWhenStrict: true },
   { key: 'PIKO_ADMIN_PASSWORD', type: 'string', default: '', description: 'Admin gate password' },
   { key: 'PIKO_API_KEY', type: 'string', default: '', description: 'API key for adapters/monitors' },
-  { key: 'PIKO_API_AUTH', type: 'enum', values: ['lan', 'strict', 'off', ''], default: 'lan', description: 'API auth mode' },
+  { key: 'PIKO_API_AUTH', type: 'enum', values: ['lan', 'strict', 'off', ''], default: 'strict', description: 'API auth mode (strict default; set lan explicitly for private-IP trust)' },
   { key: 'PIKO_CHANNEL_ALLOWLIST_OPEN', type: 'bool', default: '0', description: 'Opt into open non-webchat channels' },
   { key: 'PIKO_TASK_ENDPOINT', type: 'bool', default: '0', description: 'Enable /task shell surface' },
 
@@ -51,6 +51,7 @@ const SCHEMA = [
   { key: 'PIKO_CAMPAIGN_CYCLES_JSONL_MAX', type: 'int', default: '2000', description: 'Max lines for campaign_cycles.jsonl' },
   { key: 'PIKO_SCORECARD_JSONL_MAX', type: 'int', default: '500', description: 'Max lines for learning_scorecard.jsonl' },
   { key: 'PIKO_HQ_AUDIT_JSONL_MAX', type: 'int', default: '2000', description: 'Max lines for hq-audit.jsonl' },
+  { key: 'PIKO_SESSION_OWNER_OVERRIDE', type: 'bool', default: '0', description: 'Allow operators to access any sessionId (logged)' },
 
   { key: 'EGYPTIAN_INSIGHTS_DATA_DIR', type: 'string', default: '', description: 'EI corpus data root' },
   { key: 'PIKO_EGYPTIAN_DATA_DIR', type: 'string', default: '', description: 'Alias for EI data root' },

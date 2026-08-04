@@ -69,6 +69,19 @@ test('strict mode requires key even from LAN', () => {
   process.env.PIKO_API_AUTH = 'lan';
 });
 
+test('P3.3a: default mode is strict when PIKO_API_AUTH unset', () => {
+  const prev = process.env.PIKO_API_AUTH;
+  delete process.env.PIKO_API_AUTH;
+  process.env.PIKO_API_KEY = 'sekret';
+  try {
+    assert.equal(checkApiAuth(fakeReq('192.168.0.7'), '/api/agents/jobs', {}).status, 401);
+    assert.equal(checkApiAuth(fakeReq('192.168.0.7', { 'x-piko-key': 'sekret' }), '/api/agents/jobs', {}), null);
+  } finally {
+    if (prev === undefined) delete process.env.PIKO_API_AUTH;
+    else process.env.PIKO_API_AUTH = prev;
+  }
+});
+
 test('admin login endpoints are open from WAN (login is its own gate)', () => {
   process.env.PIKO_API_AUTH = 'lan';
   process.env.PIKO_API_KEY = 'sekret';

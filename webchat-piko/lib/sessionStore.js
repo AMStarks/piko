@@ -13,24 +13,95 @@ const MAX_HISTORY = Math.max(
 
 let db = null;
 
+function currentTenantId() {
+  return String(process.env.PIKO_TENANT_ID || '').trim() || null;
+}
+
+function migrateSchema(database) {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS conversation (
+      session_id TEXT NOT NULL,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_conversation_session ON conversation(session_id);
+    CREATE TABLE IF NOT EXISTS session_meta (
+      session_id TEXT PRIMARY KEY,
+      owner TEXT NOT NULL,
+      tenant_id TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+  // P3.3d: additive tenant_id on conversation (ignore if already present).
+  try {
+    database.exec('ALTER TABLE conversation ADD COLUMN tenant_id TEXT');
+  } catch (_) { /* column exists */ }
+  try {
+    const tid = currentTenantId();
+    if (tid) {
+      database.prepare(
+        'UPDATE conversation SET tenant_id = ? WHERE tenant_id IS NULL OR tenant_id = \'\'',
+      ).run(tid);
+    }
+  } catch (_) { /* ok */ }
+}
+
 function getDb() {
   if (db) return db;
   try {
     const Database = require('better-sqlite3');
     fs.mkdirSync(DATA_DIR, { recursive: true });
     db = new Database(DB_PATH);
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS conversation (
-        session_id TEXT NOT NULL,
-        role TEXT NOT NULL,
-        content TEXT NOT NULL,
-        created_at TEXT NOT NULL DEFAULT (datetime('now'))
-      );
-      CREATE INDEX IF NOT EXISTS idx_conversation_session ON conversation(session_id);
-    `);
+    migrateSchema(db);
     return db;
   } catch (e) {
     if (process.env.PIKO_LOG_CONSOLE) console.error('[sessionStore]', e.message);
+    return null;
+  }
+}
+
+/**
+ * Stamp owner on first sight; never overwrite an existing owner.
+ * @returns {{ session_id: string, owner: string, tenant_id: string|null }}
+ */
+function ensureSessionMeta(sessionId, ownerPrincipal) {
+  const database = getDb();
+  const sid = String(sessionId || '').trim();
+  const owner = String(ownerPrincipal || 'operator:operator').trim() || 'operator:operator';
+  const tid = currentTenantId();
+  if (!database || !sid) {
+    return { session_id: sid, owner, tenant_id: tid };
+  }
+  try {
+    const existing = database.prepare(
+      'SELECT session_id, owner, tenant_id FROM session_meta WHERE session_id = ?',
+    ).get(sid);
+    if (existing) {
+      if (tid && !existing.tenant_id) {
+        database.prepare('UPDATE session_meta SET tenant_id = ? WHERE session_id = ?').run(tid, sid);
+        existing.tenant_id = tid;
+      }
+      return existing;
+    }
+    database.prepare(
+      'INSERT INTO session_meta (session_id, owner, tenant_id) VALUES (?, ?, ?)',
+    ).run(sid, owner, tid);
+    return { session_id: sid, owner, tenant_id: tid };
+  } catch (e) {
+    if (process.env.PIKO_LOG_CONSOLE) console.error('[sessionStore] ensureSessionMeta', e.message);
+    return { session_id: sid, owner, tenant_id: tid };
+  }
+}
+
+function getSessionMeta(sessionId) {
+  const database = getDb();
+  if (!database) return null;
+  try {
+    return database.prepare(
+      'SELECT session_id, owner, tenant_id, created_at FROM session_meta WHERE session_id = ?',
+    ).get(String(sessionId || '').trim()) || null;
+  } catch (_) {
     return null;
   }
 }
@@ -39,9 +110,19 @@ function getHistory(sessionId) {
   const database = getDb();
   if (!database) return [];
   try {
-    const rows = database.prepare(
-      'SELECT role, content, created_at FROM conversation WHERE session_id = ? ORDER BY created_at ASC'
-    ).all(sessionId);
+    const tid = currentTenantId();
+    let rows;
+    if (tid) {
+      rows = database.prepare(
+        `SELECT role, content, created_at FROM conversation
+         WHERE session_id = ? AND (tenant_id = ? OR tenant_id IS NULL OR tenant_id = '')
+         ORDER BY created_at ASC`,
+      ).all(sessionId, tid);
+    } else {
+      rows = database.prepare(
+        'SELECT role, content, created_at FROM conversation WHERE session_id = ? ORDER BY created_at ASC',
+      ).all(sessionId);
+    }
     const last = rows.slice(-MAX_HISTORY);
     return last.map((r) => ({
       role: r.role,
@@ -54,10 +135,12 @@ function getHistory(sessionId) {
   }
 }
 
-function append(sessionId, role, content) {
+function append(sessionId, role, content, opts = {}) {
   const database = getDb();
   if (!database) return false;
   try {
+    if (opts.owner) ensureSessionMeta(sessionId, opts.owner);
+    else ensureSessionMeta(sessionId, 'operator:operator');
     let text = String(content);
     if (role === 'assistant') {
       try {
@@ -65,9 +148,10 @@ function append(sessionId, role, content) {
       } catch (_) {}
     }
     const created = new Date().toISOString();
+    const tid = currentTenantId();
     database.prepare(
-      'INSERT INTO conversation (session_id, role, content, created_at) VALUES (?, ?, ?, ?)'
-    ).run(sessionId, role, text.slice(0, 100000), created);
+      'INSERT INTO conversation (session_id, role, content, created_at, tenant_id) VALUES (?, ?, ?, ?, ?)',
+    ).run(sessionId, role, text.slice(0, 100000), created, tid);
     try {
       require('./transcriptCapture').captureTurn(sessionId, role, text);
     } catch (_) {}
@@ -137,6 +221,9 @@ module.exports = {
   clear,
   getSessionCount,
   listSessionIds,
+  ensureSessionMeta,
+  getSessionMeta,
+  currentTenantId,
   MAX_HISTORY,
   DB_PATH,
 };

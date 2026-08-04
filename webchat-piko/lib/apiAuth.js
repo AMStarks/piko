@@ -11,8 +11,8 @@
  * present 127.0.0.1 for every public request, which would otherwise bypass
  * the gate. X-Forwarded-For alone also never grants trust (client-spoofable).
  *
- * Modes (PIKO_API_AUTH): `lan` (default) · `strict` (never grant IP trust)
- * · `off` (legacy, no gate).
+ * Modes (PIKO_API_AUTH): `strict` (default — never grant IP trust)
+ * · `lan` (direct private socket IP trust) · `off` (legacy, no gate).
  */
 const crypto = require('crypto');
 
@@ -86,7 +86,7 @@ function cameThroughProxy(req) {
  * opts.dataDir enables admin-session cookie acceptance.
  */
 function checkApiAuth(req, pathname, query, opts = {}) {
-  const mode = String(process.env.PIKO_API_AUTH || 'lan').toLowerCase();
+  const mode = String(process.env.PIKO_API_AUTH || 'strict').toLowerCase();
   if (mode === 'off') return null;
   if (!String(pathname || '').startsWith('/api/')) return null;
   if (OPEN_PATHS.has(pathname)) return null;

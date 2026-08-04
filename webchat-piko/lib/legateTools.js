@@ -22,16 +22,24 @@ function bustCampaignStateBlockCache() {
 }
 
 function culturesDbPath() {
-  const root = String(
+  const envRoot = String(
     process.env.EGYPTIAN_INSIGHTS_DATA_DIR
     || process.env.PIKO_EGYPTIAN_DATA_DIR
     || process.env.PIKO_EGYPTIAN_DATA
     || '',
-  ).trim()
-    || path.join(path.dirname(dataDir()), 'egyptian-insights');
+  ).trim();
+  const tenantRoot = path.join(dataDir(), 'egyptian-insights');
+  const legacySibling = path.join(path.dirname(dataDir()), 'egyptian-insights');
+  const root = envRoot || (fs.existsSync(tenantRoot) ? tenantRoot : legacySibling);
+  if (!envRoot && root === legacySibling && legacySibling !== tenantRoot) {
+    try {
+      console.warn(`[legateTools.culturesDataRoot] WARN legacy path: ${legacySibling}`);
+    } catch (_) { /* ok */ }
+  }
   const candidates = [
     path.join(root, 'cultures_cache.sqlite'),
-    path.join(dataDir(), '..', 'egyptian-insights', 'cultures_cache.sqlite'),
+    path.join(tenantRoot, 'cultures_cache.sqlite'),
+    path.join(legacySibling, 'cultures_cache.sqlite'),
     '/home/chief/data/egyptian-insights/cultures_cache.sqlite',
   ];
   for (const p of candidates) {

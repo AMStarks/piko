@@ -40,6 +40,21 @@ async function tryHandleChat(req, res, ctx = {}) {
       const key = automationSession
         ? (sessionId || 'automation')
         : (process.env.PIKO_UNIFIED_SESSION_ID || sessionId || 'main');
+      const { resolvePrincipal, assertSessionAccess, principalId } = require('../lib/sessionOwner');
+      const principal = resolvePrincipal(req, {
+        dataDir: ctx.DATA_DIR || process.env.PIKO_DATA_DIR,
+        query: Object.fromEntries(u.searchParams.entries()),
+      });
+      const access = assertSessionAccess(key, principal, {
+        req,
+        query: Object.fromEntries(u.searchParams.entries()),
+        sessionStore,
+      });
+      if (!access.ok) {
+        return send(res, access.status || 403, JSON.stringify({ ok: false, error: access.error }));
+      }
+      // Stamp principal on first access for new empty sessions.
+      sessionStore.ensureSessionMeta(key, principalId(principal));
       const history = sessionStore.getHistory(key) || [];
       send(res, 200, JSON.stringify({
         ok: true,
@@ -62,6 +77,19 @@ async function tryHandleChat(req, res, ctx = {}) {
       const key = automationSession
         ? (sessionId || 'automation')
         : (process.env.PIKO_UNIFIED_SESSION_ID || sessionId || 'main');
+      const { resolvePrincipal, assertSessionAccess } = require('../lib/sessionOwner');
+      const principal = resolvePrincipal(req, {
+        dataDir: ctx.DATA_DIR || process.env.PIKO_DATA_DIR,
+        query: Object.fromEntries(u.searchParams.entries()),
+      });
+      const access = assertSessionAccess(key, principal, {
+        req,
+        query: Object.fromEntries(u.searchParams.entries()),
+        sessionStore,
+      });
+      if (!access.ok) {
+        return send(res, access.status || 403, JSON.stringify({ ok: false, error: access.error }));
+      }
       sessionStore.clear(key);
       send(res, 200, JSON.stringify({ ok: true, sessionId: key, cleared: true }));
     } catch (e) {
@@ -79,9 +107,9 @@ async function tryHandleChat(req, res, ctx = {}) {
         } catch (_) {
           return send(res, 400, JSON.stringify({ error: 'Invalid JSON' }));
         }
+        const { query: q } = parseUrl(req.url);
         try {
           const { keyMatches, presentedKey } = require('../lib/apiAuth');
-          const { query: q } = parseUrl(req.url);
           const hasKey = keyMatches(presentedKey(req, q));
           if (!adminAuth.isEnabled() && !hasKey) {
             return send(res, 401, JSON.stringify({ ok: false, error: 'Unauthorized' }));
@@ -100,7 +128,22 @@ async function tryHandleChat(req, res, ctx = {}) {
         if (role !== 'user' && role !== 'assistant') {
           return send(res, 400, JSON.stringify({ error: 'role must be user or assistant' }));
         }
-        const ok = sessionStore.append(sessionId, role, content.slice(0, 10000));
+        const { resolvePrincipal, assertSessionAccess, principalId } = require('../lib/sessionOwner');
+        const principal = resolvePrincipal(req, {
+          dataDir: ctx.DATA_DIR || process.env.PIKO_DATA_DIR,
+          query: q,
+        });
+        const access = assertSessionAccess(sessionId, principal, {
+          req,
+          query: q,
+          sessionStore,
+        });
+        if (!access.ok) {
+          return send(res, access.status || 403, JSON.stringify({ ok: false, error: access.error }));
+        }
+        const ok = sessionStore.append(sessionId, role, content.slice(0, 10000), {
+          owner: principalId(principal),
+        });
         try {
           const { recordNotification } = require('../lib/notificationFeed');
           recordNotification({

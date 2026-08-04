@@ -47,7 +47,20 @@ function culturesDataRoot() {
     || '',
   ).trim();
   if (env) return env;
-  return path.join(__dirname, '..', '..', 'data', 'egyptian-insights');
+  // P3.3e: prefer tenant data dir; legacy repo path is read-only migration only.
+  const dataDir = String(process.env.PIKO_DATA_DIR || '').trim();
+  const underTenant = dataDir
+    ? path.join(dataDir, 'egyptian-insights')
+    : path.join(__dirname, '..', 'data', 'egyptian-insights');
+  const legacyRepo = path.join(__dirname, '..', '..', 'data', 'egyptian-insights');
+  if (fs.existsSync(underTenant)) return underTenant;
+  if (fs.existsSync(legacyRepo) && legacyRepo !== underTenant) {
+    try {
+      console.warn(`[culturesDataRoot] WARN legacy repo path in use: ${legacyRepo} (prefer PIKO_DATA_DIR/egyptian-insights)`);
+    } catch (_) { /* ok */ }
+    return legacyRepo;
+  }
+  return underTenant;
 }
 
 function dbFile() {

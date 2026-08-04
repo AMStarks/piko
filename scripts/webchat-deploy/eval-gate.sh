@@ -72,17 +72,30 @@ if missing:
 print(f"pipeline audit: OK ({j.get('id')} decide={pipe.get('decide')} plan={pipe.get('plan')} review={pipe.get('review')})")
 PY
 )
-if ssh "$T_HOST" "curl -sf -m 15 '$BASE/api/agents/jobs'" > /tmp/gate-jobs.json 2>/dev/null; then
+# P3.3b: /api/agents (and cultures campaign) need the tenant API key once protected.
+# Read key on-box so it never crosses the ssh command line.
+gate_curl() {
+  local path="$1"
+  local out="$2"
+  ssh "$T_HOST" "cd '$T_DIR' && (set -a; [ -f .env ] && . ./.env; set +a; \
+    if [ -n \"\${PIKO_API_KEY:-}\" ]; then \
+      curl -sf -m 15 -H \"X-Piko-Key: \${PIKO_API_KEY}\" '$BASE$path'; \
+    else \
+      curl -sf -m 15 '$BASE$path'; \
+    fi)" > "$out" 2>/dev/null
+}
+
+if gate_curl '/api/agents/jobs' /tmp/gate-jobs.json; then
   note "agents api: OK"
   python3 -c "$GATE_PY" < /tmp/gate-jobs.json | while read -r l; do note "$l"; done
   python3 -c "$GATE_PY" < /tmp/gate-jobs.json >/dev/null || FAIL=1
 else
-  note "agents api: SKIP (endpoint absent on this generation)"
+  note "agents api: SKIP (endpoint absent or auth failed on this generation)"
 fi
 
 # 4. Grounded status probe (culture tenants): a campaign status *question* must
 # answer (not dispatch) and quote a real number from live campaign state.
-if ssh "$T_HOST" "curl -sf -m 15 '$BASE/api/cultures/campaign'" > /tmp/gate-campaign.json 2>/dev/null; then
+if gate_curl '/api/cultures/campaign' /tmp/gate-campaign.json; then
   CYCLES="$(python3 -c 'import json,sys
 try:
     s = json.load(sys.stdin).get("status") or {}
