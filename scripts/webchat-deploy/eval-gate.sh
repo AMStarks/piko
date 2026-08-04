@@ -240,7 +240,9 @@ if p.exists():
         if s and not s.startswith('#') and '=' in s:
             k, _, v = s.partition('=')
             env[k.strip()] = v.strip().strip('\"').strip(\"'\")
-key = env.get('PIKO_YOLO_API_KEY') or env.get('PIKO_HEALTH_API_KEY') or env.get('PIKO_API_KEY') or ''
+# Admin-protected paths need PIKO_API_KEY; YOLO/HITL handlers need YOLO/HEALTH key.
+api_key = env.get('PIKO_API_KEY') or ''
+yolo_key = env.get('PIKO_YOLO_API_KEY') or env.get('PIKO_HEALTH_API_KEY') or api_key
 path = os.environ.get('GATE_MONEY_PATH') or ''
 base = os.environ.get('GATE_MONEY_BASE') or ''
 raw = base64.b64decode(os.environ.get('GATE_MONEY_B64') or '').decode('utf-8', 'replace')
@@ -248,9 +250,10 @@ url = base + path
 req = urllib.request.Request(url, data=raw.encode('utf-8'), method='POST', headers={
     'Content-Type': 'application/json',
 })
-if key:
-    req.add_header('Authorization', 'Bearer ' + key)
-    req.add_header('X-Piko-Key', key)
+if api_key:
+    req.add_header('X-Piko-Key', api_key)
+if yolo_key:
+    req.add_header('Authorization', 'Bearer ' + yolo_key)
 try:
     with urllib.request.urlopen(req, timeout=15) as resp:
         body = resp.read().decode('utf-8', 'replace')
