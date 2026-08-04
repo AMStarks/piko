@@ -15,6 +15,8 @@ test('WP1.1: /api/ei and /api/cultures are session-protected', () => {
   assert.equal(isProtectedApiPath('/api/cultures/campaign', 'GET'), true);
   assert.equal(isProtectedApiPath('/api/cultures/campaign', 'POST'), true);
   assert.equal(isProtectedApiPath('/api/chat/inject', 'POST'), true);
+  assert.equal(isProtectedApiPath('/api/agents', 'GET'), true);
+  assert.equal(isProtectedApiPath('/api/agents/jobs', 'GET'), true);
 });
 
 test('WP1.1: engineering + inject are operator-only; cultures GET is not', () => {
