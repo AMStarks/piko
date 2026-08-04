@@ -65,7 +65,7 @@ test('formatMissionFitReport lists kept and dropped', () => {
   });
   assert.match(text, /keep=1/);
   assert.match(text, /Kept/);
-  assert.match(text, /purged/);
+  assert.match(text, /quarantined/);
 });
 
 test('enforceDeliverableContract demotes keep without local document', () => {

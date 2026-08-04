@@ -31,6 +31,7 @@ const JOB_DEFS = {
   ei_platform_eval: { profiles: ['culture'] },
   ei_engineering_queue: { profiles: ['culture'] },
   ei_stance_synthesis: { profiles: ['culture'] },
+  ei_quarantine_cleanup: { profiles: ['culture'] },
 };
 
 let cached = null;

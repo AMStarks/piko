@@ -5,6 +5,11 @@ const path = require('path');
 
 const DATA_DIR = process.env.PIKO_DATA_DIR || path.join(__dirname, '..', 'data');
 
+function envTruthy(name) {
+  const v = String(process.env[name] ?? '').trim().toLowerCase();
+  return v === '1' || v === 'true' || v === 'on' || v === 'yes';
+}
+
 function validate() {
   const errors = [];
   const maybeUrlVars = [
@@ -29,6 +34,15 @@ function validate() {
       }
     } catch (_) {
       errors.push(`${key} must be a valid URL`);
+    }
+  }
+  // P0.6: authoritative understand/decide must pin 27B models — refuse silent 8B fallback.
+  if (envTruthy('PIKO_UNDERSTAND_AUTHORITATIVE')) {
+    if (!String(process.env.PIKO_UNDERSTAND_MODEL || '').trim()) {
+      errors.push('PIKO_UNDERSTAND_MODEL must be set when PIKO_UNDERSTAND_AUTHORITATIVE=1');
+    }
+    if (!String(process.env.PIKO_LEGATE_MODEL || '').trim()) {
+      errors.push('PIKO_LEGATE_MODEL must be set when PIKO_UNDERSTAND_AUTHORITATIVE=1');
     }
   }
   if (errors.length) {

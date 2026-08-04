@@ -63,6 +63,45 @@ function shouldReplan(stepResults) {
   return countKeeps(steps) === 0;
 }
 
+/** Stable fingerprint of tool + normalized args for replan dedup (P1.7). */
+function stepFingerprint(step) {
+  if (!step || !step.tool) return '';
+  const args = step.args || step.input || {};
+  const keys = Object.keys(args).sort();
+  const norm = {};
+  for (const k of keys) {
+    const v = args[k];
+    if (v == null) continue;
+    if (typeof v === 'string') norm[k] = collapseWhitespace(v).toLowerCase().slice(0, 160);
+    else if (typeof v === 'number' || typeof v === 'boolean') norm[k] = v;
+    else norm[k] = JSON.stringify(v).slice(0, 160);
+  }
+  return `${String(step.tool)}::${JSON.stringify(norm)}`;
+}
+
+function filterDuplicateReplanSteps(extraSteps, priorResults) {
+  const seen = new Set();
+  for (const s of priorResults || []) {
+    if (!s) continue;
+    // Dedup against any prior step with the same tool+args (success or fail).
+    // Especially: never re-run a succeeded research_campaign start.
+    const fp = stepFingerprint({ tool: s.tool, args: s.input || s.args || {} });
+    if (fp) seen.add(fp);
+  }
+  const kept = [];
+  const skipped = [];
+  for (const s of extraSteps || []) {
+    const fp = stepFingerprint(s);
+    if (fp && seen.has(fp)) {
+      skipped.push(fp);
+      continue;
+    }
+    if (fp) seen.add(fp);
+    kept.push(s);
+  }
+  return { steps: kept, skipped };
+}
+
 function buildReplanClarification(stepResults) {
   const lines = ['PREVIOUS ATTEMPT (do not repeat completed steps):'];
   (stepResults || []).forEach((s, i) => {
@@ -76,9 +115,68 @@ function buildReplanClarification(stepResults) {
   });
   lines.push(
     'Re-plan the remaining work. Use different queries/tools where the previous step failed.',
+    'Do NOT repeat an identical tool+args step that already ran (especially research_campaign start).',
     'Return {"steps":[]} if there is no viable alternative.',
   );
   return lines.join('\n');
+}
+
+/**
+ * P1.7: classify seek/harvest outcomes for honest Legate completion copy.
+ * @returns {'partial_keep'|'all_rejected'|'no_candidates'|'search_error'|'ok_other'|'unknown'}
+ */
+function classifySeekOutcome(stepResults) {
+  const steps = stepResults || [];
+  const keeps = countKeeps(steps);
+  if (keeps > 0) return 'partial_keep';
+
+  let anySeek = false;
+  let anySearchError = false;
+  let anyHits = false;
+  let anyIngested = false;
+  let anyDrops = false;
+
+  for (const sr of steps) {
+    if (!sr) continue;
+    if (sr.tool === 'seek_files' || sr.tool === 'harvest' || sr.tool === 'find_literature') {
+      anySeek = true;
+      if (sr.ok === false) {
+        const err = String(sr.error || sr.artifact || '').toLowerCase();
+        if (err.includes('timeout') || err.includes('failed') || err.includes('error') || err.includes('snag')) {
+          anySearchError = true;
+        }
+      }
+      const cov = sr.seek_coverage || (sr.result && sr.result.seek_coverage) || {};
+      if (Number(cov.search_hits || 0) > 0 || Number(cov.pdfs_probed_ok || 0) > 0) anyHits = true;
+      if (Number(cov.ingested_documents || 0) > 0) anyIngested = true;
+    }
+    const mf = sr.mission_fit || (sr.result && sr.result.mission_fit);
+    if (mf && mf.counts && Number(mf.counts.drop || 0) > 0) anyDrops = true;
+    if (mf && Array.isArray(mf.judgments) && mf.judgments.some((j) => j && j.verdict === 'drop')) {
+      anyDrops = true;
+    }
+  }
+
+  if (anySearchError && !anyHits && !anyIngested) return 'search_error';
+  if (anyDrops || anyIngested) return 'all_rejected';
+  if (anySeek && !anyHits && !anyIngested) return 'no_candidates';
+  if (anySeek) return 'no_candidates';
+  return 'unknown';
+}
+
+function outcomeReasonLine(code) {
+  switch (code) {
+    case 'partial_keep':
+      return 'Outcome: kept some deliverables (others rejected or unsure).';
+    case 'all_rejected':
+      return 'Outcome: candidates were found but all were rejected or quarantined by mission-fit.';
+    case 'no_candidates':
+      return 'Outcome: search found no usable open copies (shelf empty).';
+    case 'search_error':
+      return 'Outcome: search/scrape failed with an error — not a content rejection.';
+    default:
+      return '';
+  }
 }
 
 /**
@@ -400,9 +498,18 @@ async function runEiWorker(opts = {}) {
     }
 
     const maxExtra = Math.max(1, Math.min(4, Number(process.env.PIKO_EI_REPLAN_MAX_STEPS || 2)));
-    const extra = (replan.steps || []).slice(0, maxExtra);
+    const rawExtra = (replan.steps || []).slice(0, maxExtra);
+    // P1.7: drop replan steps that fingerprint-match already-run steps.
+    const deduped = filterDuplicateReplanSteps(rawExtra, stepResults);
+    const extra = deduped.steps;
+    if (deduped.skipped.length) {
+      reportProgress({
+        stage: 'replan_dedup',
+        message: `Skipped ${deduped.skipped.length} duplicate replan step(s)`,
+      });
+    }
     if (!extra.length) {
-      replanMeta = { status: 'no_alternative', added: 0 };
+      replanMeta = { status: 'no_alternative', added: 0, skipped_dupes: deduped.skipped.length };
       reportProgress({ stage: 'replan_done', message: 'Re-plan: no viable alternative.' });
     } else {
       const extraResults = await runSteps(extra, {
@@ -440,6 +547,8 @@ async function runEiWorker(opts = {}) {
   const pass = fit.pass && okSteps > 0;
   const coverage = coverageFromSteps(stepResults);
   const covBlock = coverage ? formatSeekCoverage(coverage) : null;
+  const outcomeCode = classifySeekOutcome(stepResults);
+  const outcomeLine = outcomeReasonLine(outcomeCode);
   let missionFitBlock = null;
   try {
     const { formatMissionFitReport } = require('./eiMissionFitReview');
@@ -459,6 +568,7 @@ async function runEiWorker(opts = {}) {
         ? 'Re-plan: no viable alternative.'
         : null),
     `Goal fit: ${fit.fit} — ${fit.summary}`,
+    outcomeLine || null,
     fit.samples && fit.samples.length ? `Samples: ${fit.samples.join(' · ')}` : null,
     covBlock || null,
     missionFitBlock || null,
@@ -485,6 +595,8 @@ async function runEiWorker(opts = {}) {
       replan: replanMeta,
       goal_fit: fit,
       seek_coverage: coverage,
+      outcome_code: outcomeCode,
+      outcome_line: outcomeLine,
       mission_fit: fit.mission_fit || stepResults.map((s) => s.mission_fit).find(Boolean) || null,
       steps: stepResults.map((s) => ({
         tool: s.tool,
@@ -510,6 +622,10 @@ module.exports = {
   runSteps,
   shouldReplan,
   buildReplanClarification,
+  stepFingerprint,
+  filterDuplicateReplanSteps,
+  classifySeekOutcome,
+  outcomeReasonLine,
   countKeeps,
   isSubstantiveStep,
 };

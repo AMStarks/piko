@@ -3,10 +3,10 @@
  * against the operator brief (authored_by vs about vs off-mission).
  *
  * For volume/PDF jobs: keep requires a local document; drops (and demoted keeps) are
- * purged from cultures_cache so the corpus is the accepted deliverable only.
+ * quarantined (soft-delete) so the corpus is the accepted deliverable only — reversible.
  */
 const { resolveReadableContent } = require('./eiCorpusContentReview');
-const { getItem, deleteHarvestItem } = require('./culturesCorpusApi');
+const { getItem, quarantineHarvestItem } = require('./culturesCorpusApi');
 const { setFlag, clearFlag } = require('./eiCorpusFlags');
 const { ollamaNativeChat } = require('./llm');
 const { extractJsonObject } = require('./routingParse');
@@ -45,6 +45,14 @@ function purgeDropsEnabled(opts = {}) {
   if (opts.purgeDrops === true) return true;
   const v = String(process.env.PIKO_EI_MISSION_FIT_PURGE || '1').trim().toLowerCase();
   return !(v === '0' || v === 'false' || v === 'off');
+}
+
+/** P1.5: mission-fit "purge" now quarantines (reversible soft-delete). */
+function purgeOrQuarantine(harvestId, judgment) {
+  return quarantineHarvestItem(harvestId, {
+    reason: String((judgment && judgment.why) || 'mission_fit_drop').slice(0, 280),
+    sourceUrl: (judgment && (judgment.source_url || judgment.url)) || '',
+  });
 }
 
 function requireLocalDocument(opts = {}) {
@@ -444,10 +452,11 @@ async function enforceNamedWorkKeeps(judgments, mission, opts = {}) {
     for (const j of demoted) {
       if (!j || !j.harvest_id) continue;
       if (doPurge) {
-        const del = deleteHarvestItem(j.harvest_id);
+        const del = purgeOrQuarantine(j.harvest_id, j);
         if (del.ok) {
           try { clearFlag(j.harvest_id); } catch (_) { /* ok */ }
           j.purged = true;
+          j.quarantined = true;
         } else if (opts.applyFlags !== false) {
           await applyMissionFitFlag(j);
         }
@@ -510,10 +519,11 @@ async function dedupeKeepJudgments(judgments, opts = {}) {
   for (const j of demoted) {
     if (!j || !j.harvest_id) continue;
     if (doPurge) {
-      const del = deleteHarvestItem(j.harvest_id);
+      const del = purgeOrQuarantine(j.harvest_id, j);
       if (del.ok) {
         try { clearFlag(j.harvest_id); } catch (_) { /* ok */ }
         j.purged = true;
+        j.quarantined = true;
       } else if (opts.applyFlags !== false) {
         await applyMissionFitFlag(j);
       }
@@ -691,7 +701,7 @@ async function reviewHarvestsForMission(harvestIds, mission, opts = {}) {
       );
 
       if (shouldPurge) {
-        const del = deleteHarvestItem(hid);
+        const del = purgeOrQuarantine(hid, j);
         if (del.ok) {
           try { clearFlag(hid); } catch (_) { /* ok */ }
           counts.purged += 1;
@@ -700,8 +710,9 @@ async function reviewHarvestsForMission(harvestIds, mission, opts = {}) {
             title: j.title || got.item.title,
             relation: j.relation,
             why: j.why,
+            quarantined: true,
           });
-          j = { ...j, purged: true };
+          j = { ...j, purged: true, quarantined: true };
         } else if (opts.applyFlags !== false) {
           await applyMissionFitFlag(j);
         }
@@ -737,15 +748,16 @@ async function reviewHarvestsForMission(harvestIds, mission, opts = {}) {
         const j = judgments[i];
         if (!j || !j.second_look || j.purged) continue;
         if (j.verdict === 'drop' && doPurge) {
-          const del = deleteHarvestItem(j.harvest_id);
+          const del = purgeOrQuarantine(j.harvest_id, j);
           if (del.ok) {
             try { clearFlag(j.harvest_id); } catch (_) { /* ok */ }
-            judgments[i] = { ...j, purged: true };
+            judgments[i] = { ...j, purged: true, quarantined: true };
             purged.push({
               harvest_id: j.harvest_id,
               title: j.work_title || j.title,
               relation: j.relation,
               why: j.why,
+              quarantined: true,
             });
             continue;
           }
@@ -830,7 +842,7 @@ function formatMissionFitReport(report) {
     'Mission-fit review (read each piece; corpus = accepted deliverables only):',
     `  keep=${c.keep || 0} · drop=${c.drop || 0} · unsure=${c.unsure || 0}`
       + (c.demoted ? ` · demoted_no_doc=${c.demoted}` : '')
-      + (c.purged ? ` · purged=${c.purged}` : '')
+      + (c.purged ? ` · quarantined=${c.purged}` : '')
       + (c.error ? ` · error=${c.error}` : ''),
   ];
   if (report.second_look && report.second_look.examined) {
@@ -852,7 +864,7 @@ function formatMissionFitReport(report) {
     }
   }
   if (dropped.length) {
-    lines.push('  Rejected' + (c.purged ? ' (purged from corpus)' : '') + ':');
+    lines.push('  Rejected' + (c.purged ? ' (quarantined — restorable for 14 days)' : '') + ':');
     for (const j of dropped) {
       lines.push(`    #${j.harvest_id} [${j.relation}] ${(j.title || '').slice(0, 70)} — ${j.why || ''}`);
     }

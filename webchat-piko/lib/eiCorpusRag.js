@@ -195,12 +195,26 @@ async function getCorpusRagContext(query) {
   }
 }
 
+/** Remove all RAG chunks for a harvest id (used by quarantine/hard-delete). */
+async function removeHarvestChunks(harvestId) {
+  const hid = Number(harvestId);
+  if (!Number.isFinite(hid) || hid <= 0) return { ok: false, error: 'invalid id' };
+  try {
+    const tbl = await getTable();
+    await tbl.delete(`harvest_id = ${hid}`);
+    return { ok: true, harvest_id: hid };
+  } catch (e) {
+    return { ok: false, error: String(e && e.message ? e.message : e).slice(0, 120) };
+  }
+}
+
 module.exports = {
   indexHarvest,
   indexKeptCorpus,
   searchCorpus,
   formatRagBlock,
   getCorpusRagContext,
+  removeHarvestChunks,
   memoryDir,
   chunkText,
 };

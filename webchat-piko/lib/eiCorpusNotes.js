@@ -342,14 +342,38 @@ function loadNote(harvestId) {
   }
 }
 
+function isNoteFilename(f) {
+  // item_<digits>.json — no regex (P1.6 + no-regex ratchet).
+  const name = String(f || '');
+  if (!name.startsWith('item_') || !name.endsWith('.json')) return false;
+  const mid = name.slice(5, -5);
+  if (!mid) return false;
+  for (let i = 0; i < mid.length; i += 1) {
+    const c = mid.charCodeAt(i);
+    if (c < 48 || c > 57) return false;
+  }
+  return true;
+}
+
 function listNotes(limit = 50) {
   const dir = notesDir();
   if (!fs.existsSync(dir)) return [];
-  const files = fs.readdirSync(dir).filter((f) => /^item_\d+\.json$/.test(f));
+  const files = fs.readdirSync(dir).filter(isNoteFilename);
+  // P1.6: sort by mtime BEFORE reading/slicing so newest digests stay visible
+  // as the corpus grows past 2×limit files.
+  const ranked = files.map((f) => {
+    const full = path.join(dir, f);
+    let mtimeMs = 0;
+    try { mtimeMs = fs.statSync(full).mtimeMs || 0; } catch (_) { mtimeMs = 0; }
+    return { f, full, mtimeMs };
+  }).sort((a, b) => b.mtimeMs - a.mtimeMs);
+
   const notes = [];
-  for (const f of files.slice(0, limit * 2)) {
+  for (const { full, mtimeMs } of ranked.slice(0, Math.max(limit * 2, limit))) {
     try {
-      notes.push(JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')));
+      const n = JSON.parse(fs.readFileSync(full, 'utf8'));
+      if (!n.updated_at && mtimeMs) n.updated_at = new Date(mtimeMs).toISOString();
+      notes.push(n);
     } catch (_) { /* skip */ }
   }
   return notes

@@ -30,6 +30,7 @@ const {
   startsWithIgnoreCase,
   includesAny,
   toLowerAsciiish,
+  collapseWhitespace,
 } = require('./text');
 
 function replaceEiWorkerLabel(text) {
@@ -495,10 +496,22 @@ async function decideLegateTurn(message, opts = {}) {
   }
 
   const root = opts.rootDir || path.join(__dirname, '..');
+  // P0.6: never silently fall back to 8B for decide — refuse if unset.
   const model = opts.model
     || process.env.PIKO_LEGATE_MODEL
-    || process.env.OLLAMA_MODEL
-    || 'llama3.1:8b';
+    || process.env.PIKO_UNDERSTAND_MODEL
+    || '';
+  if (!model) {
+    return {
+      mode: 'answer',
+      reply: 'Decide model is not configured (set PIKO_LEGATE_MODEL). Refusing to route on an 8B fallback.',
+      agent_id: null,
+      control_action: null,
+      lookups: [],
+      reason: 'legate_model_unset',
+      source: 'fail_closed',
+    };
+  }
   const agents = isAgentOrchEnabled(root) ? listAgents(root) : [];
   let stateBlock = '';
   try { stateBlock = buildCampaignStateBlock(); } catch (_) { stateBlock = ''; }
@@ -760,14 +773,40 @@ function formatReviewChatReply(job, result) {
     }
   } catch (_) { /* cosmetic */ }
 
+  // P1.7: prefer specific outcome taxonomy over the generic shrug line.
+  let outcomeNote = '';
+  try {
+    const workerResult = (run && run.result) || (result && result.result) || result || {};
+    let code = workerResult.outcome_code || null;
+    let line = workerResult.outcome_line || '';
+    if (!code) {
+      const { classifySeekOutcome, outcomeReasonLine } = require('./eiWorkerRuntime');
+      const steps = (workerResult.steps || []).map((s) => ({
+        tool: s.tool,
+        ok: s.ok,
+        error: s.error || s.artifact_snip,
+        artifact: s.artifact_snip,
+        seek_coverage: s.seek_coverage,
+        mission_fit: s.mission_fit || workerResult.mission_fit,
+        result: { seek_coverage: s.seek_coverage, mission_fit: s.mission_fit },
+      }));
+      code = classifySeekOutcome(steps);
+      line = outcomeReasonLine(code);
+    }
+    if (line) outcomeNote = `\n\n${line}`;
+  } catch (_) { /* optional */ }
+
   const opening = brief ? `Done with “${brief}”.` : 'Done with that task.';
   if (verdict === 'accept') {
-    return `${opening} ${summary}\n\nI've checked it over and I'm happy with the result.${unsureNote}${coverageNote}`;
+    return `${opening} ${summary}\n\nI've checked it over and I'm happy with the result.${unsureNote}${coverageNote}${outcomeNote}`;
   }
   if (verdict === 'revise') {
-    return `${opening} ${summary}\n\nHonestly, it's not quite where I want it yet — I'd treat this as a first pass. Ask me to try again if you'd like a better cut.${unsureNote}${coverageNote}`;
+    const reviseTail = outcomeNote
+      ? outcomeNote
+      : '\n\nHonestly, it\'s not quite where I want it yet — I\'d treat this as a first pass. Ask me to try again if you\'d like a better cut.';
+    return `${opening} ${summary}${reviseTail}${unsureNote}${coverageNote}`;
   }
-  return `I ran into trouble with ${brief ? `“${brief}”` : 'that task'}. ${summary}\n\nI'm not counting this one as complete.${unsureNote}${coverageNote}`;
+  return `I ran into trouble with ${brief ? `“${brief}”` : 'that task'}. ${summary}\n\nI'm not counting this one as complete.${unsureNote}${coverageNote}${outcomeNote}`;
 }
 
 async function runCampaignControlAction(action, opts = {}) {
@@ -906,9 +945,41 @@ ${material}
 USER: ${String(message || '').slice(0, 800)}`;
 }
 
-/** Build a richer retrieval query from the ask + recent session turns. */
+/**
+ * P1.3: thread-match / retrieval on the CURRENT message only when it has an
+ * explicit topic. History/lastAssistant used solely for pronoun/ellipsis follow-ups
+ * ("what do you think?", "given what you've ingested") — never to outvote an
+ * explicit topic in the current message.
+ */
+function opinionMessageNeedsContext(message) {
+  const t = toLowerAsciiish(collapseWhitespace(String(message || '')));
+  if (!t) return true;
+  const followUps = [
+    'what do you think', 'what do you make of it', 'given what you',
+    'given what you\'ve', 'and that', 'same topic', 'your take',
+    'your view', 'your read', 'go on', 'continue', 'tell me more',
+  ];
+  if (includesAny(t, followUps)) return true;
+  // Very short / pronoun-only asks
+  const toks = t.split(' ').filter(Boolean);
+  if (toks.length <= 4 && includesAny(t, [' it', ' that', ' this', 'those'])) return true;
+  return false;
+}
+
 function opinionRetrievalQuery(message, opts = {}) {
-  const parts = [String(message || '')];
+  const current = String(message || '').trim();
+  // Prefer current message alone when it names a topic (prevents Giza history
+  // outvoting an Osireion ask).
+  try {
+    const { matchThreadId } = require('./eiThreadDossiers');
+    if (matchThreadId(current) && !opinionMessageNeedsContext(current)) {
+      return current.slice(0, 1200);
+    }
+  } catch (_) { /* fall through */ }
+  if (!opinionMessageNeedsContext(current) && current.length >= 12) {
+    return current.slice(0, 1200);
+  }
+  const parts = [current];
   const lastAsst = String(opts.lastAssistant || '').trim();
   if (lastAsst) parts.push(lastAsst.slice(0, 400));
   const hist = Array.isArray(opts.history) ? opts.history : [];
@@ -942,7 +1013,14 @@ async function answerExpertOpinion(message, understanding, opts = {}) {
     } catch (_) { /* optional */ }
 
     const retrievalQuery = opinionRetrievalQuery(message, opts);
-    const material = gatherOpinionMaterial(retrievalQuery, { top: 6 });
+    // P1.3: merge semantic RAG with token-overlap notes (async path).
+    let material;
+    try {
+      const { gatherOpinionMaterialAsync } = require('./eiStancePositions');
+      material = await gatherOpinionMaterialAsync(retrievalQuery, { top: 6 });
+    } catch (_) {
+      material = gatherOpinionMaterial(retrievalQuery, { top: 6 });
+    }
     let block = material.block || '';
     if (learningExtra && !material.has_material) {
       block = `Recent learning notes:\n${learningExtra}`;
@@ -1379,6 +1457,7 @@ module.exports = {
   isNonMutatingUnderstanding,
   isExpertOpinionEnabled,
   answerExpertOpinion,
+  opinionRetrievalQuery,
   getLegateOllamaBaseUrl,
   DECIDE_FAIL_REPLY,
   NON_MUTATING_INTENTS,

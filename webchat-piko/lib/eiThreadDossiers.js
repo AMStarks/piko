@@ -9,6 +9,7 @@ const { listNotes } = require('./eiCorpusNotes');
 const { normalizeTitle } = require('./eiGoalParse');
 const { ollamaNativeChat } = require('./llm');
 const { extractJsonObject } = require('./routingParse');
+const { aliasMatch, collapseWhitespace, toLowerAsciiish, extractAlnumTokens } = require('./text');
 
 const THREAD_DEFS = [
   {
@@ -20,9 +21,10 @@ const THREAD_DEFS = [
   {
     id: 'abydos',
     label: 'Abydos / Oserion',
+    // Avoid bare "seti" (fires inside unrelated phrases) — use seti i / seti temple.
     aliases: [
       'abydos', 'oserion', 'osireion', 'osiris temple', 'temenos of osiris',
-      'umm el-qaab', 'umm el qaab', 'seti',
+      'umm el-qaab', 'umm el qaab', 'seti i', 'seti temple',
     ],
   },
   {
@@ -33,7 +35,8 @@ const THREAD_DEFS = [
   {
     id: 'tiahuanaco',
     label: 'Tiahuanaco / Puma Punku',
-    aliases: ['tiahuanaco', 'tiwanaku', 'puma punku', 'pumapunku', 'anden', 'andine'],
+    // Drop bare "anden" (substring/short-alias landmine).
+    aliases: ['tiahuanaco', 'tiwanaku', 'puma punku', 'pumapunku', 'andine'],
   },
   {
     id: 'cataclysm',
@@ -45,18 +48,24 @@ const THREAD_DEFS = [
   },
   {
     id: 'flood-myths',
-    label: 'Flood myths / Atlantis literature',
+    label: 'Flood myths / comparative deluge literature',
+    // Exclusive: atlantis/antediluvian/donnelly belong to the atlantis thread.
+    // No bare "flood" — "flood insurance" must not match.
     aliases: [
-      'flood', 'deluge', 'atlantis', 'antediluvian', 'timaeus', 'critias',
-      'popol vuh', 'gilgamesh', 'atrahasis', 'donnelly',
+      'flood myth', 'flood myths', 'great flood', 'the deluge', 'deluge myth',
+      'timaeus', 'critias', 'popol vuh', 'gilgamesh', 'atrahasis',
     ],
   },
   {
     id: 'atlantis',
     label: 'Atlantis / antediluvian',
-    aliases: ['atlantis', 'antediluvian', 'atlantean', 'donnelly', 'plato'],
+    // No bare "plato" — "Plato on justice" must not route here.
+    aliases: ['atlantis', 'antediluvian', 'atlantean', 'donnelly', 'plato atlantis'],
   },
 ];
+
+/** Short single-token aliases only match near-exact topic queries (≤3 tokens). */
+const SHORT_ALIAS_MAX = 5;
 
 function envFlagOn(name, defaultOn = true) {
   const v = String(process.env[name] ?? '').trim().toLowerCase();
@@ -78,17 +87,49 @@ function getThreadDef(threadId) {
   return THREAD_DEFS.find((t) => t.id === id) || null;
 }
 
+/**
+ * Exact alias / id resolution for planner+tool args ("osireion" → abydos).
+ * Does NOT fuzzy-match topics — invented ids like "atlantis-moonbase" stay unknown.
+ */
+function resolveThreadAlias(input) {
+  const raw = String(input || '').trim().toLowerCase();
+  if (!raw) return null;
+  if (getThreadDef(raw)) return raw;
+  const norm = normalizeTitle(raw);
+  if (!norm) return null;
+  for (const t of THREAD_DEFS) {
+    if (normalizeTitle(t.id) === norm) return t.id;
+    for (const a of t.aliases) {
+      if (normalizeTitle(a) === norm) return t.id;
+    }
+  }
+  return null;
+}
+
 function matchThreadId(topic) {
-  const blob = normalizeTitle(topic || '');
+  const blob = collapseWhitespace(toLowerAsciiish(normalizeTitle(topic || '')));
   if (!blob) return null;
+  // Exact thread id wins.
+  if (getThreadDef(blob)) return blob;
+
+  const tokens = extractAlnumTokens(blob);
+  const tokenCount = tokens.length;
   let best = null;
   let bestScore = 0;
+
   for (const t of THREAD_DEFS) {
     let score = 0;
     for (const a of t.aliases) {
-      const na = normalizeTitle(a);
-      if (na && blob.includes(na)) score += na.length;
+      const na = collapseWhitespace(toLowerAsciiish(normalizeTitle(a)));
+      if (!na) continue;
+      if (!aliasMatch(blob, na)) continue;
+      const isShortSingle = !na.includes(' ') && na.length <= SHORT_ALIAS_MAX;
+      if (isShortSingle && tokenCount > 3) continue;
+      // Prefer longer / multi-word aliases.
+      score += na.length + (na.includes(' ') ? 4 : 0);
     }
+    // Tie-break: prefer the thread whose id appears in the blob.
+    if (aliasMatch(blob, t.id)) score += t.id.length + 2;
     if (score > bestScore) {
       bestScore = score;
       best = t.id;
@@ -356,6 +397,7 @@ module.exports = {
   formatDossierGapsBlock,
   dossierWantedLeads,
   matchThreadId,
+  resolveThreadAlias,
   getThreadDef,
   dossiersDir,
   envFlagOn,

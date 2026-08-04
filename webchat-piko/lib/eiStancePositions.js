@@ -291,6 +291,7 @@ function expandOpinionQuery(query) {
 
 /**
  * Topic-matched corpus material for opinion prompts (stance first, then notes).
+ * P1.3: also merges semantic RAG hits from searchCorpus when available.
  */
 function gatherOpinionMaterial(query, opts = {}) {
   const top = opts.top || 6;
@@ -333,6 +334,14 @@ function gatherOpinionMaterial(query, opts = {}) {
     notes = notes.slice(0, top);
   }
 
+  // Optional semantic RAG passages (sync wrapper — searchCorpus is async;
+  // callers that pass ragHits skip the live call).
+  let ragHits = Array.isArray(opts.ragHits) ? opts.ragHits : null;
+  if (ragHits == null && opts.includeRag !== false && opts._ragPromise) {
+    // Pre-fetched by answerExpertOpinion.
+    ragHits = opts._ragPromise;
+  }
+
   const parts = [];
   if (position) {
     parts.push(formatPositionBlock(position));
@@ -351,13 +360,33 @@ function gatherOpinionMaterial(query, opts = {}) {
     }
     parts.push(noteLines.join('\n').slice(0, 3500));
   }
+  if (ragHits && ragHits.length) {
+    try {
+      const { formatRagBlock } = require('./eiCorpusRag');
+      const ragBlock = formatRagBlock(ragHits.slice(0, 4));
+      if (ragBlock) parts.push(ragBlock.slice(0, 2000));
+    } catch (_) { /* optional */ }
+  }
   return {
     position,
     notes,
-    has_material: !!(position || notes.length),
+    ragHits: ragHits || [],
+    has_material: !!(position || notes.length || (ragHits && ragHits.length)),
     block: parts.join('\n\n').slice(0, 5000),
     thread: thread || null,
   };
+}
+
+/** Async variant that merges live LanceDB RAG into opinion material. */
+async function gatherOpinionMaterialAsync(query, opts = {}) {
+  let ragHits = [];
+  try {
+    const { searchCorpus } = require('./eiCorpusRag');
+    ragHits = await searchCorpus(String(query || '').slice(0, 400), { limit: 4 });
+  } catch (_) {
+    ragHits = [];
+  }
+  return gatherOpinionMaterial(query, { ...opts, ragHits });
 }
 
 module.exports = {
@@ -370,6 +399,8 @@ module.exports = {
   formatPositionBlock,
   findPositionForQuery,
   gatherOpinionMaterial,
+  gatherOpinionMaterialAsync,
+  expandOpinionQuery,
   synthesizePositionForThread,
   runStanceSynthesis,
   MIN_NOTES,

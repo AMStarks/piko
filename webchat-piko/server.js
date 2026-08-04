@@ -1122,14 +1122,7 @@ function buildLearningUpdateReply() {
     return fallback;
   }
 }
-function isAllowedByAllowlist(allowlist, source, externalId) {
-  if (source === 'webchat') return true;
-  const list = allowlist[source];
-  if (!list || !Array.isArray(list)) return true;
-  if (list.length === 0) return false;
-  if (list.includes('*')) return true;
-  return list.includes(String(externalId));
-}
+const { isAllowedByAllowlist } = require('./lib/channelAllowlist');
 
 // Phase 4: Local skills/ dir (loadable handlers)
 const SKILLS_DIR = path.join(__dirname, 'skills');
@@ -4265,8 +4258,18 @@ async function handleApiChat(req, res) {
   }
 
   // —— /task ——
+  // P0.4: shell-interpolation surface — disabled unless PIKO_TASK_ENDPOINT=1.
   const taskCmd = parseTaskCommand(message);
   if (taskCmd && taskCmd.task) {
+    const taskOn = (() => {
+      const v = String(process.env.PIKO_TASK_ENDPOINT || '').trim().toLowerCase();
+      return v === '1' || v === 'true' || v === 'on' || v === 'yes';
+    })();
+    if (!taskOn) {
+      return send(res, 200, JSON.stringify({
+        reply: '/task is disabled on this tenant (set PIKO_TASK_ENDPOINT=1 to enable).',
+      }));
+    }
     const cursorOutput = await runTaskCommand(taskCmd, { sandbox: sessionsConfig[key] && sessionsConfig[key].sandbox });
     let reply = (cursorOutput.startsWith('Task skipped') || cursorOutput.startsWith('Task failed'))
       ? cursorOutput
@@ -8709,8 +8712,9 @@ async function handleRequest(req, res) {
   }
 
   // —— Webhook events (external systems POST here) ——
+  // P0.2: fail closed when secret unset — never accept unauthenticated webhooks.
   function checkWebhookAuth(req) {
-    if (!PIKO_WEBHOOK_SECRET) return true;
+    if (!PIKO_WEBHOOK_SECRET) return false;
     const auth = req.headers.authorization || '';
     const bearer = auth.startsWith('Bearer ') ? auth.slice(7) : '';
     const key = (req.headers['x-webhook-key'] || '').trim();
@@ -8820,6 +8824,9 @@ async function handleRequest(req, res) {
 
   // —— /webhook/inventory-alert: AusMaker real-time inventory alerts (Reorder/Review status) ——
   if (req.method === 'POST' && pathname === '/webhook/inventory-alert') {
+    if (!checkWebhookAuth(req)) {
+      return send(res, 401, JSON.stringify({ ok: false, error: 'Webhook auth required' }));
+    }
     readBody(req)
       .then(async (body) => {
         try {
@@ -12631,6 +12638,20 @@ server.listen(PORT, '0.0.0.0', () => {
         }, null);
       } catch (e) {
         log('error', 'ei_stance_synthesis', { message: e.message }, null);
+      }
+    });
+  }
+  // P1.5 — permanently delete quarantined harvests older than 14 days (5:30 AM)
+  if (isBackgroundJobEnabled('ei_quarantine_cleanup', __dirname)) {
+    cron.schedule('30 5 * * *', () => {
+      try {
+        const { purgeExpiredQuarantine } = require('./lib/culturesCorpusApi');
+        const out = purgeExpiredQuarantine({});
+        if (out.purged > 0) {
+          log('info', 'ei_quarantine_cleanup', out, null);
+        }
+      } catch (e) {
+        log('error', 'ei_quarantine_cleanup', { message: e.message }, null);
       }
     });
   }

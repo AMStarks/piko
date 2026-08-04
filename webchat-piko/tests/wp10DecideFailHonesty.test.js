@@ -65,6 +65,8 @@ test('F2: decideFailResult logs [decide_fail] with reason', async () => {
     PIKO_BACKGROUND_JOBS_PROFILE: 'culture',
     PIKO_LEGATE_CHAT: '1',
     PIKO_AGENT_ORCH: '1',
+    PIKO_LEGATE_MODEL: 'qwen3.6:27b',
+    PIKO_UNDERSTAND_MODEL: 'qwen3.6:27b',
   }, async () => {
     const llmPath = require.resolve('../lib/llm');
     const legatePath = require.resolve('../lib/legateChat');
@@ -96,6 +98,8 @@ test('F1: invalid decide JSON + opinion understanding recovers (no DECIDE_FAIL_R
     PIKO_BACKGROUND_JOBS_PROFILE: 'culture',
     PIKO_LEGATE_CHAT: '1',
     PIKO_AGENT_ORCH: '1',
+    PIKO_LEGATE_MODEL: 'qwen3.6:27b',
+    PIKO_UNDERSTAND_MODEL: 'qwen3.6:27b',
   }, async () => {
     const llmPath = require.resolve('../lib/llm');
     const legatePath = require.resolve('../lib/legateChat');
@@ -130,6 +134,8 @@ test('F1: decide throw + status understanding recovers with campaign lookups', a
     PIKO_BACKGROUND_JOBS_PROFILE: 'culture',
     PIKO_LEGATE_CHAT: '1',
     PIKO_AGENT_ORCH: '1',
+    PIKO_LEGATE_MODEL: 'qwen3.6:27b',
+    PIKO_UNDERSTAND_MODEL: 'qwen3.6:27b',
   }, async () => {
     const llmPath = require.resolve('../lib/llm');
     const legatePath = require.resolve('../lib/legateChat');
@@ -163,6 +169,8 @@ test('F1: mutating intent still surfaces DECIDE_FAIL_REPLY on decide fail', asyn
     PIKO_BACKGROUND_JOBS_PROFILE: 'culture',
     PIKO_LEGATE_CHAT: '1',
     PIKO_AGENT_ORCH: '1',
+    PIKO_LEGATE_MODEL: 'qwen3.6:27b',
+    PIKO_UNDERSTAND_MODEL: 'qwen3.6:27b',
   }, async () => {
     const llmPath = require.resolve('../lib/llm');
     const legatePath = require.resolve('../lib/legateChat');
@@ -200,6 +208,8 @@ test('F3: opinion understanding skips decide entirely', async () => {
     PIKO_BACKGROUND_JOBS_PROFILE: 'culture',
     PIKO_LEGATE_CHAT: '1',
     PIKO_AGENT_ORCH: '1',
+    PIKO_LEGATE_MODEL: 'qwen3.6:27b',
+    PIKO_UNDERSTAND_MODEL: 'qwen3.6:27b',
     PIKO_UNDERSTAND_AUTHORITATIVE: '1',
     PIKO_EXPERT_OPINION: '0',
   }, async () => {
@@ -247,6 +257,8 @@ test('F3: status understanding skips decide and answers via lookups', async () =
     PIKO_BACKGROUND_JOBS_PROFILE: 'culture',
     PIKO_LEGATE_CHAT: '1',
     PIKO_AGENT_ORCH: '1',
+    PIKO_LEGATE_MODEL: 'qwen3.6:27b',
+    PIKO_UNDERSTAND_MODEL: 'qwen3.6:27b',
     PIKO_UNDERSTAND_AUTHORITATIVE: '1',
   }, async () => {
     const understandPath = require.resolve('../lib/understand');
@@ -302,6 +314,8 @@ test('F3: work_order still calls decide', async () => {
     PIKO_BACKGROUND_JOBS_PROFILE: 'culture',
     PIKO_LEGATE_CHAT: '1',
     PIKO_AGENT_ORCH: '1',
+    PIKO_LEGATE_MODEL: 'qwen3.6:27b',
+    PIKO_UNDERSTAND_MODEL: 'qwen3.6:27b',
     PIKO_UNDERSTAND_AUTHORITATIVE: '1',
   }, async () => {
     const understandPath = require.resolve('../lib/understand');

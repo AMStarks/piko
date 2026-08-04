@@ -932,10 +932,8 @@ const TOOLS = {
           result: { error: 'thread_required' },
         };
       }
-      // Resolve aliases ("osireion" → abydos) before load/build.
-      const thread = (d.getThreadDef(rawThread) && rawThread)
-        || d.matchThreadId(rawThread)
-        || rawThread;
+      // Exact alias resolve ("osireion" → abydos) — never fuzzy-match invented ids.
+      const thread = d.resolveThreadAlias(rawThread) || rawThread;
       let dossier = d.loadDossier(thread);
       if (args.rebuild || !dossier) {
         const built = await d.buildDossier(thread);

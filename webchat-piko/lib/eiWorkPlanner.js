@@ -158,7 +158,16 @@ function normalizePlan(raw, goal) {
     const tool = String(s.tool);
     const args = s.args && typeof s.args === 'object' ? { ...s.args } : {};
     if (tool === 'thread_dossier') {
-      const tid = String(args.thread || '').trim().toLowerCase();
+      const rawTid = String(args.thread || '').trim().toLowerCase();
+      // P1.2: exact alias resolve ("osireion" → abydos). Never fuzzy-match
+      // invented ids like "atlantis-moonbase" into a real thread.
+      let tid = rawTid;
+      if (tid && !knownThreads.has(tid)) {
+        try {
+          const d = require('./eiThreadDossiers');
+          tid = d.resolveThreadAlias(rawTid) || rawTid;
+        } catch (_) { /* keep raw */ }
+      }
       if (!tid || !knownThreads.has(tid)) {
         dropped.push(`${tool}: unknown_thread ${JSON.stringify(args.thread)}`);
         continue;

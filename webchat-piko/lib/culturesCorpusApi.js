@@ -82,9 +82,188 @@ function openDbWritable() {
   return new Database(file, { readonly: false, fileMustExist: true });
 }
 
+function quarantineDir() {
+  return path.join(culturesDataRoot(), 'quarantine');
+}
+
+function moveToQuarantine(absPath, harvestId, kind) {
+  if (!absPath || !fs.existsSync(absPath) || !fs.statSync(absPath).isFile()) {
+    return null;
+  }
+  const qDir = path.join(quarantineDir(), String(harvestId));
+  fs.mkdirSync(qDir, { recursive: true });
+  const dest = path.join(qDir, `${kind}_${path.basename(absPath)}`);
+  try {
+    fs.renameSync(absPath, dest);
+    return dest;
+  } catch (_) {
+    try {
+      fs.copyFileSync(absPath, dest);
+      fs.unlinkSync(absPath);
+      return dest;
+    } catch (_) {
+      return null;
+    }
+  }
+}
+
+function cascadeRemoveNoteAndRag(harvestId) {
+  const hid = Number(harvestId);
+  try {
+    const { notesDir } = require('./eiBibliography');
+    const np = path.join(notesDir(), `item_${hid}.json`);
+    if (fs.existsSync(np)) fs.unlinkSync(np);
+  } catch (_) { /* optional */ }
+  try {
+    const { removeHarvestChunks } = require('./eiCorpusRag');
+    Promise.resolve(removeHarvestChunks(hid)).catch(() => {});
+  } catch (_) { /* optional */ }
+}
+
+/**
+ * P1.5: quarantine (soft-delete) — move files, tombstone meta, cascade notes/RAG.
+ * Reversible via restoreQuarantinedItem within the retention window.
+ */
+function quarantineHarvestItem(id, opts = {}) {
+  const hid = Number(id);
+  if (!Number.isFinite(hid) || hid <= 0) {
+    return { ok: false, error: 'invalid id' };
+  }
+  const reason = String(opts.reason || 'mission_fit_drop').slice(0, 280);
+  const sourceUrl = String(opts.sourceUrl || opts.source_url || '').slice(0, 500);
+  let imagePath = null;
+  let documentPath = null;
+  let title = '';
+  const db = openDbWritable();
+  try {
+    const row = db.prepare('SELECT id, title, image_path, meta_json FROM harvest_items WHERE id = ?').get(hid);
+    if (!row) return { ok: false, error: 'not found', harvest_id: hid };
+    title = String(row.title || '');
+    const meta = parseMeta(row.meta_json);
+    if (meta.status === 'quarantined') {
+      return { ok: true, harvest_id: hid, already: true, quarantined: true };
+    }
+    imagePath = resolveImagePath(row.image_path);
+    documentPath = resolveDocumentPath(meta.document_path);
+    const qImage = moveToQuarantine(imagePath, hid, 'image');
+    const qDoc = moveToQuarantine(documentPath, hid, 'document');
+    const tombstone = {
+      ...meta,
+      status: 'quarantined',
+      quarantine: {
+        reason,
+        source_url: sourceUrl || meta.source_url || meta.url || meta.document_url || '',
+        quarantined_at: new Date().toISOString(),
+        original_image_path: imagePath || null,
+        original_document_path: documentPath || null,
+        quarantine_image_path: qImage,
+        quarantine_document_path: qDoc,
+      },
+    };
+    // Clear live asset pointers so corpus readers skip this row.
+    db.prepare(
+      'UPDATE harvest_items SET image_path = NULL, meta_json = ? WHERE id = ?',
+    ).run(JSON.stringify(tombstone), hid);
+  } finally {
+    db.close();
+  }
+  cascadeRemoveNoteAndRag(hid);
+  try {
+    const { clearFlag } = require('./eiCorpusFlags');
+    clearFlag(hid);
+  } catch (_) { /* optional */ }
+  return {
+    ok: true,
+    harvest_id: hid,
+    title,
+    quarantined: true,
+    reason,
+  };
+}
+
+/**
+ * Restore a quarantined harvest item (move files back, clear tombstone).
+ */
+function restoreQuarantinedItem(id) {
+  const hid = Number(id);
+  if (!Number.isFinite(hid) || hid <= 0) {
+    return { ok: false, error: 'invalid id' };
+  }
+  const db = openDbWritable();
+  try {
+    const row = db.prepare('SELECT id, title, meta_json FROM harvest_items WHERE id = ?').get(hid);
+    if (!row) return { ok: false, error: 'not found', harvest_id: hid };
+    const meta = parseMeta(row.meta_json);
+    if (meta.status !== 'quarantined' || !meta.quarantine) {
+      return { ok: false, error: 'not_quarantined', harvest_id: hid };
+    }
+    const q = meta.quarantine;
+    let imagePath = q.original_image_path || null;
+    let documentPath = q.original_document_path || null;
+    if (q.quarantine_image_path && fs.existsSync(q.quarantine_image_path)) {
+      let base = path.basename(q.quarantine_image_path);
+      if (base.startsWith('image_')) base = base.slice('image_'.length);
+      const dest = imagePath || path.join(imagesDir(), base);
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      try { fs.renameSync(q.quarantine_image_path, dest); imagePath = dest; } catch (_) { /* keep */ }
+    }
+    if (q.quarantine_document_path && fs.existsSync(q.quarantine_document_path)) {
+      let base = path.basename(q.quarantine_document_path);
+      if (base.startsWith('document_')) base = base.slice('document_'.length);
+      const dest = documentPath || path.join(documentsDir(), base);
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      try { fs.renameSync(q.quarantine_document_path, dest); documentPath = dest; } catch (_) { /* keep */ }
+    }
+    const restored = { ...meta };
+    delete restored.status;
+    delete restored.quarantine;
+    if (documentPath) restored.document_path = documentPath;
+    db.prepare(
+      'UPDATE harvest_items SET image_path = ?, meta_json = ? WHERE id = ?',
+    ).run(imagePath, JSON.stringify(restored), hid);
+    return { ok: true, harvest_id: hid, restored: true, image_path: imagePath, document_path: documentPath };
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * Permanently delete quarantined items older than retentionDays (default 14).
+ */
+function purgeExpiredQuarantine(opts = {}) {
+  const retentionDays = Math.max(1, Number(opts.retentionDays || process.env.PIKO_QUARANTINE_DAYS || 14) || 14);
+  const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
+  const db = openDbWritable();
+  let rows = [];
+  try {
+    rows = db.prepare(
+      `SELECT id, meta_json FROM harvest_items WHERE meta_json LIKE '%"status":"quarantined"%' OR meta_json LIKE '%"status": "quarantined"%'`,
+    ).all();
+  } finally {
+    db.close();
+  }
+  const purged = [];
+  for (const r of rows) {
+    const meta = parseMeta(r.meta_json);
+    const at = meta.quarantine && meta.quarantine.quarantined_at;
+    if (!at) continue;
+    const ts = Date.parse(at);
+    if (!Number.isFinite(ts) || ts > cutoff) continue;
+    // Remove quarantine files then hard-delete the row.
+    const q = meta.quarantine || {};
+    for (const p of [q.quarantine_image_path, q.quarantine_document_path]) {
+      if (!p) continue;
+      try { if (fs.existsSync(p)) fs.unlinkSync(p); } catch (_) { /* ok */ }
+    }
+    const del = deleteHarvestItem(r.id);
+    if (del.ok) purged.push(r.id);
+  }
+  return { ok: true, purged: purged.length, ids: purged, retentionDays };
+}
+
 /**
  * Remove a harvest row + related transcriptions/critiques + local assets + corpus flag.
- * Used after mission-fit drop so the corpus stays the accepted deliverable only.
+ * Prefer quarantineHarvestItem for mission-fit drops (reversible).
  */
 function deleteHarvestItem(id) {
   const hid = Number(id);
@@ -100,6 +279,13 @@ function deleteHarvestItem(id) {
     const meta = parseMeta(row.meta_json);
     imagePath = resolveImagePath(row.image_path);
     documentPath = resolveDocumentPath(meta.document_path);
+    // Also wipe quarantine copies if present.
+    if (meta.quarantine) {
+      for (const p of [meta.quarantine.quarantine_image_path, meta.quarantine.quarantine_document_path]) {
+        if (!p) continue;
+        try { if (fs.existsSync(p)) fs.unlinkSync(p); } catch (_) { /* ok */ }
+      }
+    }
     db.prepare('DELETE FROM critiques WHERE harvest_id = ?').run(hid);
     db.prepare('DELETE FROM transcriptions WHERE harvest_id = ?').run(hid);
     db.prepare('DELETE FROM harvest_items WHERE id = ?').run(hid);
@@ -112,6 +298,7 @@ function deleteHarvestItem(id) {
       if (fs.existsSync(p) && fs.statSync(p).isFile()) fs.unlinkSync(p);
     } catch (_) { /* best-effort */ }
   }
+  cascadeRemoveNoteAndRag(hid);
   try {
     const { clearFlag } = require('./eiCorpusFlags');
     clearFlag(hid);
@@ -423,6 +610,11 @@ function listItems(opts = {}) {
       where.push(`COALESCE(h.meta_json,'') NOT LIKE '%"kind": "source_candidate"%'`);
       where.push(`COALESCE(h.meta_json,'') NOT LIKE '%"kind":"source_candidate"%'`);
     }
+    // P1.5: hide quarantined rows from normal corpus listings.
+    if (opts.include_quarantined !== true && opts.include_quarantined !== '1') {
+      where.push(`COALESCE(h.meta_json,'') NOT LIKE '%"status":"quarantined"%'`);
+      where.push(`COALESCE(h.meta_json,'') NOT LIKE '%"status": "quarantined"%'`);
+    }
     if (q) {
       where.push(`(
         COALESCE(h.title,'') LIKE @q
@@ -618,10 +810,14 @@ module.exports = {
   culturesDataRoot,
   dbFile,
   documentsDir,
+  quarantineDir,
   getStats,
   listItems,
   getItem,
   deleteHarvestItem,
+  quarantineHarvestItem,
+  restoreQuarantinedItem,
+  purgeExpiredQuarantine,
   getImageBuffer,
   getDocumentBuffer,
   patchItemMeta,

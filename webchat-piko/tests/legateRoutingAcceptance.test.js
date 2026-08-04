@@ -35,6 +35,8 @@ async function withMockDecide(llmReplyFactory, fn) {
     PIKO_BACKGROUND_JOBS_PROFILE: 'culture',
     PIKO_LEGATE_CHAT: '1',
     PIKO_AGENT_ORCH: '1',
+    PIKO_LEGATE_MODEL: 'qwen3.6:27b',
+    PIKO_UNDERSTAND_MODEL: 'qwen3.6:27b',
   }, async () => {
     const llmPath = require.resolve('../lib/llm');
     const legatePath = require.resolve('../lib/legateChat');

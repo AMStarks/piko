@@ -112,10 +112,35 @@ function looksLikeConversationalResearchAsk(goal) {
     'yes please', 'prioritise research', 'prioritize research',
     'please research', 'research the ', 'research of ', 'look into the ',
     'dig into the ', 'prioritise the ', 'prioritize the ',
+    'keep researching', 'focus research', 'find me something',
+    'find something on', 'something on the ', 'continue researching',
+    'more research on', 'more research of', 'research into ',
   ])) return true;
   if (startsWithAny(low, ['yes;', 'yes —', 'yes -', 'yes,', 'yeah,', 'yep,'])) {
     return includesAny(low, ['research', 'find', 'seek', 'prioritise', 'prioritize']);
   }
+  return false;
+}
+
+/**
+ * P1.4: singular titles require an explicit title signal — quotes, possessive, or "by Author".
+ * Bare conversational sentences must never become isSingularTitle.
+ */
+function hasExplicitTitleSignal(goal) {
+  const raw = String(goal || '');
+  if (!raw.trim()) return false;
+  // Quoted title
+  for (const q of ['"', '\u201c', '\u201d', "'"]) {
+    const i = raw.indexOf(q);
+    if (i >= 0) {
+      const j = raw.indexOf(q, i + 1);
+      if (j > i + 2) return true;
+    }
+  }
+  // Possessive author ("Petrie's …" / "Dunn's …")
+  if (parsePossessiveTitle(stripInstructionPreamble(raw))) return true;
+  // "Title by Author"
+  if (parseTitleByAuthor(stripInstructionPreamble(raw))) return true;
   return false;
 }
 
@@ -128,6 +153,13 @@ function extractResearchTopicPhrase(goal) {
     'prioritise research on ', 'prioritize research on ',
     'prioritise research the ', 'prioritize research the ',
     'please research the ', 'please research ',
+    'keep researching the ', 'keep researching ',
+    'continue researching the ', 'continue researching ',
+    'focus research on the ', 'focus research on ', 'focus research of ',
+    'find me something on the ', 'find me something on ',
+    'find something on the ', 'find something on ',
+    'more research on the ', 'more research on ', 'more research of ',
+    'research into the ', 'research into ',
     'research of the ', 'research of ', 'research the ', 'research on the ', 'research on ',
     'look into the ', 'look into ', 'dig into the ', 'dig into ',
     'prioritise the ', 'prioritize the ',
@@ -577,7 +609,7 @@ function parseNamedWork(goal) {
       } else {
         title = null;
       }
-    } else {
+    } else if (hasExplicitTitleSignal(raw) || hasExplicitTitleSignal(cleaned)) {
       title = stripTrailingPunct(cleaned);
       if (isGenericDescription(title) || looksLikeConversationalResearchAsk(title)) {
         title = null;
@@ -588,6 +620,11 @@ function parseNamedWork(goal) {
           title = poss2.title;
         }
       }
+    } else {
+      // P1.4: no quotes / possessive / by-author → topic seek, never singular title.
+      title = null;
+      const topicPhrase = extractResearchTopicPhrase(raw) || extractResearchTopicPhrase(cleaned);
+      if (topicPhrase) cleaned = topicPhrase;
     }
   }
 
@@ -595,7 +632,8 @@ function parseNamedWork(goal) {
   const isSingularTitle = !plural && !!title && title.length >= 8
     && !includesAny(` ${titleLow} `, [' all ', ' every '])
     && !isGenericDescription(title)
-    && !looksLikeConversationalResearchAsk(title);
+    && !looksLikeConversationalResearchAsk(title)
+    && (hasExplicitTitleSignal(raw) || hasExplicitTitleSignal(title) || !!(author && title));
   const isAuthorWorks = !isSingularTitle && !!author;
   const topic = extractTopic(raw);
 
@@ -651,6 +689,7 @@ module.exports = {
   parseNamedWork,
   looksLikeConversationalResearchAsk,
   extractResearchTopicPhrase,
+  hasExplicitTitleSignal,
   focusedSeekQuery,
   titleMatchScore,
   authorMatch,
