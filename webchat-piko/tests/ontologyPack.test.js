@@ -98,38 +98,22 @@ test('missing pack falls back to hardcoded thread defs', () => {
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 
-test('synthetic second pack routes different threads and aliases', () => {
+test('synthetic-culture profile pack routes different threads and aliases', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'piko-ontology-'));
-  withOntologyEnv(tmp, { PIKO_BACKGROUND_JOBS_PROFILE: 'synthetic-demo' }, () => {
-    const profileDir = path.join(WEBCHAT_ROOT, 'config', 'ontology');
-    fs.mkdirSync(profileDir, { recursive: true });
-    const profilePath = path.join(profileDir, 'synthetic-demo.json');
-    const synthetic = {
-      threads: [
-        { id: 'lunar-base', label: 'Lunar archaeology', aliases: ['moon temple', 'luna'] },
-        { id: 'mars-rift', label: 'Mars rift valleys', aliases: ['valles marineris'] },
-      ],
-      aliases: { 'moonbase': 'lunar-base' },
-    };
-    fs.writeFileSync(profilePath, JSON.stringify(synthetic));
+  withOntologyEnv(tmp, { PIKO_BACKGROUND_JOBS_PROFILE: 'synthetic-culture' }, () => {
+    const { getThreadDefs, resolveThreadAlias, resetOntologyCache } = require('../lib/ontologyPack');
+    resetOntologyCache();
+    const dossiers = require('../lib/eiThreadDossiers');
 
-    try {
-      const { getThreadDefs, resolveThreadAlias, resetOntologyCache } = require('../lib/ontologyPack');
-      resetOntologyCache();
-      const dossiers = require('../lib/eiThreadDossiers');
+    const ids = getThreadDefs(WEBCHAT_ROOT).map((t) => t.id);
+    assert.deepEqual(ids, ['lunar-base', 'mars-rift', 'europa-ice']);
+    assert.equal(resolveThreadAlias('moonbase', WEBCHAT_ROOT), 'lunar-base');
+    assert.equal(resolveThreadAlias('moon temple', WEBCHAT_ROOT), 'lunar-base');
+    assert.equal(resolveThreadAlias('osireion', WEBCHAT_ROOT), null);
 
-      const ids = getThreadDefs(WEBCHAT_ROOT).map((t) => t.id);
-      assert.deepEqual(ids, ['lunar-base', 'mars-rift']);
-      assert.equal(resolveThreadAlias('moonbase', WEBCHAT_ROOT), 'lunar-base');
-      assert.equal(resolveThreadAlias('moon temple', WEBCHAT_ROOT), 'lunar-base');
-      assert.equal(resolveThreadAlias('osireion', WEBCHAT_ROOT), null);
-
-      assert.equal(dossiers.matchThreadId('explore the moon temple'), 'lunar-base');
-      assert.equal(dossiers.matchThreadId('Osireion'), null);
-      assert.equal(dossiers.resolveThreadAlias('valles marineris'), 'mars-rift');
-    } finally {
-      fs.unlinkSync(profilePath);
-    }
+    assert.equal(dossiers.matchThreadId('explore the moon temple'), 'lunar-base');
+    assert.equal(dossiers.matchThreadId('Osireion'), null);
+    assert.equal(dossiers.resolveThreadAlias('valles marineris'), 'mars-rift');
   });
   fs.rmSync(tmp, { recursive: true, force: true });
 });

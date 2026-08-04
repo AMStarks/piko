@@ -171,9 +171,26 @@ function loadOverrideAgents() {
   }
 }
 
-function mergeAgents() {
+function packAgentsForRoot(rootDir) {
+  try {
+    const { getPackAgents } = require('./ontologyPack');
+    return getPackAgents(rootDir || path.join(__dirname, '..'));
+  } catch (err) {
+    return null;
+  }
+}
+
+function mergeAgents(rootDir) {
   const byId = new Map();
   for (const a of BUILTIN_AGENTS) byId.set(a.id, { ...a });
+  const packAgents = packAgentsForRoot(rootDir);
+  if (packAgents) {
+    for (const a of packAgents) {
+      if (!a || !a.id) continue;
+      const prev = byId.get(a.id) || {};
+      byId.set(a.id, { ...prev, ...a, id: a.id });
+    }
+  }
   for (const a of loadOverrideAgents()) {
     const prev = byId.get(a.id) || {};
     byId.set(a.id, { ...prev, ...a, id: a.id });
@@ -191,8 +208,9 @@ function agentAllowedForTenant(agent, profile) {
 }
 
 function listAgents(rootDir) {
-  const profile = getTenantBackgroundProfile(rootDir || path.join(__dirname, '..'));
-  return mergeAgents()
+  const root = rootDir || path.join(__dirname, '..');
+  const profile = getTenantBackgroundProfile(root);
+  return mergeAgents(root)
     .filter((a) => agentAllowedForTenant(a, profile))
     .map((a) => ({
       id: a.id,
@@ -211,8 +229,9 @@ function listAgents(rootDir) {
 function getAgent(agentId, rootDir) {
   const id = String(agentId || '').trim();
   if (!id) return null;
-  const profile = getTenantBackgroundProfile(rootDir || path.join(__dirname, '..'));
-  const agent = mergeAgents().find((a) => a.id === id) || null;
+  const root = rootDir || path.join(__dirname, '..');
+  const profile = getTenantBackgroundProfile(root);
+  const agent = mergeAgents(root).find((a) => a.id === id) || null;
   if (!agent || !agentAllowedForTenant(agent, profile)) return null;
   return agent;
 }

@@ -1,11 +1,12 @@
 /**
- * P3.7a — Tenant-configurable ontology pack (thread defs + aliases only).
+ * P3.7 / P4.3 — Tenant-configurable ontology pack.
  *
  * Load order: PIKO_DATA_DIR/ontology.json → config/ontology/<profile>.json → null.
  * Profile from PIKO_BACKGROUND_JOBS_PROFILE or tenant background jobs inference.
  *
- * Deferred Phase 4 (do not half-wire here):
- * - agent roster (agentRegistry culture entries)
+ * Areas (each: pack override when present, hardcoded fallback in consumers):
+ * - threads + aliases
+ * - agent roster (culture / pack agents)
  * - understand() EI-specific few-shots
  * - opinion prompt preamble
  * - capability card text
@@ -34,13 +35,78 @@ function profileForRoot(rootDir) {
   try {
     const { getTenantBackgroundProfile } = require('./tenantBackgroundJobs');
     return getTenantBackgroundProfile(defaultRootDir(rootDir)).profileId;
-  } catch (_) {
+  } catch (err) {
     return 'ausmaker';
   }
 }
 
+function normalizeAgentEntry(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const id = String(raw.id || '').trim();
+  if (!id) return null;
+  const out = { ...raw, id };
+  if (out.label != null) out.label = String(out.label);
+  if (out.runtime != null) out.runtime = String(out.runtime);
+  if (out.description != null) out.description = String(out.description);
+  if (out.brief_prefix != null) out.brief_prefix = String(out.brief_prefix);
+  if (out.adapter_id != null) out.adapter_id = String(out.adapter_id);
+  if (out.legion_capability != null) out.legion_capability = String(out.legion_capability);
+  if (out.swarm_role != null) out.swarm_role = String(out.swarm_role);
+  if (Array.isArray(out.profiles)) {
+    out.profiles = out.profiles.map((p) => String(p || '').trim()).filter(Boolean);
+  }
+  if (Array.isArray(out.tenants)) {
+    out.tenants = out.tenants.map((t) => String(t || '').trim()).filter(Boolean);
+  }
+  if (Array.isArray(out.capabilities)) {
+    out.capabilities = out.capabilities.map((c) => String(c || '').trim()).filter(Boolean);
+  }
+  return out;
+}
+
+function normalizeFewShot(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const id = String(raw.id || '').trim();
+  const user = String(raw.user || '').trim();
+  if (!id || !user) return null;
+  let assistant = raw.assistant;
+  if (assistant == null && raw.output != null) assistant = raw.output;
+  if (typeof assistant === 'string') {
+    const trimmed = assistant.trim();
+    if (!trimmed) return null;
+    return { id, user, assistantJson: trimmed };
+  }
+  if (assistant && typeof assistant === 'object') {
+    try {
+      return { id, user, assistantJson: JSON.stringify(assistant) };
+    } catch (err) {
+      return null;
+    }
+  }
+  return null;
+}
+
+function normalizeCapabilityCard(raw) {
+  if (raw == null) return null;
+  if (typeof raw === 'string') {
+    const text = raw.trim();
+    return text ? { text } : null;
+  }
+  if (typeof raw !== 'object' || Array.isArray(raw)) return null;
+  if (typeof raw.text === 'string' && raw.text.trim()) {
+    return { text: raw.text.trim() };
+  }
+  if (Array.isArray(raw.lines)) {
+    const lines = raw.lines.map((l) => String(l ?? '')).filter((l) => l !== undefined);
+    if (!lines.length) return null;
+    return { text: lines.join('\n') };
+  }
+  return null;
+}
+
 /**
- * Minimal validation: object with threads (array or id→def map) and optional aliases map.
+ * Validate pack. Threads are required (array or id→def map).
+ * Optional: aliases, agents, understandFewShots, opinionPreamble, capabilityCard.
  */
 function validatePack(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
@@ -81,13 +147,48 @@ function validatePack(raw) {
     }
   }
 
-  return { threads: normalized, aliases };
+  let agents = null;
+  if (Array.isArray(raw.agents)) {
+    const list = [];
+    for (const a of raw.agents) {
+      const n = normalizeAgentEntry(a);
+      if (n) list.push(n);
+    }
+    if (list.length) agents = list;
+  }
+
+  let understandFewShots = null;
+  if (Array.isArray(raw.understandFewShots)) {
+    const list = [];
+    for (const fsEntry of raw.understandFewShots) {
+      const n = normalizeFewShot(fsEntry);
+      if (n) list.push(n);
+    }
+    if (list.length) understandFewShots = list;
+  }
+
+  let opinionPreamble = null;
+  if (typeof raw.opinionPreamble === 'string' && raw.opinionPreamble.trim()) {
+    opinionPreamble = raw.opinionPreamble.trim();
+  }
+
+  const capabilityCard = normalizeCapabilityCard(raw.capabilityCard);
+
+  return {
+    threads: normalized,
+    aliases,
+    agents,
+    understandFewShots,
+    opinionPreamble,
+    capabilityCard,
+    profile: raw.profile != null ? String(raw.profile) : null,
+  };
 }
 
 function readJsonFile(filePath) {
   try {
     return JSON.parse(fs.readFileSync(filePath, 'utf8'));
-  } catch (_) {
+  } catch (err) {
     return null;
   }
 }
@@ -116,7 +217,7 @@ function resetOntologyCache() {
 }
 
 /**
- * @returns {null | { threads: object[], aliases: object }}
+ * @returns {null | object}
  */
 function getOntologyPack(rootDir) {
   const root = defaultRootDir(rootDir);
@@ -132,6 +233,42 @@ function getOntologyPack(rootDir) {
 function getThreadDefs(rootDir) {
   const pack = getOntologyPack(rootDir);
   return pack ? pack.threads : null;
+}
+
+/** Pack agent roster, or null when absent (consumers use hardcoded builtins). */
+function getPackAgents(rootDir) {
+  const pack = getOntologyPack(rootDir);
+  if (!pack || !Array.isArray(pack.agents) || !pack.agents.length) return null;
+  return pack.agents;
+}
+
+/** Pack understand few-shots, or null when absent. */
+function getPackUnderstandFewShots(rootDir) {
+  const pack = getOntologyPack(rootDir);
+  if (!pack || !Array.isArray(pack.understandFewShots) || !pack.understandFewShots.length) {
+    return null;
+  }
+  return pack.understandFewShots;
+}
+
+/** Pack opinion preamble string, or null when absent. */
+function getPackOpinionPreamble(rootDir) {
+  const pack = getOntologyPack(rootDir);
+  if (!pack || !pack.opinionPreamble) return null;
+  return pack.opinionPreamble;
+}
+
+/** Pack capability card `{ text }`, or null when absent. */
+function getPackCapabilityCard(rootDir) {
+  const pack = getOntologyPack(rootDir);
+  if (!pack || !pack.capabilityCard || !pack.capabilityCard.text) return null;
+  return pack.capabilityCard;
+}
+
+/** Replace `{{tenant}}` placeholders without regex. */
+function applyTenantPlaceholder(text, tenantName) {
+  const name = String(tenantName || 'this workspace');
+  return String(text || '').split('{{tenant}}').join(name);
 }
 
 function threadIdSet(threads) {
@@ -174,6 +311,11 @@ function resolveThreadAlias(alias, rootDir) {
 module.exports = {
   getOntologyPack,
   getThreadDefs,
+  getPackAgents,
+  getPackUnderstandFewShots,
+  getPackOpinionPreamble,
+  getPackCapabilityCard,
+  applyTenantPlaceholder,
   resolveThreadAlias,
   resolveThreadAliasFromDefs,
   resetOntologyCache,

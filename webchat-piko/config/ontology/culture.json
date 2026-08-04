@@ -90,5 +90,260 @@
         "plato atlantis"
       ]
     }
-  ]
+  ],
+  "agents": [
+    {
+      "id": "culture-researcher",
+      "label": "Culture Research Agent",
+      "runtime": "swarm",
+      "swarm_role": "researcher",
+      "profiles": ["culture"],
+      "tenants": ["customer-03"],
+      "capabilities": ["research", "egypt", "ancient_cultures"],
+      "brief_prefix": "You are researching for Egyptian Insights (ancient cultures). Primary goal: collate earliest-period (Predynastic→Early Dynastic→Old Kingdom) digital primary sources for Abydos/Oserion (Umm el-Qa'ab), Heliopolis (Iunu), and Giza — photos, facsimiles, museum entries, TLA/TopBib/reports, structured by site. Prefer primary sources and clear citation. When the local cultures_cache is empty or thin, recommend or hand off to ei-harvester before deep synthesis. Avoid modern commerce/inventory topics.",
+      "description": "EI-scoped research brief wrapper around the research swarm role."
+    },
+    {
+      "id": "ei-health",
+      "label": "EI Spine Health",
+      "runtime": "legion",
+      "adapter_id": "egyptian-insights",
+      "legion_capability": "health.check",
+      "profiles": ["culture"],
+      "tenants": ["customer-03"],
+      "capabilities": ["health", "culture"],
+      "description": "Check Egyptian Insights culture spine health (DB, assets, vision)."
+    },
+    {
+      "id": "ei-corpus",
+      "label": "EI Corpus Search",
+      "runtime": "legion",
+      "adapter_id": "egyptian-insights",
+      "legion_capability": "culture.corpus.search",
+      "profiles": ["culture"],
+      "tenants": ["customer-03"],
+      "capabilities": ["search", "corpus", "egypt"],
+      "description": "Search the local Egyptian Insights cultures_cache."
+    },
+    {
+      "id": "ei-harvester",
+      "label": "EI Harvester",
+      "runtime": "legion",
+      "adapter_id": "egyptian-insights",
+      "legion_capability": "research.scrape.run",
+      "profiles": ["culture"],
+      "tenants": ["customer-03"],
+      "capabilities": ["harvest", "scrape", "egypt"],
+      "default_input": { "limit": 15, "allow_stubs": false, "require_image": true },
+      "brief_prefix": "Harvest toward the EI research goal: earliest-period primary material for Abydos/Oserion, Heliopolis, and Giza into cultures_cache. Prefer images + official text; also Archive.org volumes, TopBib, and TLA; tag by site.",
+      "description": "Harvest museum/archive images, open literature (Archive.org/TopBib/TLA), and scout similar digital archives into the cultures cache."
+    },
+    {
+      "id": "ei-scribe",
+      "label": "EI Scribe",
+      "runtime": "legion",
+      "adapter_id": "egyptian-insights",
+      "legion_capability": "scribe.transcribe.image",
+      "profiles": ["culture"],
+      "tenants": ["customer-03"],
+      "capabilities": ["scribe", "transcribe", "gardiner"],
+      "description": "Vision scribe: hieroglyph/papyrus → Gardiner tokens (pass harvest_id JSON or id)."
+    },
+    {
+      "id": "ei-scholar",
+      "label": "EI Scholar",
+      "runtime": "legion",
+      "adapter_id": "egyptian-insights",
+      "legion_capability": "translation.critique",
+      "profiles": ["culture"],
+      "tenants": ["customer-03"],
+      "capabilities": ["scholar", "critique", "translation"],
+      "description": "Scholar critique of transcription vs museum translation (pass harvest_id)."
+    },
+    {
+      "id": "ei-pipeline",
+      "label": "EI Culture Pipeline",
+      "runtime": "legion",
+      "adapter_id": "egyptian-insights",
+      "legion_capability": "culture.pipeline.run",
+      "profiles": ["culture"],
+      "tenants": ["customer-03"],
+      "capabilities": ["pipeline", "egypt"],
+      "default_input": { "limit": 2 },
+      "brief_prefix": "Run scrape→scribe→scholar in service of the early-period three-site collation goal (Abydos, Heliopolis, Giza).",
+      "description": "Full scrape → scribe → scholar handshake for one or more items."
+    },
+    {
+      "id": "ei-qa",
+      "label": "EI Platform QA",
+      "runtime": "eval",
+      "profiles": ["culture"],
+      "tenants": ["customer-03"],
+      "capabilities": ["qa", "eval", "platform", "test"],
+      "description": "Run platform eval: registry smoke, golden literature harvest rubric per site, queue engineering fixes on failure."
+    },
+    {
+      "id": "ei-worker",
+      "label": "EI Worker",
+      "runtime": "eval",
+      "profiles": ["culture"],
+      "tenants": ["customer-03"],
+      "capabilities": ["worker", "harvest", "literature", "corpus", "review", "egypt", "tools"],
+      "description": "Generalist worker: Piko interprets your goal and runs the shared EI tool belt (harvest, literature, corpus search, content review, scribe, health)."
+    },
+    {
+      "id": "ei-text-scout",
+      "label": "EI Text Scout",
+      "runtime": "eval",
+      "profiles": ["culture"],
+      "tenants": ["customer-03"],
+      "capabilities": ["literature", "primary_texts", "assess", "scout"],
+      "description": "Find primary/early literature (Archive.org, TopBib, TLA) and assess whether each text fits Abydos / Heliopolis / Giza research goal."
+    },
+    {
+      "id": "ei-corpus-reviewer",
+      "label": "EI Corpus Reviewer",
+      "runtime": "eval",
+      "profiles": ["culture"],
+      "tenants": ["customer-03"],
+      "capabilities": ["corpus", "review", "flag", "keep"],
+      "description": "Read every corpus source (text/OCR/PDF/image) and set Flag = keep / drop / review for the research goal."
+    }
+  ],
+  "understandFewShots": [
+    {
+      "id": "fewshot-musing-osireion",
+      "user": "I've been thinking about getting into the Osireion sometime",
+      "assistant": {
+        "intent": "musing",
+        "confidence": 0.95,
+        "control": null,
+        "work": null,
+        "schedule": null,
+        "constraints": null,
+        "slots": {},
+        "is_question": false
+      }
+    },
+    {
+      "id": "fewshot-work-petrie",
+      "user": "Find Petrie's Giza survey PDF and add it to the corpus",
+      "assistant": {
+        "intent": "work_order",
+        "confidence": 0.98,
+        "control": null,
+        "work": {
+          "verb": "find",
+          "title": "Giza survey",
+          "author": "Petrie",
+          "topic": null,
+          "urls": [],
+          "scope": "single"
+        },
+        "schedule": null,
+        "constraints": null,
+        "slots": {},
+        "is_question": false
+      }
+    },
+    {
+      "id": "fewshot-status-campaign",
+      "user": "How's the research campaign going?",
+      "assistant": {
+        "intent": "status_question",
+        "confidence": 0.97,
+        "control": null,
+        "work": null,
+        "schedule": null,
+        "constraints": null,
+        "slots": {},
+        "is_question": true
+      }
+    },
+    {
+      "id": "fewshot-control-selfcorrect",
+      "user": "Pause the campaign — actually no, just give me an update",
+      "assistant": {
+        "intent": "status_question",
+        "confidence": 0.93,
+        "control": null,
+        "work": null,
+        "schedule": null,
+        "constraints": null,
+        "slots": {},
+        "is_question": true
+      }
+    },
+    {
+      "id": "fewshot-opinion-orion",
+      "user": "What do you make of the Orion correlation?",
+      "assistant": {
+        "intent": "opinion_question",
+        "confidence": 0.96,
+        "control": null,
+        "work": null,
+        "schedule": null,
+        "constraints": null,
+        "slots": {},
+        "is_question": true
+      }
+    },
+    {
+      "id": "fewshot-opinion-osireion-conclusions",
+      "user": "Have you come to any conclusions on the Osireion and its possible origins?",
+      "assistant": {
+        "intent": "opinion_question",
+        "confidence": 0.97,
+        "control": null,
+        "work": null,
+        "schedule": null,
+        "constraints": null,
+        "slots": {},
+        "is_question": true
+      }
+    },
+    {
+      "id": "fewshot-opinion-ingested",
+      "user": "What do you think, given what you have ingested?",
+      "assistant": {
+        "intent": "opinion_question",
+        "confidence": 0.96,
+        "control": null,
+        "work": null,
+        "schedule": null,
+        "constraints": null,
+        "slots": {},
+        "is_question": true
+      }
+    },
+    {
+      "id": "fewshot-opinion-sphinx-land",
+      "user": "Where do you land on the Sphinx erosion debate after all that reading?",
+      "assistant": {
+        "intent": "opinion_question",
+        "confidence": 0.97,
+        "control": null,
+        "work": null,
+        "schedule": null,
+        "constraints": null,
+        "slots": {},
+        "is_question": true
+      }
+    }
+  ],
+  "opinionPreamble": "You are Piko, asked for YOUR judgment on material you have studied for Egyptian Insights.",
+  "capabilityCard": {
+    "lines": [
+      "I'm Piko — a local operator assistant for this workspace.",
+      "Tenant: {{tenant}}.",
+      "",
+      "What I can do here:",
+      "• Research — seek sources, ingest PDFs/URLs, build corpus notes",
+      "• Corpus & opinions — answer from ingested material with citations when available",
+      "• Campaigns — pause/resume/run the research campaign (operator sessions)",
+      "• Status — report campaign progress, recent activity, and job state",
+      "",
+      "I do not invent capabilities I do not have. Ask for research, an opinion on a corpus topic, campaign control, or status."
+    ]
+  }
 }

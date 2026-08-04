@@ -920,14 +920,30 @@ function getExpertOpinionModel() {
     || 'qwen3.6:27b';
 }
 
-function buildExpertOpinionPrompt(message, materialBlock, hasMaterial, priorContext) {
+/** Hardcoded opinion framing — pack opinionPreamble overrides when present. */
+const DEFAULT_OPINION_PREAMBLE =
+  'You are Piko, asked for YOUR judgment on material you have studied for Egyptian Insights.';
+
+function resolveOpinionPreamble(rootDir) {
+  try {
+    const { getPackOpinionPreamble } = require('./ontologyPack');
+    const pack = getPackOpinionPreamble(rootDir);
+    if (pack) return pack;
+  } catch (err) {
+    // fall through to hardcoded preamble
+  }
+  return DEFAULT_OPINION_PREAMBLE;
+}
+
+function buildExpertOpinionPrompt(message, materialBlock, hasMaterial, priorContext, opts = {}) {
   const material = hasMaterial
     ? materialBlock
     : '(No matching corpus notes or stance file for this topic.)';
   const prior = priorContext
     ? `\nRECENT CONTEXT (stay on this topic unless the user clearly switches):\n${String(priorContext).slice(0, 700)}\n`
     : '';
-  return `You are Piko, asked for YOUR judgment on material you have studied for Egyptian Insights.
+  const preamble = resolveOpinionPreamble(opts.rootDir);
+  return `${preamble}
 
 REQUIRED:
 1. State where you land in the first two sentences — take a position.
@@ -1036,7 +1052,7 @@ async function answerExpertOpinion(message, understanding, opts = {}) {
         role: 'system',
         content: 'You are Piko giving a grounded expert opinion from your ingested corpus. Commit to a stance when material exists.',
       },
-      { role: 'user', content: buildExpertOpinionPrompt(message, block, hasMaterial, priorContext) },
+      { role: 'user', content: buildExpertOpinionPrompt(message, block, hasMaterial, priorContext, { rootDir: root }) },
     ];
     const chatOpts = {
       temperature: 0.4,
@@ -1801,6 +1817,9 @@ module.exports = {
   isNonMutatingUnderstanding,
   isExpertOpinionEnabled,
   answerExpertOpinion,
+  buildExpertOpinionPrompt,
+  resolveOpinionPreamble,
+  DEFAULT_OPINION_PREAMBLE,
   opinionRetrievalQuery,
   getLegateOllamaBaseUrl,
   DECIDE_FAIL_REPLY,

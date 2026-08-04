@@ -1,0 +1,87 @@
+{
+  "profile": "synthetic-culture",
+  "threads": [
+    {
+      "id": "lunar-base",
+      "label": "Lunar archaeology",
+      "aliases": ["moon temple", "luna", "lunar ruins"]
+    },
+    {
+      "id": "mars-rift",
+      "label": "Mars rift valleys",
+      "aliases": ["valles marineris", "mars canyon"]
+    },
+    {
+      "id": "europa-ice",
+      "label": "Europa ice shelf",
+      "aliases": ["europa", "jovian ice"]
+    }
+  ],
+  "aliases": {
+    "moonbase": "lunar-base",
+    "marineris": "mars-rift"
+  },
+  "agents": [
+    {
+      "id": "synth-scout",
+      "label": "Synthetic Scout",
+      "runtime": "eval",
+      "profiles": ["synthetic-culture"],
+      "tenants": ["*"],
+      "capabilities": ["scout", "lunar", "mars"],
+      "description": "Synthetic-culture scout for lunar/mars thread research."
+    },
+    {
+      "id": "synth-worker",
+      "label": "Synthetic Worker",
+      "runtime": "eval",
+      "profiles": ["synthetic-culture"],
+      "tenants": ["*"],
+      "capabilities": ["worker", "research", "corpus"],
+      "description": "Generalist worker for the synthetic second-culture pack."
+    }
+  ],
+  "understandFewShots": [
+    {
+      "id": "fewshot-synth-musing-luna",
+      "user": "I've been thinking about the moon temple sometime",
+      "assistant": {
+        "intent": "musing",
+        "confidence": 0.95,
+        "control": null,
+        "work": null,
+        "schedule": null,
+        "constraints": null,
+        "slots": {},
+        "is_question": false
+      }
+    },
+    {
+      "id": "fewshot-synth-opinion-mars",
+      "user": "What do you make of the Valles Marineris flood hypothesis?",
+      "assistant": {
+        "intent": "opinion_question",
+        "confidence": 0.96,
+        "control": null,
+        "work": null,
+        "schedule": null,
+        "constraints": null,
+        "slots": {},
+        "is_question": true
+      }
+    }
+  ],
+  "opinionPreamble": "You are Piko, asked for YOUR judgment on material you have studied for Synthetic Culture (lunar/mars archaeology).",
+  "capabilityCard": {
+    "lines": [
+      "I'm Piko — synthetic-culture operator for lunar and Mars threads.",
+      "Tenant: {{tenant}}.",
+      "",
+      "What I can do here:",
+      "• Scout lunar/mars source threads",
+      "• Opinions grounded in the synthetic corpus",
+      "",
+      "Ask about lunar-base, mars-rift, or europa-ice — not Egyptian Insights sites."
+    ]
+  }
+}

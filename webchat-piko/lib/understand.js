@@ -40,16 +40,71 @@ const MUTATING_INTENTS = new Set([
   'config_change',
 ]);
 
-const FEW_SHOT_IDS = new Set([
-  'fewshot-musing-osireion',
-  'fewshot-work-petrie',
-  'fewshot-status-campaign',
-  'fewshot-control-selfcorrect',
-  'fewshot-opinion-orion',
-  'fewshot-opinion-osireion-conclusions',
-  'fewshot-opinion-ingested',
-  'fewshot-opinion-sphinx-land',
-]);
+/** Hardcoded EI few-shots — fallback when ontology pack has none. */
+const DEFAULT_UNDERSTAND_FEW_SHOTS = [
+  {
+    id: 'fewshot-musing-osireion',
+    user: 'I\'ve been thinking about getting into the Osireion sometime',
+    assistantJson: '{"intent":"musing","confidence":0.95,"control":null,"work":null,"schedule":null,"constraints":null,"slots":{},"is_question":false}',
+  },
+  {
+    id: 'fewshot-work-petrie',
+    user: 'Find Petrie\'s Giza survey PDF and add it to the corpus',
+    assistantJson: '{"intent":"work_order","confidence":0.98,"control":null,"work":{"verb":"find","title":"Giza survey","author":"Petrie","topic":null,"urls":[],"scope":"single"},"schedule":null,"constraints":null,"slots":{},"is_question":false}',
+  },
+  {
+    id: 'fewshot-status-campaign',
+    user: 'How\'s the research campaign going?',
+    assistantJson: '{"intent":"status_question","confidence":0.97,"control":null,"work":null,"schedule":null,"constraints":null,"slots":{},"is_question":true}',
+  },
+  {
+    id: 'fewshot-control-selfcorrect',
+    user: 'Pause the campaign — actually no, just give me an update',
+    assistantJson: '{"intent":"status_question","confidence":0.93,"control":null,"work":null,"schedule":null,"constraints":null,"slots":{},"is_question":true}',
+  },
+  {
+    id: 'fewshot-opinion-orion',
+    user: 'What do you make of the Orion correlation?',
+    assistantJson: '{"intent":"opinion_question","confidence":0.96,"control":null,"work":null,"schedule":null,"constraints":null,"slots":{},"is_question":true}',
+  },
+  {
+    id: 'fewshot-opinion-osireion-conclusions',
+    user: 'Have you come to any conclusions on the Osireion and its possible origins?',
+    assistantJson: '{"intent":"opinion_question","confidence":0.97,"control":null,"work":null,"schedule":null,"constraints":null,"slots":{},"is_question":true}',
+  },
+  {
+    id: 'fewshot-opinion-ingested',
+    user: 'What do you think, given what you have ingested?',
+    assistantJson: '{"intent":"opinion_question","confidence":0.96,"control":null,"work":null,"schedule":null,"constraints":null,"slots":{},"is_question":true}',
+  },
+  {
+    id: 'fewshot-opinion-sphinx-land',
+    user: 'Where do you land on the Sphinx erosion debate after all that reading?',
+    assistantJson: '{"intent":"opinion_question","confidence":0.97,"control":null,"work":null,"schedule":null,"constraints":null,"slots":{},"is_question":true}',
+  },
+];
+
+const FEW_SHOT_IDS = new Set(DEFAULT_UNDERSTAND_FEW_SHOTS.map((f) => f.id));
+
+function resolveUnderstandFewShots(rootDir) {
+  try {
+    const { getPackUnderstandFewShots } = require('./ontologyPack');
+    const pack = getPackUnderstandFewShots(rootDir);
+    if (pack && pack.length) return pack;
+  } catch (err) {
+    // fall through to hardcoded few-shots
+  }
+  return DEFAULT_UNDERSTAND_FEW_SHOTS;
+}
+
+function formatFewShotBlock(fewShots) {
+  const lines = ['Few-shot:'];
+  for (const shot of fewShots || []) {
+    lines.push(`User: "${shot.user}"`);
+    lines.push(shot.assistantJson);
+  }
+  return lines.join('\n');
+}
 
 function getUnderstandModel(opts = {}) {
   const pinned = opts.model
@@ -202,6 +257,8 @@ function buildUnderstandPrompt(ctx = {}) {
   const campaign = ctx.campaign_summary ? String(ctx.campaign_summary).slice(0, 300) : '(none)';
   const last = ctx.last_assistant ? String(ctx.last_assistant).slice(0, 400) : '(none)';
   const op = ctx.is_operator === true ? 'yes' : 'no';
+  const fewShots = resolveUnderstandFewShots(ctx.rootDir);
+  const fewShotBlock = formatFewShotBlock(fewShots);
   return `You are Piko's comprehension classifier for Egyptian Insights / Legion chat.
 Read the user message carefully. Return ONLY valid JSON (no markdown).
 
@@ -250,23 +307,7 @@ Context:
 - campaign_summary: ${campaign}
 - last_assistant_turn: ${last}
 
-Few-shot:
-User: "I've been thinking about getting into the Osireion sometime"
-{"intent":"musing","confidence":0.95,"control":null,"work":null,"schedule":null,"constraints":null,"slots":{},"is_question":false}
-User: "Find Petrie's Giza survey PDF and add it to the corpus"
-{"intent":"work_order","confidence":0.98,"control":null,"work":{"verb":"find","title":"Giza survey","author":"Petrie","topic":null,"urls":[],"scope":"single"},"schedule":null,"constraints":null,"slots":{},"is_question":false}
-User: "How's the research campaign going?"
-{"intent":"status_question","confidence":0.97,"control":null,"work":null,"schedule":null,"constraints":null,"slots":{},"is_question":true}
-User: "Pause the campaign — actually no, just give me an update"
-{"intent":"status_question","confidence":0.93,"control":null,"work":null,"schedule":null,"constraints":null,"slots":{},"is_question":true}
-User: "What do you make of the Orion correlation?"
-{"intent":"opinion_question","confidence":0.96,"control":null,"work":null,"schedule":null,"constraints":null,"slots":{},"is_question":true}
-User: "Have you come to any conclusions on the Osireion and its possible origins?"
-{"intent":"opinion_question","confidence":0.97,"control":null,"work":null,"schedule":null,"constraints":null,"slots":{},"is_question":true}
-User: "What do you think, given what you have ingested?"
-{"intent":"opinion_question","confidence":0.96,"control":null,"work":null,"schedule":null,"constraints":null,"slots":{},"is_question":true}
-User: "Where do you land on the Sphinx erosion debate after all that reading?"
-{"intent":"opinion_question","confidence":0.97,"control":null,"work":null,"schedule":null,"constraints":null,"slots":{},"is_question":true}`;
+${fewShotBlock}`;
 }
 
 function logUnderstanding(message, result, mode) {
@@ -412,6 +453,7 @@ async function understandShadow(message, ctx = {}, floorLabeler) {
 module.exports = {
   INTENTS,
   FEW_SHOT_IDS,
+  DEFAULT_UNDERSTAND_FEW_SHOTS,
   MUTATING_INTENTS,
   getUnderstandModel,
   getUnderstandOllamaBaseUrl,
@@ -420,6 +462,7 @@ module.exports = {
   computeNeedsOperator,
   validateUnderstanding,
   buildUnderstandPrompt,
+  resolveUnderstandFewShots,
   understand,
   understandShadow,
   conversationFallback,
