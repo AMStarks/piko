@@ -32,9 +32,9 @@ const SCHEMA = [
   { key: 'PIKO_EXPERT_OPINION', type: 'bool', default: '', description: 'Expert-opinion lane (default on for culture)' },
   { key: 'MODEL_PRIMARY', type: 'string', default: '', description: 'Legacy primary model tag' },
 
-  { key: 'PIKO_WEBHOOK_SECRET', type: 'string', default: '', description: 'Shared webhook bearer/key', requiredWhenStrict: true },
+  { key: 'PIKO_WEBHOOK_SECRET', type: 'string', default: '', description: 'Shared webhook bearer/key (fallback; prefer PIKO_DATA_DIR/secrets/webhook.json)', requiredWhenStrict: true },
   { key: 'PIKO_ADMIN_PASSWORD', type: 'string', default: '', description: 'Admin gate password' },
-  { key: 'PIKO_API_KEY', type: 'string', default: '', description: 'API key for adapters/monitors' },
+  { key: 'PIKO_API_KEY', type: 'string', default: '', description: 'API key for adapters/monitors (fallback; prefer PIKO_DATA_DIR/secrets/api-key.json)' },
   { key: 'PIKO_API_AUTH', type: 'enum', values: ['lan', 'strict', 'off', ''], default: 'strict', description: 'API auth mode (strict default; set lan explicitly for private-IP trust)' },
   { key: 'PIKO_CHANNEL_ALLOWLIST_OPEN', type: 'bool', default: '0', description: 'Opt into open non-webchat channels' },
   { key: 'PIKO_TASK_ENDPOINT', type: 'bool', default: '0', description: 'Enable /task shell surface' },

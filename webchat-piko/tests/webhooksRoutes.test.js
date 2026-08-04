@@ -1,25 +1,51 @@
 /**
  * P3.1b — webhook route extraction.
  */
-const { describe, it } = require('node:test');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const { checkWebhookAuth, tryHandleWebhooks, registerWebhookRoutes } = require('../routes/webhooks');
 const { createRouteRegistry } = require('../lib/routeRegistry');
+const { setSecret } = require('../lib/secretsStore');
 
 describe('routes/webhooks', () => {
+  let tmp;
+  let prevDataDir;
+  let prevWebhook;
+
+  before(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'piko-wh-'));
+    prevDataDir = process.env.PIKO_DATA_DIR;
+    prevWebhook = process.env.PIKO_WEBHOOK_SECRET;
+    process.env.PIKO_DATA_DIR = tmp;
+    delete process.env.PIKO_WEBHOOK_SECRET;
+  });
+
+  after(() => {
+    if (prevDataDir === undefined) delete process.env.PIKO_DATA_DIR;
+    else process.env.PIKO_DATA_DIR = prevDataDir;
+    if (prevWebhook === undefined) delete process.env.PIKO_WEBHOOK_SECRET;
+    else process.env.PIKO_WEBHOOK_SECRET = prevWebhook;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
   it('checkWebhookAuth fails closed when secret unset', () => {
-    assert.equal(checkWebhookAuth({ headers: { authorization: 'Bearer x' } }, ''), false);
-    assert.equal(checkWebhookAuth({ headers: { authorization: 'Bearer x' } }, null), false);
+    fs.rmSync(path.join(tmp, 'secrets'), { recursive: true, force: true });
+    delete process.env.PIKO_WEBHOOK_SECRET;
+    assert.equal(checkWebhookAuth({ headers: { authorization: 'Bearer x' } }), false);
   });
 
   it('checkWebhookAuth accepts bearer or x-webhook-key', () => {
-    const secret = 's3cret';
-    assert.equal(checkWebhookAuth({ headers: { authorization: `Bearer ${secret}` } }, secret), true);
-    assert.equal(checkWebhookAuth({ headers: { 'x-webhook-key': secret } }, secret), true);
-    assert.equal(checkWebhookAuth({ headers: { authorization: 'Bearer wrong' } }, secret), false);
+    setSecret('webhook', 's3cret');
+    assert.equal(checkWebhookAuth({ headers: { authorization: 'Bearer s3cret' } }), true);
+    assert.equal(checkWebhookAuth({ headers: { 'x-webhook-key': 's3cret' } }), true);
+    assert.equal(checkWebhookAuth({ headers: { authorization: 'Bearer wrong' } }), false);
   });
 
   it('unauthenticated webhook returns 401', () => {
+    setSecret('webhook', 'need-auth');
     let status = null;
     let body = null;
     const res = {};
@@ -28,7 +54,6 @@ describe('routes/webhooks', () => {
       res,
       {
         pathname: '/api/webhooks/events',
-        webhookSecret: 'need-auth',
         send: (_r, code, b) => { status = code; body = b; },
         readBody: async () => '{}',
       },
@@ -42,7 +67,7 @@ describe('routes/webhooks', () => {
     const handled = tryHandleWebhooks(
       { method: 'GET', headers: {} },
       {},
-      { pathname: '/api/health', webhookSecret: 'x', send: () => {}, readBody: async () => '' },
+      { pathname: '/api/health', send: () => {}, readBody: async () => '' },
     );
     assert.equal(handled, false);
   });

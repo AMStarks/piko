@@ -14,8 +14,6 @@
  * Modes (PIKO_API_AUTH): `strict` (default — never grant IP trust)
  * · `lan` (direct private socket IP trust) · `off` (legacy, no gate).
  */
-const crypto = require('crypto');
-
 const OPEN_PATHS = new Set([
   '/api/health',
   '/api/ping',
@@ -52,11 +50,9 @@ function presentedKey(req, query) {
 }
 
 function keyMatches(presented) {
-  const expected = String(process.env.PIKO_API_KEY || '').trim();
-  if (!expected || !presented) return false;
-  const a = Buffer.from(presented);
-  const b = Buffer.from(expected);
-  return a.length === b.length && crypto.timingSafeEqual(a, b);
+  if (!presented) return false;
+  const { verifySecret } = require('./secretsStore');
+  return verifySecret('api-key', presented);
 }
 
 function hasAdminSession(req, dataDir) {

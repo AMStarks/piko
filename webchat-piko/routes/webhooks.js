@@ -3,13 +3,16 @@
  * Auth fail-closed when secret unset (P0.2).
  */
 const { toLowerAsciiish } = require('../lib/text');
+const { hasSecret, verifySecret } = require('../lib/secretsStore');
 
-function checkWebhookAuth(req, secret) {
-  if (!secret) return false;
+function checkWebhookAuth(req) {
+  if (!hasSecret('webhook')) return false;
   const auth = req.headers.authorization || '';
   const bearer = auth.startsWith('Bearer ') ? auth.slice(7) : '';
   const key = (req.headers['x-webhook-key'] || '').trim();
-  return bearer === secret || key === secret;
+  const presented = bearer || key;
+  if (!presented) return false;
+  return verifySecret('webhook', presented);
 }
 
 /**
@@ -33,7 +36,6 @@ function tryHandleWebhooks(req, res, ctx = {}) {
   const pathname = ctx.pathname || '';
   const send = ctx.send;
   const readBody = ctx.readBody;
-  const secret = ctx.webhookSecret;
   const telegramNotify = ctx.telegramNotify;
   const processWebhookEvent = ctx.processWebhookEvent;
   const postJsonToUrl = ctx.postJsonToUrl;
@@ -46,7 +48,7 @@ function tryHandleWebhooks(req, res, ctx = {}) {
 
   // —— Webhook events (external systems POST here) ——
   if (pathname === '/api/webhooks/events' || pathname === '/api/webhooks/ausmaker') {
-    if (!checkWebhookAuth(req, secret)) {
+    if (!checkWebhookAuth(req)) {
       send(res, 401, JSON.stringify({ ok: false, error: 'Webhook auth required' }));
       return true;
     }
@@ -79,7 +81,7 @@ function tryHandleWebhooks(req, res, ctx = {}) {
 
   // —— /webhook/cin7: Cin7 Core webhooks (stock alerts, sale status, etc.) ——
   if (pathname === '/webhook/cin7') {
-    if (!checkWebhookAuth(req, secret)) {
+    if (!checkWebhookAuth(req)) {
       send(res, 401, JSON.stringify({ ok: false, error: 'Webhook auth required' }));
       return true;
     }
@@ -132,7 +134,7 @@ function tryHandleWebhooks(req, res, ctx = {}) {
 
   // —— /webhook/inventory-alert: AusMaker real-time inventory alerts ——
   if (pathname === '/webhook/inventory-alert') {
-    if (!checkWebhookAuth(req, secret)) {
+    if (!checkWebhookAuth(req)) {
       send(res, 401, JSON.stringify({ ok: false, error: 'Webhook auth required' }));
       return true;
     }
@@ -161,7 +163,7 @@ function tryHandleWebhooks(req, res, ctx = {}) {
 
   // —— /api/webhook/alert + /webhook/alert: LLM-evaluated push alerts ——
   if (pathname === '/api/webhook/alert' || pathname === '/webhook/alert') {
-    if (!checkWebhookAuth(req, secret)) {
+    if (!checkWebhookAuth(req)) {
       send(res, 401, JSON.stringify({ ok: false, error: 'Webhook auth required' }));
       return true;
     }
