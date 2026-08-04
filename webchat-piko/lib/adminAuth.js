@@ -51,6 +51,69 @@ function isEnabled() {
   return getConfig().enabled;
 }
 
+function envStrict() {
+  const v = String(process.env.PIKO_ENV_STRICT || '').trim().toLowerCase();
+  return v === '1' || v === 'true' || v === 'on' || v === 'yes';
+}
+
+/**
+ * Admin gate is configured when env super-user password is set, or a
+ * dashboard-users.json store has at least one user (P4.1).
+ */
+function isConfigured(dataDir) {
+  if (isEnabled()) return true;
+  if (!dataDir) return false;
+  try {
+    const users = loadUsers(dataDir);
+    return Array.isArray(users) && users.length > 0;
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
+ * Under PIKO_ENV_STRICT, an unconfigured admin gate must fail closed on
+ * protected paths (not silently skip). Dev (strict off) keeps legacy open.
+ */
+function mustFailClosed(dataDir) {
+  return envStrict() && !isConfigured(dataDir);
+}
+
+let _unconfiguredLogged = false;
+
+function logUnconfiguredOnce() {
+  if (_unconfiguredLogged) return;
+  _unconfiguredLogged = true;
+  const msg = 'admin_auth_unconfigured: PIKO_ENV_STRICT=1 but no PIKO_ADMIN_PASSWORD and no dashboard users — protected paths return 503';
+  try {
+    require('./logger').log('error', 'admin_auth_unconfigured', {
+      tag: 'admin_auth_unconfigured',
+      msg,
+    });
+  } catch (_) {
+    console.error('[adminAuth] ERROR', msg);
+  }
+}
+
+/**
+ * @returns {null | { status: number, body: string }}
+ */
+function denyIfUnconfigured(pathname, method, dataDir) {
+  if (!mustFailClosed(dataDir)) return null;
+  if (!isProtectedApiPath(pathname, method) && !(String(method || '').toUpperCase() === 'GET' && isProtectedPagePath(pathname))) {
+    return null;
+  }
+  logUnconfiguredOnce();
+  return {
+    status: 503,
+    body: JSON.stringify({
+      ok: false,
+      error: 'admin_auth_unconfigured',
+      message: 'Admin auth is required under PIKO_ENV_STRICT but is not configured',
+    }),
+  };
+}
+
 function sessionsPath(dataDir) {
   return path.join(dataDir, 'admin-sessions.json');
 }
@@ -476,6 +539,11 @@ module.exports = {
   SESSION_COOKIE,
   getConfig,
   isEnabled,
+  isConfigured,
+  mustFailClosed,
+  denyIfUnconfigured,
+  logUnconfiguredOnce,
+  envStrict,
   validateCredentials,
   authenticate,
   createUser,

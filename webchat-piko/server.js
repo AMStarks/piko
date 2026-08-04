@@ -3096,6 +3096,14 @@ async function handleRequest(req, res) {
     }
   }
 
+  // P4.1: under PIKO_ENV_STRICT, unconfigured admin gate fails closed (503).
+  {
+    const denied = adminAuth.denyIfUnconfigured(pathname, req.method, DATA_DIR);
+    if (denied && !(adminAuth.isMonitorBypass && adminAuth.isMonitorBypass(req, pathname, req.method))) {
+      return send(res, denied.status, denied.body);
+    }
+  }
+
   if (adminAuth.isEnabled()) {
     if (adminAuth.isProtectedApiPath(pathname, req.method) && !adminAuth.isMonitorBypass(req, pathname, req.method)) {
       const session = adminAuth.getSessionFromRequest(req, DATA_DIR);
@@ -4395,6 +4403,10 @@ const server = http.createServer(handleRequest);
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Piko WebChat http://0.0.0.0:${PORT} (Ollama: ${OLLAMA_MODEL})`);
   console.log(`[tenant] ${TENANT_BG.display_name} (${TENANT_BG.tenant_id}) background jobs profile=${TENANT_BG.profileId}`);
+  try {
+    const bootAdmin = require('./lib/adminAuth');
+    if (bootAdmin.mustFailClosed(DATA_DIR)) bootAdmin.logUnconfiguredOnce();
+  } catch (_) { /* ok */ }
   try {
     const { startAgentWorker } = require('./lib/agentWorker');
     startAgentWorker(__dirname);
