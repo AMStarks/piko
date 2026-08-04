@@ -13,8 +13,11 @@ describe('lib/privilegePlanes', () => {
     assert.equal(mapRouteToPlane('/api/agents/jobs', 'GET'), 'chat');
     assert.equal(mapRouteToPlane('/api/control/webhook-rules', 'POST'), 'config');
     assert.equal(mapRouteToPlane('/api/yolo-tool', 'POST'), 'money');
+    assert.equal(mapRouteToPlane('/api/yolo-tools/registry', 'GET'), 'chat');
+    assert.equal(mapRouteToPlane('/api/hitl/approve', 'POST'), 'money');
     assert.equal(mapChatLaneToPlane('legate_dispatch'), 'work');
     assert.equal(mapChatLaneToPlane('opinion'), 'chat');
+    assert.equal(mapChatLaneToPlane('po_submit'), 'money');
   });
 
   it('client cannot work; operator can; money needs confirm', () => {

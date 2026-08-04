@@ -37,4 +37,38 @@ describe('P4.2 yolo routes', () => {
     assert.equal(status, 401);
     assert.ok(String(body).includes('Unauthorized'));
   });
+
+  it('tryHandleYolo money plane requires confirm (P4.4)', async () => {
+    const fs = require('fs');
+    const os = require('os');
+    const path = require('path');
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'piko-yolo-money-'));
+    const prev = process.env.PIKO_DATA_DIR;
+    process.env.PIKO_DATA_DIR = tmp;
+    try {
+      let status = 0;
+      let body = '';
+      await tryHandleYolo(
+        { method: 'POST', headers: {}, url: '/api/yolo-tool' },
+        {},
+        {
+          pathname: '/api/yolo-tool',
+          dataDir: tmp,
+          send: (_res, code, b) => { status = code; body = b; },
+          readBody: async () => JSON.stringify({ name: 'cin7_get_stock_on_hand' }),
+          checkYoloOrSessionAuth: () => true,
+          yoloBridge: { runYoloTool: () => 'should-not-run' },
+          toLowerAsciiish: (s) => String(s || '').toLowerCase(),
+        },
+      );
+      assert.equal(status, 403);
+      const parsed = JSON.parse(body);
+      assert.equal(parsed.error, 'money_confirm_required');
+      assert.equal(parsed.needs_confirm, true);
+    } finally {
+      if (prev === undefined) delete process.env.PIKO_DATA_DIR;
+      else process.env.PIKO_DATA_DIR = prev;
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
 });

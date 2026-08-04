@@ -54,8 +54,18 @@ async function handleYoloTool(req, res, ctx) {
   try {
     body = await readBody(req);
     body = body ? JSON.parse(body) : {};
-  } catch (_) {
+  } catch (err) {
+    void err;
     send(res, 400, JSON.stringify({ ok: false, error: 'Invalid JSON body' }));
+    return true;
+  }
+  const { gateMoneyHttp } = require('../lib/moneyPlaneGate');
+  if (!gateMoneyHttp(req, res, send, {
+    body,
+    action: 'yolo_tool',
+    pathname: '/api/yolo-tool',
+    dataDir: ctx.dataDir || process.env.PIKO_DATA_DIR,
+  })) {
     return true;
   }
   const toolName = String(body.name || body.tool_name || body.toolName || '').trim();
@@ -149,9 +159,23 @@ async function handleHitlAction(req, res, ctx, action) {
   try {
     body = await readBody(req);
     body = body ? JSON.parse(body) : {};
-  } catch (_) {
+  } catch (err) {
+    void err;
     send(res, 400, JSON.stringify({ ok: false, error: 'Invalid JSON body' }));
     return true;
+  }
+  // Approve executes queued dangerous/money tools — money plane + dual-confirm.
+  // Reject is not money-moving; leave ungated.
+  if (action === 'approve') {
+    const { gateMoneyHttp } = require('../lib/moneyPlaneGate');
+    if (!gateMoneyHttp(req, res, send, {
+      body,
+      action: 'hitl_approve',
+      pathname: '/api/hitl/approve',
+      dataDir: ctx.dataDir || process.env.PIKO_DATA_DIR,
+    })) {
+      return true;
+    }
   }
   const requestId = String(body.id || body.request_id || body.requestId || '').trim();
   if (!requestId) {

@@ -387,14 +387,21 @@ function createHandleApiChat(deps) {
         }
         clearApprovalPending(key);
         const pikoUserId = reqExternalId != null ? `${reqSource}:${reqExternalId}` : `${reqSource}:${key}`;
-        let dispatch;
-        try {
-          dispatch = await dispatchLegionPoSubmit(pinCheck.payload, { piko_user_id: pikoUserId });
-        } catch (e) {
-          dispatch = { ok: false, code: 'DISPATCH_EXCEPTION', message: e && e.message ? e.message : 'Dispatch failed' };
-        }
-        const reply = dispatch.message || (dispatch.ok ? 'PO submit accepted.' : 'PO submit failed.');
-        return send(res, 200, JSON.stringify({ reply, runId: dispatch.runId || null }));
+        const { beginChatMoneyConfirm } = require('./moneyPlaneGate');
+        const confirm = beginChatMoneyConfirm(key, {
+          kind: 'po_submit',
+          summary: 'purchase order submit',
+          payload: pinCheck.payload,
+          pikoUserId,
+          role: 'operator',
+          source: reqSource,
+        });
+        return send(res, 200, JSON.stringify({
+          reply: confirm.reply,
+          route: confirm.route || 'money_confirm_required',
+          error: confirm.error || 'money_confirm_required',
+          needs_confirm: true,
+        }));
       }
     }
     clearApprovalPending(key);
@@ -445,14 +452,21 @@ function createHandleApiChat(deps) {
           return send(res, 403, JSON.stringify({ reply: pinCheck.error }));
         }
         const pikoUserId = reqExternalId != null ? `${reqSource}:${reqExternalId}` : `${reqSource}:${key}`;
-        let dispatch;
-        try {
-          dispatch = await dispatchLegionPoSubmit(pinCheck.payload, { piko_user_id: pikoUserId });
-        } catch (e) {
-          dispatch = { ok: false, code: 'DISPATCH_EXCEPTION', message: e && e.message ? e.message : 'Dispatch failed' };
-        }
-        const reply = dispatch.message || (dispatch.ok ? 'PO submit accepted.' : 'PO submit failed.');
-        return send(res, 200, JSON.stringify({ reply, runId: dispatch.runId || null }));
+        const { beginChatMoneyConfirm } = require('./moneyPlaneGate');
+        const confirm = beginChatMoneyConfirm(key, {
+          kind: 'po_submit',
+          summary: 'purchase order submit',
+          payload: pinCheck.payload,
+          pikoUserId,
+          role: 'operator',
+          source: reqSource,
+        });
+        return send(res, 200, JSON.stringify({
+          reply: confirm.reply,
+          route: confirm.route || 'money_confirm_required',
+          error: confirm.error || 'money_confirm_required',
+          needs_confirm: true,
+        }));
       }
       setApprovalPending(key, { source: reqSource });
       const pinHint = process.env.PIKO_LEGION_APPROVE_PIN ? ' Include "_pin": "your-pin" in the JSON when you paste it.' : '';
@@ -1777,6 +1791,87 @@ function createHandleApiChat(deps) {
     }
   }
 
+  // —— P4.4a: money-plane dual-confirm (YES executes pending PO/ERP action) ——
+  const {
+    tryChatMoneyConfirm,
+    assertPlaneAllowed: assertMoneyPlane,
+  } = require('./moneyPlaneGate');
+  const moneyMutateConfirm = tryChatMoneyConfirm(key, trimmedMsg);
+  if (moneyMutateConfirm) {
+    if (moneyMutateConfirm.route === 'money_mutate_cancelled') {
+      history.push({ role: 'assistant', content: moneyMutateConfirm.reply });
+      sessionStore.append(key, 'user', message);
+      sessionStore.append(key, 'assistant', moneyMutateConfirm.reply);
+      return send(res, 200, JSON.stringify({
+        reply: moneyMutateConfirm.reply,
+        route: moneyMutateConfirm.route,
+      }));
+    }
+    if (moneyMutateConfirm.confirmed && moneyMutateConfirm.intent) {
+      const intent = moneyMutateConfirm.intent;
+      const planeCheck = assertMoneyPlane('money', {
+        role: intent.role || 'operator',
+        principal: intent.principal,
+        moneyConfirmed: true,
+      });
+      if (!planeCheck.ok) {
+        const denyReply = 'Money-plane action denied.';
+        history.push({ role: 'assistant', content: denyReply });
+        sessionStore.append(key, 'user', message);
+        sessionStore.append(key, 'assistant', denyReply);
+        return send(res, planeCheck.status || 403, JSON.stringify({
+          reply: denyReply,
+          error: planeCheck.error || 'plane_denied',
+          route: 'plane_denied',
+        }));
+      }
+      if (intent.kind === 'po_submit' && intent.payload) {
+        let dispatch;
+        try {
+          dispatch = await dispatchLegionPoSubmit(intent.payload, {
+            piko_user_id: intent.pikoUserId || `${reqSource || 'chat'}:${key}`,
+          });
+        } catch (e) {
+          dispatch = {
+            ok: false,
+            code: 'DISPATCH_EXCEPTION',
+            message: e && e.message ? e.message : 'Dispatch failed',
+          };
+        }
+        const reply = dispatch.message || (dispatch.ok ? 'PO submit accepted.' : 'PO submit failed.');
+        history.push({ role: 'assistant', content: reply });
+        sessionStore.append(key, 'user', message);
+        sessionStore.append(key, 'assistant', reply);
+        return send(res, 200, JSON.stringify({
+          reply,
+          runId: dispatch.runId || null,
+          route: 'money_po_submit',
+        }));
+      }
+      if (intent.kind === 'capability' && intent.flowOpts) {
+        const { runLegionCapabilityFlow } = require('./frontDesk');
+        const legionOut = await runLegionCapabilityFlow({
+          ...intent.flowOpts,
+          moneyConfirmed: true,
+        });
+        const reply = legionOut.reply || (legionOut.ok ? 'Done.' : 'Money action failed.');
+        history.push({ role: 'assistant', content: reply });
+        sessionStore.append(key, 'user', message);
+        sessionStore.append(key, 'assistant', reply);
+        return send(res, 200, JSON.stringify({
+          reply,
+          route: legionOut.route || 'money_capability',
+          runId: legionOut.runId || null,
+        }));
+      }
+      const noopReply = 'Confirmed, but no executable money action was pending.';
+      history.push({ role: 'assistant', content: noopReply });
+      sessionStore.append(key, 'user', message);
+      sessionStore.append(key, 'assistant', noopReply);
+      return send(res, 200, JSON.stringify({ reply: noopReply, route: 'money_mutate_empty' }));
+    }
+  }
+
   // —— P3 Tier 1: chat-driven config mutations (confirm before apply) ——
   const { tryConfirm: tryConfigMutateConfirm } = require('./configMutatePending');
   const configMutateConfirm = tryConfigMutateConfirm(key, trimmedMsg);
@@ -1967,6 +2062,22 @@ function createHandleApiChat(deps) {
       };
       try {
         if (pp.action === 'purchase_order.draft.create') {
+          // Proactive offer + user YES is the dual-confirm pair for money plane.
+          const { assertPlaneAllowed: assertMoneyPlaneProactive } = require('./moneyPlaneGate');
+          const moneyOk = assertMoneyPlaneProactive('money', {
+            role: 'operator',
+            moneyConfirmed: true,
+          });
+          if (!moneyOk.ok) {
+            const denyReply = 'Money-plane action denied.';
+            history.push({ role: 'assistant', content: denyReply });
+            sessionStore.append(key, 'user', message);
+            sessionStore.append(key, 'assistant', denyReply);
+            return send(res, moneyOk.status || 403, JSON.stringify({
+              reply: denyReply,
+              error: moneyOk.error || 'plane_denied',
+            }));
+          }
           const { runLegionCapabilityFlow } = require('./frontDesk');
           const legionOut = await runLegionCapabilityFlow({
             route: { actionType: 'run_capability', capability: pp.action },
@@ -1976,6 +2087,7 @@ function createHandleApiChat(deps) {
             legionAdapterApiBase: LEGION_ADAPTER_API_BASE,
             reqSource,
             key,
+            moneyConfirmed: true,
           });
           if (legionOut.ok) {
             const reply = legionOut.reply;
@@ -1985,7 +2097,9 @@ function createHandleApiChat(deps) {
             try {
               const { logActivity } = require('./activityLog');
               logActivity('action_router_run', { capability: pp.action, outcome: 'success', source: 'proactive_followup', runId: legionOut.runId });
-            } catch (_) {}
+            } catch (err) {
+              void err;
+            }
             return send(res, 200, JSON.stringify({ reply }));
           }
         }
@@ -2789,11 +2903,14 @@ EXAMPLE OUTPUTS:
       sessionStore.append(key, 'user', message);
       sessionStore.append(key, 'assistant', reply);
       if (legionOut.ok) {
-        try { const { logActivity } = require('./activityLog'); logActivity('action_router_run', { capability: route.capability, runId: legionOut.runId, outcome: 'success', fastPath: true }); } catch (_) {}
+        try { const { logActivity } = require('./activityLog'); logActivity('action_router_run', { capability: route.capability, runId: legionOut.runId, outcome: 'success', fastPath: true }); } catch (err) { void err; }
       }
       return send(res, 200, JSON.stringify({
         reply,
-        route: legionOut.ok ? 'legion_capability' : 'legion_adapter_error',
+        route: legionOut.needs_confirm
+          ? 'money_confirm_required'
+          : (legionOut.ok ? 'legion_capability' : 'legion_adapter_error'),
+        ...(legionOut.needs_confirm ? { error: 'money_confirm_required', needs_confirm: true } : {}),
         ...(legionOut.progressAck ? { progressAck: legionOut.progressAck } : {}),
       }));
     }
@@ -3776,11 +3893,14 @@ EXAMPLE OUTPUTS:
               try {
                 const { logActivity } = require('./activityLog');
                 logActivity('action_router_run', { capability: route.capability, runId: legionOut.runId, outcome: 'success' });
-              } catch (_) {}
+              } catch (err) { void err; }
             }
             return send(res, 200, JSON.stringify({
               reply,
-              route: legionOut.ok ? 'legion_capability' : 'legion_adapter_error',
+              route: legionOut.needs_confirm
+                ? 'money_confirm_required'
+                : (legionOut.ok ? 'legion_capability' : 'legion_adapter_error'),
+              ...(legionOut.needs_confirm ? { error: 'money_confirm_required', needs_confirm: true } : {}),
               ...(legionOut.progressAck ? { progressAck: legionOut.progressAck } : {}),
             }));
           }

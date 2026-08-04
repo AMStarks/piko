@@ -470,7 +470,36 @@ async function runLegionCapabilityFlow(opts = {}) {
     reqSource,
     key,
     requestStartedAt,
+    moneyConfirmed,
   } = opts;
+
+  // P4.4a: PO/ERP capabilities require money plane dual-confirm first.
+  const { isMoneyCapability, beginChatMoneyConfirm } = require('./moneyPlaneGate');
+  if (route && isMoneyCapability(route.capability) && !moneyConfirmed) {
+    const confirm = beginChatMoneyConfirm(key, {
+      kind: 'capability',
+      summary: route.capability,
+      capability: route.capability,
+      role: 'operator',
+      flowOpts: {
+        route,
+        message,
+        sessionModel,
+        dataDir,
+        legionAdapterApiBase,
+        reqSource,
+        key,
+        requestStartedAt,
+      },
+    });
+    return {
+      ok: false,
+      needs_confirm: !!confirm.needs_confirm,
+      reply: confirm.reply,
+      route: confirm.route || 'money_confirm_required',
+      error: confirm.error,
+    };
+  }
 
   const progressAck = await fireProgressAck(route, message, { sessionId: key, reqSource });
 

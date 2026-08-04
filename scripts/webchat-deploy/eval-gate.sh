@@ -221,4 +221,97 @@ else
   note "grounded status: SKIP (no campaign endpoint on this tenant)"
 fi
 
+# 6. Money plane dual-confirm (P4.4b): mutating money route without confirm → 403
+# money_confirm_required. Culture tenants soft-skip when endpoints are absent;
+# ausmaker/customer-01 (and any tenant exposing the route) must pass.
+gate_money_post() {
+  local path="$1"
+  local payload="$2"
+  local out="$3"
+  local payload_b64
+  payload_b64="$(printf '%s' "$payload" | base64 | tr -d '\n')"
+  ssh "$T_HOST" "cd '$T_DIR' && GATE_MONEY_PATH='$path' GATE_MONEY_B64='$payload_b64' GATE_MONEY_BASE='$BASE' python3 - <<'PY'
+import base64, json, os, pathlib, urllib.error, urllib.request
+env = {}
+p = pathlib.Path('.env')
+if p.exists():
+    for line in p.read_text().splitlines():
+        s = line.strip()
+        if s and not s.startswith('#') and '=' in s:
+            k, _, v = s.partition('=')
+            env[k.strip()] = v.strip().strip('\"').strip(\"'\")
+key = env.get('PIKO_YOLO_API_KEY') or env.get('PIKO_HEALTH_API_KEY') or env.get('PIKO_API_KEY') or ''
+path = os.environ.get('GATE_MONEY_PATH') or ''
+base = os.environ.get('GATE_MONEY_BASE') or ''
+raw = base64.b64decode(os.environ.get('GATE_MONEY_B64') or '').decode('utf-8', 'replace')
+url = base + path
+req = urllib.request.Request(url, data=raw.encode('utf-8'), method='POST', headers={
+    'Content-Type': 'application/json',
+})
+if key:
+    req.add_header('Authorization', 'Bearer ' + key)
+    req.add_header('X-Piko-Key', key)
+try:
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        body = resp.read().decode('utf-8', 'replace')
+        print(json.dumps({'status': resp.status, 'body': body}))
+except urllib.error.HTTPError as e:
+    body = e.read().decode('utf-8', 'replace')
+    print(json.dumps({'status': e.code, 'body': body}))
+except Exception as e:
+    print(json.dumps({'status': 0, 'error': str(e)}))
+PY" > "$out" 2>/dev/null
+}
+
+MONEY_PROBE_OK=0
+for MONEY_PATH in '/api/yolo-tool' '/api/hitl/approve'; do
+  if [[ "$MONEY_PATH" == '/api/yolo-tool' ]]; then
+    MONEY_PAYLOAD='{"name":"cin7_get_stock_on_hand"}'
+  else
+    MONEY_PAYLOAD='{"id":"eval-gate-money-probe"}'
+  fi
+  if gate_money_post "$MONEY_PATH" "$MONEY_PAYLOAD" /tmp/gate-money.json; then
+    MONEY_RESULT="$(python3 -c 'import json,sys
+try:
+    d=json.load(open("/tmp/gate-money.json"))
+except Exception:
+    print("parse_fail"); sys.exit(0)
+status=int(d.get("status") or 0)
+if status in (0, 404):
+    print("absent"); sys.exit(0)
+try:
+    body=json.loads(d.get("body") or "{}")
+except Exception:
+    body={}
+err=str(body.get("error") or "")
+if status == 403 and err == "money_confirm_required":
+    print("ok")
+elif status == 401:
+    print("auth")
+else:
+    print("bad:%s:%s" % (status, err or (d.get("body") or "")[:80]))' 2>/dev/null || echo parse_fail)"
+    if [[ "$MONEY_RESULT" == "ok" ]]; then
+      note "money confirm ($MONEY_PATH): OK (403 money_confirm_required)"
+      MONEY_PROBE_OK=1
+    elif [[ "$MONEY_RESULT" == "absent" || "$MONEY_RESULT" == "auth" ]]; then
+      note "money confirm ($MONEY_PATH): SKIP ($MONEY_RESULT)"
+    else
+      note "money confirm ($MONEY_PATH): FAIL ($MONEY_RESULT)"
+      FAIL=1
+    fi
+  else
+    note "money confirm ($MONEY_PATH): SKIP (probe unreachable)"
+  fi
+done
+
+if [[ $MONEY_PROBE_OK -eq 0 ]]; then
+  if is_culture_tenant; then
+    note "money confirm: SKIP (culture tenant — no money routes required)"
+  else
+    # customer-01 / ausmaker should expose at least one money endpoint
+    note "money confirm: FAIL (expected 403 money_confirm_required on ausmaker/customer money routes)"
+    FAIL=1
+  fi
+fi
+
 [[ $FAIL -eq 0 ]] && { echo "  [gate] PASS"; exit 0; } || { echo "  [gate] FAIL"; exit 1; }

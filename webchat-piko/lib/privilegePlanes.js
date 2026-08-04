@@ -39,9 +39,19 @@ function mapRouteToPlane(pathname, method) {
     if (m === 'GET') return 'chat';
     return 'work';
   }
-  if (p.includes('/purchase') || p.includes('/po') || p.includes('weekly-po')
-    || p.includes('yolo-tool') || p.includes('/hitl/approve')) {
-    return 'money';
+  // Money plane: mutating ERP/PO/HITL-approve/yolo-tool only. GET/read stays chat.
+  if (m !== 'GET') {
+    if (
+      p === '/api/yolo-tool'
+      || p === '/api/hitl/approve'
+      || p === '/api/purchase'
+      || p.startsWith('/api/purchase/')
+      || p === '/api/po'
+      || p.startsWith('/api/po/')
+      || p.includes('weekly-po')
+    ) {
+      return 'money';
+    }
   }
   if (p.startsWith('/api/ei/') || p.startsWith('/api/cultures')) {
     if (m === 'GET') return 'chat';

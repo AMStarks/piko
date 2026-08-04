@@ -367,6 +367,15 @@ ACTIONS:
 
   /** iOS → single Python tool registry (`yolo_protocol.execute_tool_yolo`). */
   if (action === 'yolo_tool') {
+    const { gateMoneyHttp } = require('../lib/moneyPlaneGate');
+    if (!gateMoneyHttp(req, res, send, {
+      body,
+      action: 'ios_hub_yolo_tool',
+      pathname: '/api/ios-hub',
+      dataDir: DATA_DIR || process.env.PIKO_DATA_DIR,
+    })) {
+      return true;
+    }
     const toolName = String(body.name || body.tool_name || body.toolName || '').trim();
     if (!toolName) {
       return send(res, 400, JSON.stringify({ error: 'name (tool name) is required' }));
