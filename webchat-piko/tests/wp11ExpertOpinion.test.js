@@ -195,9 +195,10 @@ test('W3: stance file load/save + gatherOpinionMaterial prefers stance', async (
     });
     assert.equal(saved.slug, 'abydos');
     assert.equal(loadPosition('abydos').stance.includes('megalithic'), true);
-    // THREAD_DEFS: "osireion" is aliased on both giza and abydos; score ties prefer giza.
-    assert.equal(topicSlug('Osireion origins'), 'giza');
+    // WP11 hotfix: osireion belongs to abydos only (removed from giza aliases).
+    assert.equal(topicSlug('Osireion origins'), 'abydos');
     assert.equal(topicSlug('Abydos temple and Seti'), 'abydos');
+    assert.equal(topicSlug('Great Pyramid at Giza'), 'giza');
 
     const mat = gatherOpinionMaterial('conclusions on Abydos and the Osireion');
     assert.equal(mat.has_material, true);

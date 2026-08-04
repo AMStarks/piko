@@ -104,13 +104,72 @@ function authorMatch(expected, candidate) {
   return hits >= Math.min(2, eParts.length) || (eParts.length === 1 && hits === 1);
 }
 
+/** Chat confirmations / prioritise-research asks are not book titles. */
+function looksLikeConversationalResearchAsk(goal) {
+  const low = toLowerAsciiish(goal);
+  if (!low) return false;
+  if (includesAny(low, [
+    'yes please', 'prioritise research', 'prioritize research',
+    'please research', 'research the ', 'research of ', 'look into the ',
+    'dig into the ', 'prioritise the ', 'prioritize the ',
+  ])) return true;
+  if (startsWithAny(low, ['yes;', 'yes —', 'yes -', 'yes,', 'yeah,', 'yep,'])) {
+    return includesAny(low, ['research', 'find', 'seek', 'prioritise', 'prioritize']);
+  }
+  return false;
+}
+
+/** Pull a topic phrase out of "…research the/of/on X" style asks. */
+function extractResearchTopicPhrase(goal) {
+  const raw = collapseWhitespace(String(goal || '').trim());
+  const low = toLowerAsciiish(raw);
+  for (const marker of [
+    'prioritise research of ', 'prioritize research of ',
+    'prioritise research on ', 'prioritize research on ',
+    'prioritise research the ', 'prioritize research the ',
+    'please research the ', 'please research ',
+    'research of the ', 'research of ', 'research the ', 'research on the ', 'research on ',
+    'look into the ', 'look into ', 'dig into the ', 'dig into ',
+    'prioritise the ', 'prioritize the ',
+  ]) {
+    const idx = low.indexOf(marker);
+    if (idx < 0) continue;
+    let topic = raw.slice(idx + marker.length).trim();
+    topic = stripTrailingPunct(topic);
+    const topicLow = toLowerAsciiish(topic);
+    for (const cut of [' and ', ' — ', ' - ']) {
+      const i = topicLow.indexOf(cut);
+      if (i > 3) {
+        topic = topic.slice(0, i).trim();
+        break;
+      }
+    }
+    topic = stripTrailingPunct(topic);
+    const tl = toLowerAsciiish(topic);
+    if (tl.startsWith('the ') && topic.length > 6) topic = topic.slice(4).trim();
+    if (topic && topic.length >= 3 && topic.length <= 80) return topic;
+  }
+  return null;
+}
+
 function stripInstructionPreamble(goal) {
   let q = String(goal || '').trim();
   const low = toLowerAsciiish(q);
   // Strip leading please/can you/find/add…to corpus
-  const verbs = ['find ', 'add ', 'get ', 'download ', 'seek ', 'locate ', 'search for '];
+  const verbs = [
+    'find ', 'add ', 'get ', 'download ', 'seek ', 'locate ', 'search for ',
+    'research ', 'prioritise research of ', 'prioritize research of ',
+    'prioritise research ', 'prioritize research ',
+  ];
   let start = 0;
-  if (low.startsWith('please ')) start = 7;
+  // "Yes please; prioritise…" confirmations
+  for (const lead of ['yes please; ', 'yes please, ', 'yes please ', 'yes; ', 'yes, ', 'yeah, ', 'yep, ']) {
+    if (low.startsWith(lead)) {
+      start = lead.length;
+      break;
+    }
+  }
+  if (low.slice(start).startsWith('please ')) start += 7;
   const afterPlease = low.slice(start);
   if (afterPlease.startsWith('can you ')) start += 8;
   else if (afterPlease.startsWith('could you ')) start += 10;
@@ -475,7 +534,7 @@ function parseTitleByAuthor(cleaned) {
  */
 function parseNamedWork(goal) {
   const raw = String(goal || '').trim();
-  const cleaned = stripInstructionPreamble(raw);
+  let cleaned = stripInstructionPreamble(raw);
   const plural = isPluralCorpusAsk(raw);
   let author = null;
   let title = null;
@@ -507,14 +566,27 @@ function parseNamedWork(goal) {
   }
 
   if (!title && !author && cleaned && cleaned.length >= 8 && !plural) {
-    title = stripTrailingPunct(cleaned);
-    if (isGenericDescription(title)) {
-      title = null;
+    // Conversational research asks ("Yes please; prioritise research of the Osireion")
+    // are topic seeks, not singular book titles — do not treat the whole sentence as title.
+    if (looksLikeConversationalResearchAsk(raw) || looksLikeConversationalResearchAsk(cleaned)) {
+      const topicPhrase = extractResearchTopicPhrase(raw) || extractResearchTopicPhrase(cleaned);
+      if (topicPhrase) {
+        // Leave title null so mission-fit does not enforce a fake named-work contract.
+        // seekQuery below uses the topic phrase.
+        cleaned = topicPhrase;
+      } else {
+        title = null;
+      }
     } else {
-      const poss2 = parsePossessiveTitle(title);
-      if (poss2 && !isGenericDescription(poss2.title)) {
-        author = poss2.author;
-        title = poss2.title;
+      title = stripTrailingPunct(cleaned);
+      if (isGenericDescription(title) || looksLikeConversationalResearchAsk(title)) {
+        title = null;
+      } else {
+        const poss2 = parsePossessiveTitle(title);
+        if (poss2 && !isGenericDescription(poss2.title)) {
+          author = poss2.author;
+          title = poss2.title;
+        }
       }
     }
   }
@@ -522,12 +594,16 @@ function parseNamedWork(goal) {
   const titleLow = toLowerAsciiish(title || '');
   const isSingularTitle = !plural && !!title && title.length >= 8
     && !includesAny(` ${titleLow} `, [' all ', ' every '])
-    && !isGenericDescription(title);
+    && !isGenericDescription(title)
+    && !looksLikeConversationalResearchAsk(title);
   const isAuthorWorks = !isSingularTitle && !!author;
   const topic = extractTopic(raw);
 
   let seekQuery = cleaned || raw;
-  if (isSingularTitle) {
+  const topicPhrase = extractResearchTopicPhrase(raw);
+  if (!isSingularTitle && topicPhrase) {
+    seekQuery = `${topicPhrase} PDF`;
+  } else if (isSingularTitle) {
     let bare = title;
     for (const q of ['"', '\u201c', '\u201d']) bare = replaceAllLiteral(bare, q, '');
     if (endsWithIgnoreCase(bare, ' PDF')) bare = bare.slice(0, -4).trim();
@@ -540,7 +616,7 @@ function parseNamedWork(goal) {
     seekQuery
     && !includesAny(` ${toLowerAsciiish(seekQuery)} `, [' pdf '])
     && !toLowerAsciiish(seekQuery).endsWith(' pdf')
-    && includesAny(toLowerAsciiish(raw), ['book', 'volume', 'literature', 'text'])
+    && includesAny(toLowerAsciiish(raw), ['book', 'volume', 'literature', 'text', 'research'])
   ) {
     seekQuery = `${seekQuery} PDF`;
   }
@@ -573,6 +649,8 @@ const {
 
 module.exports = {
   parseNamedWork,
+  looksLikeConversationalResearchAsk,
+  extractResearchTopicPhrase,
   focusedSeekQuery,
   titleMatchScore,
   authorMatch,

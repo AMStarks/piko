@@ -274,24 +274,65 @@ async function runStanceSynthesis(opts = {}) {
 }
 
 /**
+ * Expand query tokens so "Osireion" also retrieves Abydos / Osiris-temple notes.
+ */
+function expandOpinionQuery(query) {
+  const q = String(query || '');
+  const low = q.toLowerCase();
+  const extras = [];
+  if (low.includes('osireion') || low.includes('oserion')) {
+    extras.push('Abydos', 'Osiris temple', 'Temenos of Osiris', 'Petrie Abydos');
+  }
+  if (low.includes('sphinx') && low.includes('erosion')) {
+    extras.push('Giza', 'Schoch', 'West');
+  }
+  return extras.length ? `${q}\n${extras.join(' ')}` : q;
+}
+
+/**
  * Topic-matched corpus material for opinion prompts (stance first, then notes).
  */
 function gatherOpinionMaterial(query, opts = {}) {
   const top = opts.top || 6;
-  const position = findPositionForQuery(query);
+  const thread = matchThreadId(query);
+  // Prefer the matched thread's stance — never a sibling thread that shared a bad alias.
+  let position = null;
+  if (thread) {
+    position = loadPosition(thread);
+  }
+  if (!position) {
+    position = findPositionForQuery(query);
+    // If findPosition fell on a different thread than matchThreadId, discard it.
+    if (position && thread && position.slug && position.slug !== thread) {
+      position = loadPosition(thread) || null;
+    }
+  }
+
+  const expanded = expandOpinionQuery(query);
   let notes = [];
   try {
-    notes = notesForQuery(query, { top, limit: 40 });
+    notes = notesForQuery(expanded, { top: top + 4, limit: 80 });
   } catch (_) {
     notes = [];
   }
-  // If thread matched but notesForQuery thin, pull thread notes
-  const thread = matchThreadId(query);
-  if (thread && notes.length < 2) {
+  // Thread notes are authoritative when we know the thread — put them first.
+  if (thread) {
     try {
-      notes = notesForThread(thread, { limit: 40 }).slice(0, top);
-    } catch (_) { /* keep */ }
+      const tnotes = notesForThread(thread, { limit: 40 });
+      const seen = new Set(tnotes.map((n) => n.harvest_id));
+      const merged = tnotes.slice();
+      for (const n of notes) {
+        if (!seen.has(n.harvest_id)) {
+          seen.add(n.harvest_id);
+          merged.push(n);
+        }
+      }
+      notes = merged.slice(0, top);
+    } catch (_) { /* keep notesForQuery */ }
+  } else {
+    notes = notes.slice(0, top);
   }
+
   const parts = [];
   if (position) {
     parts.push(formatPositionBlock(position));

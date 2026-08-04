@@ -923,8 +923,8 @@ const TOOLS = {
     input_schema: { thread: 'string', rebuild: 'boolean' },
     async run(args = {}) {
       const d = require('./eiThreadDossiers');
-      const thread = String(args.thread || '').trim().toLowerCase();
-      if (!thread) {
+      const rawThread = String(args.thread || '').trim().toLowerCase();
+      if (!rawThread) {
         return {
           ok: false,
           tool: 'thread_dossier',
@@ -932,6 +932,10 @@ const TOOLS = {
           result: { error: 'thread_required' },
         };
       }
+      // Resolve aliases ("osireion" → abydos) before load/build.
+      const thread = (d.getThreadDef(rawThread) && rawThread)
+        || d.matchThreadId(rawThread)
+        || rawThread;
       let dossier = d.loadDossier(thread);
       if (args.rebuild || !dossier) {
         const built = await d.buildDossier(thread);

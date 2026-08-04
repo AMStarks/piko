@@ -14,12 +14,16 @@ const THREAD_DEFS = [
   {
     id: 'giza',
     label: 'Giza / precision engineering',
-    aliases: ['giza', 'gizeh', 'great pyramid', 'khufu', 'sphinx', 'oserion', 'osireion'],
+    // NOTE: osireion/oserion belong to abydos — never alias them here (WP11 hotfix).
+    aliases: ['giza', 'gizeh', 'great pyramid', 'khufu', 'sphinx'],
   },
   {
     id: 'abydos',
     label: 'Abydos / Oserion',
-    aliases: ['abydos', 'oserion', 'osireion', 'umm el-qaab', 'umm el qaab', 'seti'],
+    aliases: [
+      'abydos', 'oserion', 'osireion', 'osiris temple', 'temenos of osiris',
+      'umm el-qaab', 'umm el qaab', 'seti',
+    ],
   },
   {
     id: 'gobekli-tepe',

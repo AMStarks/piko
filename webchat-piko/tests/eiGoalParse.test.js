@@ -172,6 +172,16 @@ test('parseNamedWork extracts topic tokens for author+topic asks', () => {
   assert.ok(n.topic.some((t) => /sphinx/i.test(t)));
 });
 
+test('parseNamedWork does not treat prioritise-research chat as a book title', () => {
+  const { parseNamedWork, extractResearchTopicPhrase } = require('../lib/eiGoalParse');
+  const n = parseNamedWork('Yes please; prioritise research of the Osireion.');
+  assert.equal(n.isSingularTitle, false);
+  assert.equal(n.title, null);
+  assert.equal(extractResearchTopicPhrase('Yes please; prioritise research of the Osireion.'), 'Osireion');
+  assert.ok(String(n.seekQuery).toLowerCase().includes('osireion'));
+  assert.ok(!String(n.seekQuery).toLowerCase().includes('yes please'));
+});
+
 test('looksLikeWorkOrder detects find/add asks and exempts inventory questions', () => {
   const { looksLikeWorkOrder } = require('../lib/eiGoalParse');
   assert.equal(looksLikeWorkOrder("Please find and add to Corpus John Anthony West's Serpent in the Sky."), true);
