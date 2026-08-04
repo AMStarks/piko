@@ -7538,110 +7538,18 @@ async function handleRequest(req, res) {
     if (denied) return send(res, denied.status, denied.body);
   }
 
-  if (req.method === 'POST' && pathname === '/api/admin/login') {
-    if (!adminAuth.isEnabled()) {
-      return send(res, 503, JSON.stringify({ ok: false, error: 'Admin login not configured. Set PIKO_ADMIN_PASSWORD on the server.' }));
-    }
-    try {
-      const body = JSON.parse(await readBody(req) || '{}');
-      const username = String(body.username || '').trim();
-      const password = String(body.password || '');
-      const account = adminAuth.authenticate(DATA_DIR, username, password);
-      if (!account) {
-        return send(res, 401, JSON.stringify({ ok: false, error: 'Invalid username or password' }));
-      }
-      const token = adminAuth.createSession(DATA_DIR, account.username, account.role);
-      adminAuth.setSessionCookie(res, req, token);
-      const next = String(body.next || '').trim();
-      let redirect = next && next.startsWith('/') && !next.startsWith('//') ? next : (account.role === 'client' ? '/ios-dashboard' : '/admin');
-      // A client whose bookmark points at operator tooling lands on their dashboard instead.
-      if (account.role === 'client' && adminAuth.isOperatorOnlyPagePath(redirect)) redirect = '/ios-dashboard';
-      return send(res, 200, JSON.stringify({ ok: true, user: account.username, role: account.role, redirect }));
-    } catch (e) {
-      return send(res, 400, JSON.stringify({ ok: false, error: e.message || 'Invalid request' }));
-    }
-  }
-
-  // --- Client user management (operator only) -----------------------------
-  if (pathname === '/api/admin/users' || pathname.startsWith('/api/admin/users/')) {
-    const session = adminAuth.getSessionFromRequest(req, DATA_DIR);
-    if (!session || session.role !== 'operator') {
-      return send(res, session ? 403 : 401, JSON.stringify({ ok: false, error: session ? 'Operator access required' : 'Unauthorized' }));
-    }
-    try {
-      if (req.method === 'GET' && pathname === '/api/admin/users') {
-        return send(res, 200, JSON.stringify({ ok: true, users: adminAuth.listUsers(DATA_DIR) }));
-      }
-      if (req.method === 'POST' && pathname === '/api/admin/users') {
-        const body = JSON.parse(await readBody(req) || '{}');
-        const password = String(body.password || '') || require('crypto').randomBytes(12).toString('base64url');
-        const user = adminAuth.createUser(DATA_DIR, {
-          username: body.username,
-          password,
-          createdBy: session.username,
-        });
-        // Password is returned exactly once so the operator can hand it over.
-        return send(res, 200, JSON.stringify({ ok: true, user, password }));
-      }
-      const mReset = matchPath(pathname, '/api/admin/users/:username/reset');
-      const mUser = matchPath(pathname, '/api/admin/users/:username');
-      if (mReset && req.method === 'POST') {
-        const password = require('crypto').randomBytes(12).toString('base64url');
-        if (!adminAuth.resetUserPassword(DATA_DIR, decodeURIComponent(mReset.username), password)) {
-          return send(res, 404, JSON.stringify({ ok: false, error: 'No such user' }));
-        }
-        return send(res, 200, JSON.stringify({ ok: true, password }));
-      }
-      if (mUser && req.method === 'DELETE') {
-        if (!adminAuth.deleteUser(DATA_DIR, decodeURIComponent(mUser.username))) {
-          return send(res, 404, JSON.stringify({ ok: false, error: 'No such user' }));
-        }
-        return send(res, 200, JSON.stringify({ ok: true }));
-      }
-      return send(res, 405, JSON.stringify({ ok: false, error: 'Method not allowed' }));
-    } catch (e) {
-      return send(res, 400, JSON.stringify({ ok: false, error: e.message || 'Invalid request' }));
-    }
-  }
-
-  if (req.method === 'POST' && pathname === '/api/admin/logout') {
-    const session = adminAuth.getSessionFromRequest(req, DATA_DIR);
-    if (session) adminAuth.destroySession(DATA_DIR, session.token);
-    adminAuth.clearSessionCookie(res, req);
-    return send(res, 200, JSON.stringify({ ok: true }));
-  }
-
-  if (req.method === 'GET' && pathname === '/api/admin/me') {
-    const session = adminAuth.getSessionFromRequest(req, DATA_DIR);
-    const role = session ? session.role : null;
-    let displayName = '';
-    try {
-      displayName = require('./lib/siteManifest').loadSiteManifest(__dirname).display_name || '';
-    } catch (_) { /* ignore */ }
-    // Operator tooling metadata stays operator-only.
-    let clients = [];
-    let dashboards = [];
-    if (role === 'operator') {
-      dashboards = adminAuth.listDashboards();
-      try {
-        const { buildCommandCentreClients } = require('./lib/commandCentre');
-        const { loadSiteManifest } = require('./lib/siteManifest');
-        const site = loadSiteManifest(__dirname);
-        clients = buildCommandCentreClients(__dirname, {
-          currentTenantId: site.tenant_id || process.env.PIKO_TENANT_ID,
-        }).clients || [];
-      } catch (_) { /* ignore */ }
-    }
-    return send(res, 200, JSON.stringify({
-      ok: true,
-      authEnabled: adminAuth.isEnabled(),
-      authenticated: !!session,
-      user: session ? session.username : null,
-      role,
-      display_name: displayName,
-      dashboards,
-      clients,
-    }));
+  // —— Admin auth/session (extracted: routes/admin.js) ——
+  {
+    const { tryHandleAdmin } = require('./routes/admin');
+    if (await tryHandleAdmin(req, res, {
+      pathname,
+      send,
+      readBody,
+      adminAuth,
+      dataDir: DATA_DIR,
+      rootDir: __dirname,
+      matchPath,
+    })) return;
   }
 
   if (req.method === 'GET' && pathname === '/api/exports/reorder-csv') {
@@ -8705,41 +8613,21 @@ async function handleRequest(req, res) {
     return;
   }
 
-  if (req.method === 'GET' && pathname === '/api/metrics') {
-    const uptimeMs = Date.now() - startTime;
-    return send(res, 200, JSON.stringify({
-      requests: metrics.requests,
-      errors: metrics.errors,
-      chat: metrics.chat,
-      commands: metrics.commands,
-      conversation: metrics.conversation,
-      uptimeMs,
-      uptime: `${Math.floor(uptimeMs / 60000)}m`,
-    }));
-  }
-
-  // P2.4b: structured ops metrics (admin-gated via /api/ops prefix).
-  if (req.method === 'GET' && pathname === '/api/ops/metrics') {
-    try {
-      const { snapshot } = require('./lib/opsMetrics');
-      return send(res, 200, JSON.stringify(snapshot()));
-    } catch (e) {
-      return send(res, 500, JSON.stringify({ ok: false, error: e.message || String(e) }));
-    }
+  // —— Ops metrics/logs (extracted: routes/ops.js) ——
+  if (req.method === 'GET' && (pathname === '/api/metrics' || pathname === '/api/ops/metrics' || pathname === '/api/logs')) {
+    const { tryHandleOps } = require('./routes/ops');
+    if (await tryHandleOps(req, res, {
+      pathname,
+      send,
+      startTime,
+      metrics,
+      parseUrl,
+      logPath: LOG_PATH,
+      fs,
+    })) return;
   }
 
   if (handleConversationQualityRoute(req, res, pathname, metrics, send)) return;
-
-  if (req.method === 'GET' && pathname === '/api/logs') {
-    const { query } = parseUrl(req.url);
-    const tail = Math.min(100, Math.max(1, parseInt(query && query.tail, 10) || 20));
-    let lines = [];
-    try {
-      const raw = fs.readFileSync(LOG_PATH, 'utf8');
-      lines = raw.split('\n').filter(Boolean).slice(-tail);
-    } catch (_) {}
-    return send(res, 200, JSON.stringify({ logs: lines }));
-  }
 
   // —— Webhooks (extracted: routes/webhooks.js) ——
   {
@@ -10467,60 +10355,22 @@ async function handleRequest(req, res) {
     return send(res, 200, JSON.stringify({ skills }));
   }
 
-  if (req.method === 'GET' && pathname === '/api/health') {
-    if (PIKO_HEALTH_API_KEY && PIKO_HEALTH_API_KEY.trim()) {
-      const authHeader = (req.headers['authorization'] || '').trim();
-      const apiKeyHeader = (req.headers['x-api-key'] || '').trim();
-      const bearer = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
-      const key = bearer || apiKeyHeader;
-      if (key !== PIKO_HEALTH_API_KEY.trim()) {
-        return send(res, 401, JSON.stringify({ error: 'Unauthorized', message: 'Set Authorization: Bearer <key> or x-api-key' }));
-      }
-    }
-    const ok = { ok: true, llm: MODEL_PRIMARY, model: OLLAMA_MODEL };
-    try {
-      // Health must be fast even if LLM is slow/hung. Probe the CHAT lane
-      // explicitly: without a request context this defaults to background
-      // priority and probes the worker lane instead, reporting the wrong LLM.
-      await Promise.race([
-        ai('hi', { max_tokens: 2, priority: 'user' }),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('llm_probe_timeout')), OLLAMA_HEALTH_TIMEOUT_MS)),
-      ]);
-      ollamaSelfHealState.consecutiveFailures = 0;
-    } catch (_) {
-      ok.ok = false;
-      ok.llm = 'unreachable';
-      ollamaSelfHealState.consecutiveFailures = Math.min(1000, (ollamaSelfHealState.consecutiveFailures || 0) + 1);
-      maybeTriggerOllamaSelfHeal('health_probe_unreachable');
-    }
-    return send(res, 200, JSON.stringify(ok));
-  }
-
-  if (req.method === 'GET' && pathname === '/api/site-context') {
-    try {
-      const { buildSiteContext } = require('./lib/siteContext');
-      const ctx = await buildSiteContext({
-        rootDir: __dirname,
-        legionAdapterBase: LEGION_ADAPTER_API_BASE,
-      });
-      return send(res, 200, JSON.stringify(ctx));
-    } catch (e) {
-      return send(res, 500, JSON.stringify({ ok: false, error: e.message || 'site context failed' }));
-    }
-  }
-
-  if (req.method === 'GET' && pathname === '/api/command-centre/clients') {
-    try {
-      const { buildCommandCentreClients } = require('./lib/commandCentre');
-      const { loadSiteManifest } = require('./lib/siteManifest');
-      const site = loadSiteManifest(__dirname);
-      const out = buildCommandCentreClients(__dirname, {
-        currentTenantId: site.tenant_id || process.env.PIKO_TENANT_ID,
-      });
-      return send(res, 200, JSON.stringify(out));
-    } catch (e) {
-      return send(res, 500, JSON.stringify({ ok: false, error: e.message || 'command centre failed' }));
-    }
+  // —— Health / site-context / command-centre (extracted: routes/ops.js) ——
+  if (req.method === 'GET' && (pathname === '/api/health' || pathname === '/api/site-context' || pathname === '/api/command-centre/clients')) {
+    const { tryHandleOps } = require('./routes/ops');
+    if (await tryHandleOps(req, res, {
+      pathname,
+      send,
+      healthApiKey: PIKO_HEALTH_API_KEY,
+      modelPrimary: MODEL_PRIMARY,
+      ollamaModel: OLLAMA_MODEL,
+      ai,
+      healthTimeoutMs: OLLAMA_HEALTH_TIMEOUT_MS,
+      ollamaSelfHealState,
+      maybeTriggerOllamaSelfHeal,
+      rootDir: __dirname,
+      legionAdapterBase: LEGION_ADAPTER_API_BASE,
+    })) return;
   }
 
   // —— AusMaker telemetry (read-only) ——
