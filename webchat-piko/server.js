@@ -4517,6 +4517,20 @@ async function handleApiChat(req, res) {
 
   // —— Culture: corpus Flag review rules via chat (confirm before apply) ——
   if (TENANT_BG.isCulture) {
+    // P2.3: when Legate owns chat routing, do not let Flag-rules LLM topic
+    // matching steal campaign_control / schedule / identity asks. Only enter
+    // this path on explicit flag-policy language (or pending confirmations).
+    let legateOwnsRouting = false;
+    try {
+      legateOwnsRouting = require('./lib/legateChat').isLegateChatEnabled(__dirname);
+    } catch (_) { legateOwnsRouting = false; }
+    const msgLowerForFlags = toLowerAsciiish(message);
+    const explicitFlagPolicy = includesAny(msgLowerForFlags, [
+      'flag rule', 'flag rules', 'flag keep', 'flag drop',
+      'always keep', 'keep/drop', 'corpus rule', 'corpus rules',
+      'review rule', 'review rules',
+    ]);
+
     const { tryConfirm: tryCorpusRulesConfirm } = require('./lib/corpusReviewRulesMutatePending');
     const corpusRulesConfirm = await tryCorpusRulesConfirm(key, trimmedMsg);
     if (corpusRulesConfirm) {
@@ -4540,6 +4554,9 @@ async function handleApiChat(req, res) {
     } = require('./lib/corpusReviewRulesMutate');
     const { setPending: setCorpusRulesPending } = require('./lib/corpusReviewRulesMutatePending');
     let skipCorpusRules = false;
+    if (legateOwnsRouting && !explicitFlagPolicy) {
+      skipCorpusRules = true;
+    }
     try {
       const { classifyEiFrontDoor } = require('./lib/eiIntentGate');
       const door = await classifyEiFrontDoor(message, {});
