@@ -3324,43 +3324,21 @@ async function handleRequest(req, res) {
     })) return;
   }
 
-  if (req.method === 'GET' && pathname === '/api/metrics') {
-    try {
-      const { getMetrics } = require('./lib/metrics');
-      const metrics = getMetrics();
-      return send(res, 200, JSON.stringify(metrics));
-    } catch (e) {
-      return send(res, 500, JSON.stringify({ error: e.message }));
-    }
+  // —— Misc: models/advice/intents/chart/piko-state (extracted: routes/misc.js) ——
+  {
+    const { tryHandleMisc } = require('./routes/misc');
+    if (await tryHandleMisc(req, res, {
+      pathname,
+      send,
+      parseUrl,
+      loadRegistry,
+      getCurrentModelOverride,
+      ollamaModel: OLLAMA_MODEL,
+      pikoStateManifestPath: PIKO_STATE_MANIFEST_PATH,
+      loadIntents,
+      collapseWhitespace,
+    })) return;
   }
-  if (req.method === 'POST' && pathname === '/api/metrics/advice-followed') {
-    try {
-      const { recordAdviceFollowed } = require('./lib/metrics');
-      recordAdviceFollowed();
-      return send(res, 200, JSON.stringify({ ok: true }));
-    } catch (e) {
-      return send(res, 500, JSON.stringify({ error: e.message }));
-    }
-  }
-  if (req.method === 'GET' && pathname === '/api/models') {
-    const registry = loadRegistry();
-    return send(res, 200, JSON.stringify({
-      primary: process.env.MODEL_PRIMARY || OLLAMA_MODEL,
-      currentOverride: getCurrentModelOverride(),
-      registry: {
-        updatedAt: registry.updatedAt,
-        stages: registry.stages,
-        lastStable: registry.lastStable,
-      },
-      available: [
-        'ollama/llama3.1:latest',
-        'ollama/llama3.2',
-        'anthropic/claude-3-5-sonnet-20241022',
-        'openai/gpt-4o-mini',
-      ],
-    }));
-  }
-
 
   // —— Widget / iOS dashboard (extracted: routes/dashboard.js) ——
   {
@@ -3379,63 +3357,6 @@ async function handleRequest(req, res) {
       toIosDashboardPayload,
       log,
     })) return;
-  }
-
-  if (req.method === 'GET' && (pathname === '/piko_state.json' || pathname === '/api/piko-state.json')) {
-    try {
-      if (!fs.existsSync(PIKO_STATE_MANIFEST_PATH)) {
-        return send(res, 404, JSON.stringify({
-          ok: false,
-          error: 'Manifest not found',
-          path: PIKO_STATE_MANIFEST_PATH,
-          hint: 'Run piko_core.generate_app_manifest() on the host that owns the Legion DB, or set PIKO_STATE_MANIFEST_PATH.',
-        }));
-      }
-      const raw = fs.readFileSync(PIKO_STATE_MANIFEST_PATH, 'utf8');
-      return send(res, 200, raw, 'application/json; charset=utf-8');
-    } catch (e) {
-      return send(res, 500, JSON.stringify({ ok: false, error: e.message || 'read failed' }));
-    }
-  }
-
-  // —— Phase 4: CLI /api/intents (read-only for piko intents) ——
-  if (req.method === 'GET' && pathname === '/api/intents') {
-    const intents = loadIntents();
-    return send(res, 200, JSON.stringify({ intents }));
-  }
-
-  // —— EA Phase 4: alerts API (last 24h) ——
-
-  // —— Phase 3: Control UI dashboard ——
-
-  // —— Phase 3: Chart SVG ——
-  if (req.method === 'GET' && pathname === '/api/chart') {
-    const { query } = parseUrl(req.url);
-    const type = (query && query.type) || 'bar';
-    const dataStr = (query && query.data) || '';
-    const values = dataStr.split(',').flatMap((p) => p.split(';')).flatMap((p) => collapseWhitespace(p).split(' ')).map((s) => parseFloat(s.trim())).filter((n) => !isNaN(n));
-    if (values.length === 0) {
-      res.writeHead(400, { 'Content-Type': 'text/plain' });
-      res.end('Usage: /api/chart?type=bar&data=10,20,30');
-      return;
-    }
-    const w = 400;
-    const h = 200;
-    const pad = 40;
-    const max = Math.max(...values, 1);
-    let svg = `<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">`;
-    svg += '<rect width="100%" height="100%" fill="#25262a"/>';
-    const barW = (w - pad * 2) / values.length - 4;
-    values.forEach((v, i) => {
-      const x = pad + i * ((w - pad * 2) / values.length) + 2;
-      const barH = Math.max(2, ((v / max) * (h - pad * 2)));
-      const y = h - pad - barH;
-      svg += `<rect x="${x}" y="${y}" width="${barW}" height="${barH}" fill="#7c9cbf" rx="2"/>`;
-    });
-    svg += '</svg>';
-    res.writeHead(200, { 'Content-Type': 'image/svg+xml' });
-    res.end(svg);
-    return;
   }
 
   // —— Static HTML / MIME fall-through (extracted: routes/static.js) ——
