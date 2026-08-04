@@ -52,7 +52,8 @@ restart_service() {
 
 echo "-- restart $T_SERVICE"
 restart_service
-sleep 4
+# Settle: agent-worker reap + first campaign tick + Ollama warm can exceed 4s.
+sleep 12
 
 echo "-- health check"
 if ssh "$T_HOST" "curl -sf -m 20 '$T_HEALTH_URL' >/dev/null" && "$SCRIPT_DIR/eval-gate.sh" "$TENANT"; then
