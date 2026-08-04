@@ -2933,22 +2933,6 @@ const handleApiChat = createHandleApiChat({
 });
 
 
-function serveFile(filePath, contentType) {
-  return new Promise((resolve, reject) => {
-    fs.readFile(filePath, (err, data) => {
-      if (err) return reject(err);
-      resolve({ data, contentType });
-    });
-  });
-}
-
-const MIME = {
-  '.html': 'text/html',
-  '.css': 'text/css',
-  '.js': 'application/javascript',
-  '.ico': 'image/x-icon',
-};
-
 async function handleRequest(req, res) {
   req.requestId = 'req_' + Date.now() + '_' + Math.random().toString(36).slice(2, 9);
   const { pathname, query } = parseUrl(req.url);
@@ -4171,47 +4155,14 @@ async function handleRequest(req, res) {
     return;
   }
 
-  if (req.method !== 'GET') {
-    return send(res, 405, 'Method Not Allowed', 'text/plain');
-  }
-
-  let file = pathname === '/' ? '/index.html' : pathname;
-  if (pathname === '/command-centre' || pathname === '/command-centre/') file = '/command-centre.html';
-  if (pathname === '/admin' || pathname === '/admin/') file = '/admin.html';
-  if (pathname === '/admin/login' || pathname === '/admin/login/') file = '/admin-login.html';
-  if (pathname === '/ios-dashboard' || pathname === '/ios-dashboard/') file = '/piko-ios-dashboard.html';
-  if (pathname === '/iphone-dashboard' || pathname === '/iphone-dashboard/') file = '/piko-ios-dashboard.html';
-  if (pathname === '/corpus' || pathname === '/corpus/' || pathname === '/culture-corpus' || pathname === '/culture-corpus/') {
-    file = '/ei-corpus.html';
-  }
-  if (pathname === '/ei-eval' || pathname === '/ei-eval/') {
-    file = '/ei-eval.html';
-  }
-  if (pathname === '/hq-dashboard' || pathname === '/hq-dashboard/') file = '/hq-dashboard.html';
-  if (pathname === '/dashboard' || pathname === '/dashboard/') file = '/piko-dashboard.html';
-  if (pathname === '/piko-dashboard' || pathname === '/piko-dashboard/') file = '/piko-dashboard.html';
-  if (pathname === '/control' || pathname === '/control/') file = '/control.html';
-  if (pathname === '/control-moltbook' || pathname === '/control-moltbook/') file = '/control-moltbook.html';
-  if (pathname === '/control-prompts' || pathname === '/control-prompts/') file = '/control-prompts.html';
-  if (pathname === '/control-learning' || pathname === '/control-learning/') file = '/control-learning.html';
-  if (pathname === '/control-mind' || pathname === '/control-mind/') file = '/control-mind.html';
-  if (pathname === '/control-wisdom' || pathname === '/control-wisdom/') file = '/control-wisdom.html';
-  if (pathname === '/control-wisdom-metrics' || pathname === '/control-wisdom-metrics/') file = '/control-wisdom-metrics.html';
-  if (pathname === '/control-channels' || pathname === '/control-channels/') file = '/control-channels.html';
-  if (pathname === '/control-integrations' || pathname === '/control-integrations/') file = '/control-integrations.html';
-  if (pathname === '/control-accounts' || pathname === '/control-accounts/') file = '/control-accounts.html';
-  const filePath = path.join(PUBLIC_DIR, file);
-  if (filePath.indexOf(PUBLIC_DIR) !== 0) {
-    return send(res, 403, 'Forbidden', 'text/plain');
-  }
-  const ext = path.extname(filePath);
-  const contentType = MIME[ext] || 'application/octet-stream';
-  try {
-    const { data } = await serveFile(filePath, contentType);
-    send(res, 200, data, contentType);
-  } catch (err) {
-    if (err.code === 'ENOENT') return send(res, 404, 'Not Found', 'text/plain');
-    send(res, 500, 'Internal Server Error', 'text/plain');
+  // —— Static HTML / MIME fall-through (extracted: routes/static.js) ——
+  {
+    const { tryHandleStatic } = require('./routes/static');
+    if (await tryHandleStatic(req, res, {
+      pathname,
+      send,
+      publicDir: PUBLIC_DIR,
+    })) return;
   }
 }
 
