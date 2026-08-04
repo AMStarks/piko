@@ -1,0 +1,1218 @@
+{
+  "generated_from": "server.js",
+  "generated_at": "2026-08-04",
+  "note": "Frozen baseline for Phase 3 decomposition. Update deliberately when adding/removing routes.",
+  "routes": [
+    {
+      "method": "POST",
+      "path": "/api/admin/login",
+      "match": "exact",
+      "auth": "admin_auth",
+      "group": "admin"
+    },
+    {
+      "method": "GET",
+      "path": "/api/admin/users",
+      "match": "exact",
+      "auth": "admin_auth",
+      "group": "admin"
+    },
+    {
+      "method": "POST",
+      "path": "/api/admin/users",
+      "match": "exact",
+      "auth": "admin_auth",
+      "group": "admin"
+    },
+    {
+      "method": "POST",
+      "path": "/api/admin/logout",
+      "match": "exact",
+      "auth": "admin_auth",
+      "group": "admin"
+    },
+    {
+      "method": "GET",
+      "path": "/api/admin/me",
+      "match": "exact",
+      "auth": "admin_auth",
+      "group": "admin"
+    },
+    {
+      "method": "GET",
+      "path": "/api/exports/reorder-csv",
+      "match": "exact",
+      "auth": "api_auth",
+      "group": "other"
+    },
+    {
+      "method": "POST",
+      "path": "/api/chat",
+      "match": "exact",
+      "auth": "api_auth",
+      "group": "chat"
+    },
+    {
+      "method": "POST",
+      "path": "/api/chat/history",
+      "match": "exact",
+      "auth": "api_auth",
+      "group": "chat"
+    },
+    {
+      "method": "GET",
+      "path": "/api/chat/history",
+      "match": "exact",
+      "auth": "api_auth",
+      "group": "chat"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/chat/history",
+      "match": "exact",
+      "auth": "api_auth",
+      "group": "chat"
+    },
+    {
+      "method": "POST",
+      "path": "/api/chat/inject",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "chat"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ios-hub",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "other"
+    },
+    {
+      "method": "POST",
+      "path": "/api/yolo-tool",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "other"
+    },
+    {
+      "method": "GET",
+      "path": "/api/yolo-tools/registry",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "other"
+    },
+    {
+      "method": "GET",
+      "path": "/api/notifications/recent",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "other"
+    },
+    {
+      "method": "GET",
+      "path": "/api/agents",
+      "match": "exact",
+      "auth": "open",
+      "group": "agents"
+    },
+    {
+      "method": "GET",
+      "path": "/api/agents/runs",
+      "match": "exact",
+      "auth": "open",
+      "group": "agents"
+    },
+    {
+      "method": "POST",
+      "path": "/api/agents/run",
+      "match": "exact",
+      "auth": "open",
+      "group": "agents"
+    },
+    {
+      "method": "GET",
+      "path": "/api/agents/missions",
+      "match": "exact",
+      "auth": "open",
+      "group": "agents"
+    },
+    {
+      "method": "GET",
+      "path": "/api/agents/missions/",
+      "match": "prefix",
+      "auth": "open",
+      "group": "agents"
+    },
+    {
+      "method": "POST",
+      "path": "/api/agents/missions",
+      "match": "exact",
+      "auth": "open",
+      "group": "agents"
+    },
+    {
+      "method": "GET",
+      "path": "/api/agents/jobs",
+      "match": "exact",
+      "auth": "open",
+      "group": "agents"
+    },
+    {
+      "method": "GET",
+      "path": "/api/agents/status",
+      "match": "exact",
+      "auth": "open",
+      "group": "agents"
+    },
+    {
+      "method": "GET",
+      "path": "/api/cultures/stats",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "cultures"
+    },
+    {
+      "method": "GET",
+      "path": "/api/cultures/items",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "cultures"
+    },
+    {
+      "method": "POST",
+      "path": "/api/cultures/review/run",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "cultures"
+    },
+    {
+      "method": "GET",
+      "path": "/api/cultures/flags",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "cultures"
+    },
+    {
+      "method": "GET",
+      "path": "/api/cultures/unsure",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "cultures"
+    },
+    {
+      "method": "GET",
+      "path": "/api/cultures/campaign",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "cultures"
+    },
+    {
+      "method": "GET",
+      "path": "/api/cultures/articles",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "cultures"
+    },
+    {
+      "method": "POST",
+      "path": "/api/cultures/articles",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "cultures"
+    },
+    {
+      "method": "GET",
+      "path": "/api/cultures/dossiers",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "cultures"
+    },
+    {
+      "method": "GET",
+      "path": "/api/llm-usage",
+      "match": "exact",
+      "auth": "api_auth",
+      "group": "other"
+    },
+    {
+      "method": "POST",
+      "path": "/api/cultures/campaign",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "cultures"
+    },
+    {
+      "method": "POST",
+      "path": "/api/cultures/ingest-url",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "cultures"
+    },
+    {
+      "method": "GET",
+      "path": "/api/cultures/review/rules",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "cultures"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/cultures/review/rules",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "cultures"
+    },
+    {
+      "method": "GET",
+      "path": "/api/agents/jobs/",
+      "match": "prefix",
+      "auth": "open",
+      "group": "agents"
+    },
+    {
+      "method": "POST",
+      "path": "/api/agents/jobs",
+      "match": "exact",
+      "auth": "open",
+      "group": "agents"
+    },
+    {
+      "method": "GET",
+      "path": "/api/ei/text-scout/latest",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "cultures"
+    },
+    {
+      "method": "GET",
+      "path": "/api/ei/text-scout/reports",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "cultures"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ei/text-scout/run",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "cultures"
+    },
+    {
+      "method": "GET",
+      "path": "/api/ei/eval/latest",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "cultures"
+    },
+    {
+      "method": "GET",
+      "path": "/api/ei/eval/reports",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "cultures"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ei/eval/run",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "cultures"
+    },
+    {
+      "method": "GET",
+      "path": "/api/ei/engineering/tasks",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "cultures"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tool-audit/recent",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "other"
+    },
+    {
+      "method": "GET",
+      "path": "/api/hitl/pending",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "other"
+    },
+    {
+      "method": "POST",
+      "path": "/api/hitl/approve",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "other"
+    },
+    {
+      "method": "POST",
+      "path": "/api/hitl/reject",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "other"
+    },
+    {
+      "method": "POST",
+      "path": "/api/piko/upload",
+      "match": "exact",
+      "auth": "api_auth",
+      "group": "other"
+    },
+    {
+      "method": "GET",
+      "path": "/api/metrics",
+      "match": "exact",
+      "auth": "api_auth",
+      "group": "ops"
+    },
+    {
+      "method": "GET",
+      "path": "/api/ops/metrics",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "ops"
+    },
+    {
+      "method": "GET",
+      "path": "/api/logs",
+      "match": "exact",
+      "auth": "api_auth",
+      "group": "ops"
+    },
+    {
+      "method": "POST",
+      "path": "/api/webhooks/events",
+      "match": "exact",
+      "auth": "webhook",
+      "group": "webhooks"
+    },
+    {
+      "method": "POST",
+      "path": "/api/webhooks/ausmaker",
+      "match": "exact",
+      "auth": "webhook",
+      "group": "webhooks"
+    },
+    {
+      "method": "POST",
+      "path": "/webhook/cin7",
+      "match": "exact",
+      "auth": "webhook",
+      "group": "webhooks"
+    },
+    {
+      "method": "POST",
+      "path": "/webhook/inventory-alert",
+      "match": "exact",
+      "auth": "webhook",
+      "group": "webhooks"
+    },
+    {
+      "method": "POST",
+      "path": "/api/webhook/alert",
+      "match": "exact",
+      "auth": "webhook",
+      "group": "webhooks"
+    },
+    {
+      "method": "POST",
+      "path": "/webhook/alert",
+      "match": "exact",
+      "auth": "webhook",
+      "group": "webhooks"
+    },
+    {
+      "method": "GET",
+      "path": "/api/control/proactive-policy",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "GET",
+      "path": "/api/control/operations",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "POST",
+      "path": "/api/control/proactive-policy",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "GET",
+      "path": "/api/control/legate-decisions",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "POST",
+      "path": "/api/control/legate-decisions/execute",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "GET",
+      "path": "/api/control/legate-rollout",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "POST",
+      "path": "/api/control/legate-rollout",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "POST",
+      "path": "/api/control/legate-rollout/rollback",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "POST",
+      "path": "/api/control/legate-rollout/failback",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "GET",
+      "path": "/api/control/legate-link-reliability",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "GET",
+      "path": "/api/control/legion-scheduled",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "GET",
+      "path": "/api/control/legion-adapter-health",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "GET",
+      "path": "/api/control/legion-runs",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "GET",
+      "path": "/api/observe/summary",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "GET",
+      "path": "/api/mgmt/config",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "POST",
+      "path": "/api/mgmt/deploy/trigger",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "GET",
+      "path": "/api/hq/status",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "GET",
+      "path": "/api/hq/registry",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "POST",
+      "path": "/api/hq/tenants",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "GET",
+      "path": "/api/control/intents-failed",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "GET",
+      "path": "/api/control/webhook-rules",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "POST",
+      "path": "/api/control/webhook-rules",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/control/webhook-rules/",
+      "match": "prefix",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/control/webhook-rules/",
+      "match": "prefix",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "GET",
+      "path": "/api/control/webhook-events",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "GET",
+      "path": "/api/control/legate-observability",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "GET",
+      "path": "/api/control/legate-slo",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "GET",
+      "path": "/api/control/legate-observability/trace",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "GET",
+      "path": "/api/control/legate-audit-export",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "GET",
+      "path": "/api/control/legate-action-dead-letters",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "POST",
+      "path": "/api/control/legate-action-dead-letters/replay/",
+      "match": "prefix",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "GET",
+      "path": "/api/mobile/discovery",
+      "match": "exact",
+      "auth": "api_auth",
+      "group": "mobile"
+    },
+    {
+      "method": "GET",
+      "path": "/api/mobile/summary",
+      "match": "exact",
+      "auth": "api_auth",
+      "group": "mobile"
+    },
+    {
+      "method": "POST",
+      "path": "/api/mobile/device-heartbeat",
+      "match": "exact",
+      "auth": "api_auth",
+      "group": "mobile"
+    },
+    {
+      "method": "POST",
+      "path": "/api/mobile/push-token",
+      "match": "exact",
+      "auth": "api_auth",
+      "group": "mobile"
+    },
+    {
+      "method": "POST",
+      "path": "/api/mobile/push-ack",
+      "match": "exact",
+      "auth": "api_auth",
+      "group": "mobile"
+    },
+    {
+      "method": "GET",
+      "path": "/api/mobile/live-activity",
+      "match": "exact",
+      "auth": "api_auth",
+      "group": "mobile"
+    },
+    {
+      "method": "GET",
+      "path": "/api/mobile/proactive-policy",
+      "match": "exact",
+      "auth": "api_auth",
+      "group": "mobile"
+    },
+    {
+      "method": "POST",
+      "path": "/api/mobile/proactive-policy",
+      "match": "exact",
+      "auth": "api_auth",
+      "group": "mobile"
+    },
+    {
+      "method": "GET",
+      "path": "/api/mobile/preferences",
+      "match": "exact",
+      "auth": "api_auth",
+      "group": "mobile"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/mobile/preferences",
+      "match": "exact",
+      "auth": "api_auth",
+      "group": "mobile"
+    },
+    {
+      "method": "GET",
+      "path": "/api/control/mobile-devices",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "GET",
+      "path": "/api/control/mobile-reliability",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "GET",
+      "path": "/api/control/connectors",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "GET",
+      "path": "/api/control/connector-health",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "GET",
+      "path": "/api/control/proactive-events",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "POST",
+      "path": "/api/control/proactive-engine/run",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "GET",
+      "path": "/api/control/proactive-deliveries",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "GET",
+      "path": "/api/control/proactive-dead-letters",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "GET",
+      "path": "/api/control/proactive-reliability",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "POST",
+      "path": "/api/control/proactive-deliveries/",
+      "match": "prefix",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "POST",
+      "path": "/api/control/proactive-replay/",
+      "match": "prefix",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "POST",
+      "path": "/api/control/proactive-dead-letters/replay/",
+      "match": "prefix",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "POST",
+      "path": "/api/control/proactive-dispatch/test",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "GET",
+      "path": "/api/integrations/linked",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "integrations"
+    },
+    {
+      "method": "GET",
+      "path": "/api/gmail/unread",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "integrations"
+    },
+    {
+      "method": "GET",
+      "path": "/api/oauth/gmail/start",
+      "match": "exact",
+      "auth": "oauth",
+      "group": "integrations"
+    },
+    {
+      "method": "GET",
+      "path": "/api/oauth/gmail/callback",
+      "match": "exact",
+      "auth": "oauth",
+      "group": "integrations"
+    },
+    {
+      "method": "GET",
+      "path": "/api/oauth/slack/start",
+      "match": "exact",
+      "auth": "oauth",
+      "group": "integrations"
+    },
+    {
+      "method": "GET",
+      "path": "/api/oauth/slack/callback",
+      "match": "exact",
+      "auth": "oauth",
+      "group": "integrations"
+    },
+    {
+      "method": "GET",
+      "path": "/api/oauth/notion/start",
+      "match": "exact",
+      "auth": "oauth",
+      "group": "integrations"
+    },
+    {
+      "method": "GET",
+      "path": "/api/oauth/notion/callback",
+      "match": "exact",
+      "auth": "oauth",
+      "group": "integrations"
+    },
+    {
+      "method": "GET",
+      "path": "/api/state/intents",
+      "match": "exact",
+      "auth": "api_auth",
+      "group": "other"
+    },
+    {
+      "method": "GET",
+      "path": "/api/state/sessions",
+      "match": "exact",
+      "auth": "api_auth",
+      "group": "other"
+    },
+    {
+      "method": "GET",
+      "path": "/api/state/allowlist",
+      "match": "exact",
+      "auth": "api_auth",
+      "group": "other"
+    },
+    {
+      "method": "GET",
+      "path": "/api/state/skills",
+      "match": "exact",
+      "auth": "api_auth",
+      "group": "other"
+    },
+    {
+      "method": "GET",
+      "path": "/api/health",
+      "match": "exact",
+      "auth": "public",
+      "group": "ops"
+    },
+    {
+      "method": "GET",
+      "path": "/api/site-context",
+      "match": "exact",
+      "auth": "public",
+      "group": "ops"
+    },
+    {
+      "method": "GET",
+      "path": "/api/command-centre/clients",
+      "match": "exact",
+      "auth": "public",
+      "group": "ops"
+    },
+    {
+      "method": "GET",
+      "path": "/api/ausmaker/telemetry",
+      "match": "exact",
+      "auth": "api_auth",
+      "group": "other"
+    },
+    {
+      "method": "GET",
+      "path": "/api/ausmaker/reorders",
+      "match": "exact",
+      "auth": "api_auth",
+      "group": "other"
+    },
+    {
+      "method": "GET",
+      "path": "/api/mind",
+      "match": "exact",
+      "auth": "api_auth",
+      "group": "mind"
+    },
+    {
+      "method": "POST",
+      "path": "/api/mind/primary-human",
+      "match": "exact",
+      "auth": "api_auth",
+      "group": "mind"
+    },
+    {
+      "method": "POST",
+      "path": "/api/mind",
+      "match": "exact",
+      "auth": "api_auth",
+      "group": "mind"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/mind",
+      "match": "exact",
+      "auth": "api_auth",
+      "group": "mind"
+    },
+    {
+      "method": "GET",
+      "path": "/api/corpus",
+      "match": "exact",
+      "auth": "api_auth",
+      "group": "mind"
+    },
+    {
+      "method": "POST",
+      "path": "/api/corpus/regenerate-summary",
+      "match": "exact",
+      "auth": "api_auth",
+      "group": "mind"
+    },
+    {
+      "method": "GET",
+      "path": "/api/wisdom/truth-stats",
+      "match": "exact",
+      "auth": "api_auth",
+      "group": "mind"
+    },
+    {
+      "method": "POST",
+      "path": "/api/wisdom/run-nightly",
+      "match": "exact",
+      "auth": "api_auth",
+      "group": "mind"
+    },
+    {
+      "method": "POST",
+      "path": "/api/metrics/advice-followed",
+      "match": "exact",
+      "auth": "api_auth",
+      "group": "other"
+    },
+    {
+      "method": "GET",
+      "path": "/api/models",
+      "match": "exact",
+      "auth": "api_auth",
+      "group": "other"
+    },
+    {
+      "method": "GET",
+      "path": "/api/control/model-registry",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "GET",
+      "path": "/api/control/modelops/overview",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "POST",
+      "path": "/api/control/model-registry/register-model",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "POST",
+      "path": "/api/control/model-registry/promote",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "POST",
+      "path": "/api/control/model-registry/rollback",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "GET",
+      "path": "/api/widget",
+      "match": "exact",
+      "auth": "api_auth",
+      "group": "other"
+    },
+    {
+      "method": "GET",
+      "path": "/api/ios-dashboard",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "other"
+    },
+    {
+      "method": "GET",
+      "path": "/piko_state.json",
+      "match": "exact",
+      "auth": "api_auth",
+      "group": "other"
+    },
+    {
+      "method": "GET",
+      "path": "/api/piko-state.json",
+      "match": "exact",
+      "auth": "api_auth",
+      "group": "other"
+    },
+    {
+      "method": "GET",
+      "path": "/api/pending",
+      "match": "exact",
+      "auth": "api_auth",
+      "group": "other"
+    },
+    {
+      "method": "GET",
+      "path": "/api/intents",
+      "match": "exact",
+      "auth": "api_auth",
+      "group": "other"
+    },
+    {
+      "method": "GET",
+      "path": "/api/ea-alerts",
+      "match": "exact",
+      "auth": "api_auth",
+      "group": "other"
+    },
+    {
+      "method": "GET",
+      "path": "/api/ea-preferences",
+      "match": "exact",
+      "auth": "api_auth",
+      "group": "other"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/ea-preferences",
+      "match": "exact",
+      "auth": "api_auth",
+      "group": "other"
+    },
+    {
+      "method": "GET",
+      "path": "/api/control",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "GET",
+      "path": "/api/control/prompts",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "POST",
+      "path": "/api/control/integrations/telegram",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "POST",
+      "path": "/api/control/integrations/imessage",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "POST",
+      "path": "/api/control/integrations/discord",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "POST",
+      "path": "/api/control/integrations/gmail/disable",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "POST",
+      "path": "/api/control/integrations/slack/disable",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "POST",
+      "path": "/api/control/integrations/notion/disable",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "POST",
+      "path": "/api/control/aim-approve",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "POST",
+      "path": "/api/control/session-reset",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "POST",
+      "path": "/api/control/aim-reject",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "POST",
+      "path": "/api/control/moltbook-prune",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "GET",
+      "path": "/api/control/search",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "GET",
+      "path": "/api/control/learning",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "POST",
+      "path": "/api/control/learning/suggest",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "GET",
+      "path": "/api/control/learning/suggest",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "POST",
+      "path": "/api/control/learning/preview",
+      "match": "exact",
+      "auth": "admin_session",
+      "group": "control"
+    },
+    {
+      "method": "GET",
+      "path": "/api/chart",
+      "match": "exact",
+      "auth": "api_auth",
+      "group": "other"
+    }
+  ]
+}
