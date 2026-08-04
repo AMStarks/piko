@@ -2098,103 +2098,6 @@ function checkHqApiAuth(req) {
   return (bearer || apiKeyHeader) === keyEnv;
 }
 
-async function handleYoloToolRoute(req, res) {
-  if (!checkYoloOrSessionAuth(req)) {
-    return send(res, 401, JSON.stringify({ ok: false, error: 'Unauthorized', message: 'Set Authorization: Bearer <PIKO_YOLO_API_KEY or PIKO_HEALTH_API_KEY>' }));
-  }
-  let body;
-  try {
-    body = await readBody(req);
-    body = body ? JSON.parse(body) : {};
-  } catch (_) {
-    return send(res, 400, JSON.stringify({ ok: false, error: 'Invalid JSON body' }));
-  }
-  const toolName = String(body.name || body.tool_name || body.toolName || '').trim();
-  if (!toolName) {
-    return send(res, 400, JSON.stringify({ ok: false, error: 'Missing name (tool name)' }));
-  }
-  const args = body.arguments && typeof body.arguments === 'object' ? body.arguments : (body.args && typeof body.args === 'object' ? body.args : {});
-  const channel = String(body.channel || 'ios').trim() || 'ios';
-  try {
-    const result = yoloBridge.runYoloTool(toolName, args, { channel });
-    const pending = toLowerAsciiish(result).includes('pending human approval');
-    return send(res, 200, JSON.stringify({
-      ok: true,
-      tool: toolName,
-      channel,
-      pending_approval: pending,
-      result,
-    }));
-  } catch (e) {
-    const msg = (e && e.stderr && String(e.stderr)) || e.message || String(e);
-    return send(res, 502, JSON.stringify({ ok: false, error: msg, tool: toolName }));
-  }
-}
-
-async function handleYoloRegistryRoute(req, res) {
-  if (!checkYoloOrSessionAuth(req)) {
-    return send(res, 401, JSON.stringify({ ok: false, error: 'Unauthorized' }));
-  }
-  try {
-    const registry = yoloBridge.getYoloToolRegistry();
-    return send(res, 200, JSON.stringify({ ok: true, tools: registry }));
-  } catch (e) {
-    return send(res, 502, JSON.stringify({ ok: false, error: e.message || String(e) }));
-  }
-}
-
-async function handleToolAuditRecentRoute(req, res) {
-  if (!checkYoloOrSessionAuth(req)) {
-    return send(res, 401, JSON.stringify({ ok: false, error: 'Unauthorized' }));
-  }
-  const { query } = parseUrl(req.url);
-  const limit = query && query.limit ? Number(query.limit) : 50;
-  try {
-    const { path: logPath, entries } = opsMonitor.getToolAuditRecent(limit);
-    return send(res, 200, JSON.stringify({ ok: true, path: logPath, entries }));
-  } catch (e) {
-    return send(res, 502, JSON.stringify({ ok: false, error: e.message || String(e) }));
-  }
-}
-
-async function handleHitlPendingRoute(req, res) {
-  if (!checkYoloOrSessionAuth(req)) {
-    return send(res, 401, JSON.stringify({ ok: false, error: 'Unauthorized' }));
-  }
-  try {
-    const pending = opsMonitor.listHitlPending();
-    return send(res, 200, JSON.stringify({ ok: true, pending, count: pending.length }));
-  } catch (e) {
-    return send(res, 502, JSON.stringify({ ok: false, error: e.message || String(e) }));
-  }
-}
-
-async function handleHitlActionRoute(req, res, action) {
-  if (!checkYoloOrSessionAuth(req)) {
-    return send(res, 401, JSON.stringify({ ok: false, error: 'Unauthorized' }));
-  }
-  let body;
-  try {
-    body = await readBody(req);
-    body = body ? JSON.parse(body) : {};
-  } catch (_) {
-    return send(res, 400, JSON.stringify({ ok: false, error: 'Invalid JSON body' }));
-  }
-  const requestId = String(body.id || body.request_id || body.requestId || '').trim();
-  if (!requestId) {
-    return send(res, 400, JSON.stringify({ ok: false, error: 'Missing id (request UUID)' }));
-  }
-  try {
-    const result = action === 'approve'
-      ? opsMonitor.approveHitl(requestId)
-      : opsMonitor.rejectHitl(requestId);
-    return send(res, 200, JSON.stringify({ ok: true, action, id: requestId, result }));
-  } catch (e) {
-    const msg = (e && e.stderr && String(e.stderr)) || e.message || String(e);
-    return send(res, 502, JSON.stringify({ ok: false, error: msg, id: requestId }));
-  }
-}
-
 async function handleIosHub(req, res) {
   let body;
   try {
@@ -3185,12 +3088,20 @@ async function handleRequest(req, res) {
     return handleIosHub(req, res);
   }
 
-  if (req.method === 'POST' && pathname === '/api/yolo-tool') {
-    return handleYoloToolRoute(req, res);
-  }
-
-  if (req.method === 'GET' && pathname === '/api/yolo-tools/registry') {
-    return handleYoloRegistryRoute(req, res);
+  // —— YOLO / HITL / upload (extracted: routes/yolo.js) ——
+  {
+    const { tryHandleYolo } = require('./routes/yolo');
+    if (await tryHandleYolo(req, res, {
+      pathname,
+      send,
+      readBody,
+      parseUrl,
+      checkYoloOrSessionAuth,
+      yoloBridge,
+      opsMonitor,
+      pikoUpload,
+      toLowerAsciiish,
+    })) return;
   }
 
   if (req.method === 'GET' && pathname === '/api/notifications/recent') {
@@ -3271,49 +3182,6 @@ async function handleRequest(req, res) {
       loadMobilePreferences,
       saveMobilePreferences,
     })) return;
-  }
-
-  if (req.method === 'GET' && pathname === '/api/tool-audit/recent') {
-    return handleToolAuditRecentRoute(req, res);
-  }
-
-  if (req.method === 'GET' && pathname === '/api/hitl/pending') {
-    return handleHitlPendingRoute(req, res);
-  }
-
-  if (req.method === 'POST' && pathname === '/api/hitl/approve') {
-    return handleHitlActionRoute(req, res, 'approve');
-  }
-
-  if (req.method === 'POST' && pathname === '/api/hitl/reject') {
-    return handleHitlActionRoute(req, res, 'reject');
-  }
-
-  if (req.method === 'POST' && pathname === '/api/piko/upload') {
-    if (!checkYoloOrSessionAuth(req)) {
-      return send(res, 401, JSON.stringify({ ok: false, error: 'Unauthorized' }));
-    }
-    return readBody(req)
-      .then((body) => {
-        let json;
-        try {
-          json = JSON.parse(body || '{}');
-        } catch (_) {
-          return send(res, 400, JSON.stringify({ ok: false, error: 'Invalid JSON' }));
-        }
-        try {
-          const out = pikoUpload.saveUpload({
-            filename: json.filename || json.name,
-            content_base64: json.content_base64 || json.base64,
-            subdir: json.subdir || 'inbox',
-          });
-          return send(res, 200, JSON.stringify({ ok: true, ...out }));
-        } catch (e) {
-          return send(res, 400, JSON.stringify({ ok: false, error: e.message || String(e) }));
-        }
-      })
-      .catch((e) => send(res, 500, JSON.stringify({ ok: false, error: e.message })));
-    return;
   }
 
   // —— Ops metrics/logs (extracted: routes/ops.js) ——
