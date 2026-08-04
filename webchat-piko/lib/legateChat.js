@@ -881,10 +881,13 @@ function getExpertOpinionModel() {
     || 'qwen3.6:27b';
 }
 
-function buildExpertOpinionPrompt(message, materialBlock, hasMaterial) {
+function buildExpertOpinionPrompt(message, materialBlock, hasMaterial, priorContext) {
   const material = hasMaterial
     ? materialBlock
     : '(No matching corpus notes or stance file for this topic.)';
+  const prior = priorContext
+    ? `\nRECENT CONTEXT (stay on this topic unless the user clearly switches):\n${String(priorContext).slice(0, 700)}\n`
+    : '';
   return `You are Piko, asked for YOUR judgment on material you have studied for Egyptian Insights.
 
 REQUIRED:
@@ -893,13 +896,30 @@ REQUIRED:
 3. Name what would change your mind or what the corpus leaves open.
 4. Hedge ONLY where the corpus genuinely conflicts — and say what conflicts.
 5. If the corpus has nothing on the topic, say exactly that and offer to research it. Do not invent citations.
+6. If RECENT CONTEXT is present and the user ask is a follow-up ("what do you think", "given what you've ingested"), answer about THAT topic — do not drift.
 
 Do not dump digests. Do not say "without further context" when material is supplied. No "thinking…" filler. At most ~6 short sentences.
-
+${prior}
 CORPUS MATERIAL:
 ${material}
 
 USER: ${String(message || '').slice(0, 800)}`;
+}
+
+/** Build a richer retrieval query from the ask + recent session turns. */
+function opinionRetrievalQuery(message, opts = {}) {
+  const parts = [String(message || '')];
+  const lastAsst = String(opts.lastAssistant || '').trim();
+  if (lastAsst) parts.push(lastAsst.slice(0, 400));
+  const hist = Array.isArray(opts.history) ? opts.history : [];
+  for (let i = hist.length - 1; i >= 0 && parts.length < 4; i--) {
+    const m = hist[i];
+    if (!m || !m.content) continue;
+    if (m.role === 'user' || m.role === 'assistant') {
+      parts.push(String(m.content).slice(0, 280));
+    }
+  }
+  return parts.join('\n').slice(0, 1200);
 }
 
 /**
@@ -921,7 +941,8 @@ async function answerExpertOpinion(message, understanding, opts = {}) {
       }
     } catch (_) { /* optional */ }
 
-    const material = gatherOpinionMaterial(message, { top: 6 });
+    const retrievalQuery = opinionRetrievalQuery(message, opts);
+    const material = gatherOpinionMaterial(retrievalQuery, { top: 6 });
     let block = material.block || '';
     if (learningExtra && !material.has_material) {
       block = `Recent learning notes:\n${learningExtra}`;
@@ -929,6 +950,7 @@ async function answerExpertOpinion(message, understanding, opts = {}) {
       block = `${block}\n\nRecent learning (supplemental):\n${learningExtra}`.slice(0, 5000);
     }
     const hasMaterial = material.has_material || !!learningExtra;
+    const priorContext = String(opts.lastAssistant || '').trim().slice(0, 700);
 
     const model = opts.opinionModel || getExpertOpinionModel();
     const msgs = [
@@ -936,7 +958,7 @@ async function answerExpertOpinion(message, understanding, opts = {}) {
         role: 'system',
         content: 'You are Piko giving a grounded expert opinion from your ingested corpus. Commit to a stance when material exists.',
       },
-      { role: 'user', content: buildExpertOpinionPrompt(message, block, hasMaterial) },
+      { role: 'user', content: buildExpertOpinionPrompt(message, block, hasMaterial, priorContext) },
     ];
     const chatOpts = {
       temperature: 0.4,
@@ -1033,6 +1055,8 @@ async function recoverDecideFailWithUnderstanding(message, understanding, opts =
       reason: 'decide_fail_recover_opinion',
       source: 'expert_opinion',
       chatFn: opts.chatFn,
+      lastAssistant: opts.lastAssistant,
+      history: opts.history,
     });
   }
   // learning / musing / conversation / feedback / identity → persona
@@ -1070,6 +1094,8 @@ async function routeNonMutatingUnderstanding(message, understanding, opts = {}) 
       reason: 'opinion_question',
       source: 'expert_opinion',
       chatFn: opts.chatFn,
+      lastAssistant: opts.lastAssistant,
+      history: opts.history,
     });
   }
   // conversation / musing / feedback / identity_capability (and opinion when gated off)
@@ -1114,10 +1140,22 @@ async function handleLegateChatTurn(message, opts = {}) {
   // WP10 F3: non-mutating intents skip decide — one 27B call (understand) only.
   // WP11: opinion_question uses a second 27B call (expert opinion) when enabled.
   if (authoritative && isNonMutatingUnderstanding(understanding)) {
+    let lastAssistant = opts.lastAssistant || '';
+    if (!lastAssistant && Array.isArray(opts.history)) {
+      for (let i = opts.history.length - 1; i >= 0; i--) {
+        const m = opts.history[i];
+        if (m && m.role === 'assistant' && m.content) {
+          lastAssistant = String(m.content);
+          break;
+        }
+      }
+    }
     return routeNonMutatingUnderstanding(message, understanding, {
       rootDir: root,
       model: opts.model,
       chatFn: opts.chatFn,
+      lastAssistant,
+      history: opts.history || [],
     });
   }
 

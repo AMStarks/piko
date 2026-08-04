@@ -276,3 +276,67 @@ test('W2: conclusions few-shot ids registered in FEW_SHOT_IDS', () => {
   assert.ok(prompt.includes('Have you come to any conclusions on the Osireion'));
   assert.ok(prompt.includes('given what you have ingested'));
 });
+
+test('W1: follow-up opinion uses lastAssistant for retrieval continuity', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'piko-wp11-cont-'));
+  const dataRoot = path.join(tmp, 'egyptian-insights');
+  fs.mkdirSync(path.join(dataRoot, 'corpus_notes'), { recursive: true });
+  fs.writeFileSync(path.join(dataRoot, 'corpus_notes', 'item_201.json'), JSON.stringify({
+    harvest_id: 201,
+    title: 'Abydos and the Osireion',
+    author: 'Petrie',
+    summary: 'Osireion megalithic construction at Abydos.',
+    claims: ['Earlier phase'],
+    sites: ['Abydos', 'Osireion'],
+    people: [],
+    disagreements: [],
+    open_questions: [],
+    updated_at: new Date().toISOString(),
+  }));
+  // Distractor Mars note — must not win when prior context is Osireion
+  fs.writeFileSync(path.join(dataRoot, 'corpus_notes', 'item_202.json'), JSON.stringify({
+    harvest_id: 202,
+    title: 'The Mars Mystery',
+    author: 'Graham Hancock',
+    summary: 'Speculation about Mars and ancient monuments.',
+    claims: ['Mars face'],
+    sites: ['Mars'],
+    people: [],
+    disagreements: [],
+    open_questions: [],
+    updated_at: new Date().toISOString(),
+  }));
+
+  await withEnv({
+    PIKO_DATA_DIR: tmp,
+    EGYPTIAN_INSIGHTS_DATA_DIR: dataRoot,
+    PIKO_TENANT_ID: 'customer-03',
+    PIKO_BACKGROUND_JOBS_PROFILE: 'culture',
+    PIKO_EXPERT_OPINION: '1',
+    PIKO_LEGATE_MODEL: 'qwen3.6:27b',
+  }, async () => {
+    delete require.cache[require.resolve('../lib/legateChat')];
+    delete require.cache[require.resolve('../lib/eiStancePositions')];
+    const { answerExpertOpinion } = require('../lib/legateChat');
+    let seenPrompt = '';
+    const out = await answerExpertOpinion(
+      'What do you think, given what you have ingested?',
+      opinionUnderstanding(),
+      {
+        rootDir: path.join(__dirname, '..'),
+        lastAssistant: 'I land on an earlier megalithic phase for the Osireion, citing Petrie.',
+        history: [
+          { role: 'user', content: 'Have you come to any conclusions on the Osireion?' },
+          { role: 'assistant', content: 'I land on an earlier megalithic phase for the Osireion, citing Petrie.' },
+        ],
+        chatFn: async (_model, msgs) => {
+          seenPrompt = msgs.map((m) => m.content).join('\n');
+          return 'I still land on an earlier Osireion phase. Petrie\'s Abydos and the Osireion supports the masonry contrast.';
+        },
+      },
+    );
+    assert.ok(out.reply.includes('Osireion'));
+    assert.ok(seenPrompt.includes('RECENT CONTEXT') || seenPrompt.includes('Osireion'));
+    assert.ok(seenPrompt.includes('Abydos and the Osireion') || seenPrompt.includes('Osireion'));
+  });
+});

@@ -4929,10 +4929,12 @@ async function handleApiChat(req, res) {
       } catch (_) {
         chatIsOperator = true;
       }
+      const lastAsstForLegate = [...priorHistory].reverse().find((m) => m.role === 'assistant' && m.content);
       const legateOut = await handleLegateChatTurn(message, {
         rootDir: __dirname,
         sessionKey: key,
         history: priorHistory,
+        lastAssistant: lastAsstForLegate ? lastAsstForLegate.content : '',
         model: sessionModel,
         isOperator: chatIsOperator,
       });
