@@ -263,12 +263,21 @@ async function tryHandleCultures(req, res, ctx = {}) {
       try { parsed = JSON.parse(body || '{}'); } catch (_) { parsed = {}; }
       const campaign = require('../lib/eiResearchCampaign');
       const action = String(parsed.action || '').toLowerCase();
+      const adminAuth = ctx.adminAuth || require('../lib/adminAuth');
+      const dataDir = ctx.dataDir || process.env.PIKO_DATA_DIR;
       if (adminAuth.isEnabled() && adminAuth.isOperatorOnlyCampaignAction(action)) {
-        const session = adminAuth.getSessionFromRequest(req, DATA_DIR);
+        const session = adminAuth.getSessionFromRequest(req, dataDir);
+        let apiKeyOk = false;
         if (!session) {
+          try {
+            const { keyMatches, presentedKey } = require('../lib/apiAuth');
+            apiKeyOk = keyMatches(presentedKey(req, {}));
+          } catch (_) { apiKeyOk = false; }
+        }
+        if (!session && !apiKeyOk) {
           return send(res, 401, JSON.stringify({ ok: false, error: 'Unauthorized', login: '/admin/login' }));
         }
-        if (session.role === 'client') {
+        if (session && session.role === 'client') {
           return send(res, 403, JSON.stringify({ ok: false, error: 'Operator access required' }));
         }
       }

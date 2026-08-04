@@ -3227,6 +3227,8 @@ async function handleRequest(req, res) {
       matchPath,
       rootDir: __dirname,
       getTenantBackgroundProfile,
+      adminAuth,
+      dataDir: DATA_DIR,
     })) return;
   }
 
