@@ -413,6 +413,7 @@ function isProtectedApiPath(pathname, method) {
     '/api/hq',
     '/api/observe',
     '/api/mgmt',
+    '/api/ops',
     '/api/ios-dashboard',
     '/api/yolo-tool',
     '/api/yolo-tools',

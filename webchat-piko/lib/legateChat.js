@@ -1079,6 +1079,24 @@ async function answerExpertOpinion(message, understanding, opts = {}) {
     if (!reply) {
       return fallthroughFromUnderstanding(understanding, 'expert_opinion_empty');
     }
+    try {
+      const { log } = require('./logger');
+      log('info', 'expert_opinion', {
+        tag: 'expert_opinion',
+        thread: material.thread || null,
+        has_material: hasMaterial,
+        hedge_retry: false,
+        ok: true,
+      });
+    } catch (_) {
+      console.log(JSON.stringify({
+        tag: 'expert_opinion',
+        ts: new Date().toISOString(),
+        thread: material.thread || null,
+        has_material: hasMaterial,
+        ok: true,
+      }));
+    }
     return {
       reply,
       mode: 'answer',
@@ -1137,7 +1155,18 @@ async function recoverDecideFailWithUnderstanding(message, understanding, opts =
       history: opts.history,
     });
   }
-  // learning / musing / conversation / feedback / identity → persona
+  if (intent === 'identity_capability') {
+    const { answerIdentityCapability } = require('./identityCard');
+    return answerIdentityCapability(understanding, { rootDir: opts.rootDir });
+  }
+  if (intent === 'feedback') {
+    const { answerFeedback } = require('./feedbackStore');
+    return answerFeedback(message, understanding, {
+      rootDir: opts.rootDir,
+      sessionKey: opts.sessionKey,
+    });
+  }
+  // learning / musing / conversation → persona
   return fallthroughFromUnderstanding(understanding, `decide_fail_recover:${intent}`);
 }
 
@@ -1145,9 +1174,225 @@ async function recoverDecideFailWithUnderstanding(message, understanding, opts =
  * WP10 F3: skip decide entirely for non-mutating authoritative understandings.
  * WP11: opinion_question → expert-opinion lane (grounded 27B) when enabled.
  */
+/**
+ * P2.4a: one structured line per routing decision.
+ */
+function logRouteDecision(meta = {}) {
+  const line = {
+    tag: 'chat_route',
+    ts: new Date().toISOString(),
+    requestId: meta.requestId || null,
+    intent: meta.intent || null,
+    lane: meta.lane || null,
+    reason: meta.reason || null,
+    model: meta.model || null,
+    ok: meta.ok !== false,
+  };
+  try {
+    const { log } = require('./logger');
+    log('info', 'chat_route', line);
+  } catch (_) {
+    console.log(JSON.stringify(line));
+  }
+}
+
+/**
+ * P2.3b: schedule / config / agent_command — never persona, never work-order dispatch.
+ */
+function handleClassifiedSafeIntent(message, understanding, opts = {}) {
+  const intent = String((understanding && understanding.intent) || '');
+  if (intent === 'schedule_request') {
+    const sched = (understanding && understanding.schedule) || {};
+    let persisted = null;
+    try {
+      const { createIntent } = require('./intents');
+      const title = sched.note || String(message || '').slice(0, 120) || 'Scheduled request';
+      const dueAt = sched.time || null;
+      const schedule = sched.cron
+        ? { cron: sched.cron }
+        : (sched.in_minutes != null
+          ? { in_minutes: sched.in_minutes }
+          : null);
+      persisted = createIntent({
+        type: 'task',
+        title,
+        description: String(message || '').slice(0, 500),
+        dueAt,
+        schedule,
+        source: 'chat_schedule_request',
+        sessionId: opts.sessionKey || null,
+        _creationSource: 'understand',
+      });
+    } catch (_) { /* reply honestly either way */ }
+    const reply = persisted
+      ? `Understood as a schedule request (${sched.kind || 'timed'}). I recorded “${persisted.title}” — check Intents / the dashboard to confirm timing.`
+      : `Understood as a schedule request (${sched.kind || 'timed'}${sched.time ? ` at ${sched.time}` : ''}${sched.cron ? ` cron ${sched.cron}` : ''}). I could not persist it automatically — please create it from Intents or restate with an explicit time.`;
+    logRouteDecision({
+      requestId: opts.requestId,
+      intent,
+      lane: 'schedule_handler',
+      reason: persisted ? 'persisted_intent' : 'ack_only',
+    });
+    return {
+      reply,
+      mode: 'answer',
+      fallthrough: false,
+      inject_campaign_state: false,
+      decision: {
+        mode: 'answer',
+        reply: '',
+        lookups: [],
+        reason: 'schedule_request',
+        source: 'safe_intent_handler',
+        agent_id: null,
+        control_action: null,
+      },
+      understanding,
+      intent_record: persisted,
+    };
+  }
+  if (intent === 'config_change') {
+    logRouteDecision({
+      requestId: opts.requestId,
+      intent,
+      lane: 'config_handler',
+      reason: 'handoff_config_manager',
+    });
+    return {
+      reply: 'Understood as a configuration change. I will not apply chat-side config mutations automatically — use the dashboard settings or an explicit operator config command so changes stay auditable.',
+      mode: 'answer',
+      fallthrough: false,
+      inject_campaign_state: false,
+      decision: {
+        mode: 'answer',
+        reply: '',
+        lookups: [],
+        reason: 'config_change',
+        source: 'safe_intent_handler',
+        agent_id: null,
+        control_action: null,
+      },
+      understanding,
+    };
+  }
+  if (intent === 'agent_command') {
+    logRouteDecision({
+      requestId: opts.requestId,
+      intent,
+      lane: 'agent_command_handler',
+      reason: 'ack_no_dispatch',
+    });
+    return {
+      reply: 'Understood as an agent-command (job control). I will not invent a work order from this — say “cancel job …” / use the Agents panel, or restate a concrete research ask if you want new work queued.',
+      mode: 'answer',
+      fallthrough: false,
+      inject_campaign_state: false,
+      decision: {
+        mode: 'answer',
+        reply: '',
+        lookups: [],
+        reason: 'agent_command',
+        source: 'safe_intent_handler',
+        agent_id: null,
+        control_action: null,
+      },
+      understanding,
+    };
+  }
+  return null;
+}
+
+/**
+ * P2.3a: authoritative campaign_control with a parsed action → run directly.
+ */
+async function handleAuthoritativeCampaignControl(message, understanding, opts = {}) {
+  const action = understanding && understanding.control && understanding.control.action;
+  if (!action || !CONTROL_ACTIONS.has(action)) return null;
+  try {
+    const { isOperatorOnlyCampaignAction } = require('./adminAuth');
+    if (isOperatorOnlyCampaignAction(action) && opts.isOperator !== true) {
+      logRouteDecision({
+        requestId: opts.requestId,
+        intent: 'campaign_control',
+        lane: 'control_denied',
+        reason: 'operator_required',
+      });
+      return {
+        reply: 'Campaign control needs an operator login — ask the operator or use the dashboard.',
+        mode: 'control_denied',
+        understanding,
+        decision: {
+          mode: 'control',
+          control_action: action,
+          reason: 'operator_required',
+          source: 'understand_direct_control',
+          lookups: [],
+          reply: '',
+          agent_id: null,
+        },
+      };
+    }
+  } catch (_) {
+    if (opts.isOperator !== true) {
+      return {
+        reply: 'Campaign control needs an operator login — ask the operator or use the dashboard.',
+        mode: 'control_denied',
+        understanding,
+      };
+    }
+  }
+  try {
+    const out = await runCampaignControlAction(action, {
+      rootDir: opts.rootDir,
+      message,
+    });
+    logRouteDecision({
+      requestId: opts.requestId,
+      intent: 'campaign_control',
+      lane: 'direct_control',
+      reason: `action:${action}`,
+      ok: !!(out && out.ok !== false),
+    });
+    return {
+      reply: String((out && out.artifact) || `Campaign ${action} applied.`).slice(0, 4000),
+      mode: 'control',
+      control: out,
+      understanding,
+      decision: {
+        mode: 'control',
+        control_action: action,
+        reason: 'understand_direct_control',
+        source: 'understand_direct_control',
+        lookups: [],
+        reply: '',
+        agent_id: null,
+      },
+    };
+  } catch (e) {
+    logRouteDecision({
+      requestId: opts.requestId,
+      intent: 'campaign_control',
+      lane: 'control_failed',
+      reason: String(e && e.message ? e.message : e).slice(0, 120),
+      ok: false,
+    });
+    return {
+      reply: 'I tried to adjust the campaign but hit a snag — try again in a moment.',
+      mode: 'control_failed',
+      understanding,
+    };
+  }
+}
+
 async function routeNonMutatingUnderstanding(message, understanding, opts = {}) {
   const intent = String((understanding && understanding.intent) || '');
   if (intent === 'status_question') {
+    logRouteDecision({
+      requestId: opts.requestId,
+      intent,
+      lane: 'lookups',
+      reason: 'status_question',
+    });
     return answerViaLookups(message, ['campaign', 'activity'], {
       rootDir: opts.rootDir,
       model: opts.model,
@@ -1157,6 +1402,12 @@ async function routeNonMutatingUnderstanding(message, understanding, opts = {}) 
     });
   }
   if (intent === 'learning_question') {
+    logRouteDecision({
+      requestId: opts.requestId,
+      intent,
+      lane: 'lookups',
+      reason: 'learning_question',
+    });
     return answerViaLookups(message, ['campaign', 'learning', 'activity'], {
       rootDir: opts.rootDir,
       model: opts.model,
@@ -1165,8 +1416,31 @@ async function routeNonMutatingUnderstanding(message, understanding, opts = {}) 
       source: 'understand_skip_decide',
     });
   }
+  if (intent === 'identity_capability') {
+    const { answerIdentityCapability } = require('./identityCard');
+    logRouteDecision({
+      requestId: opts.requestId,
+      intent,
+      lane: 'identity_card',
+      reason: 'grounded_identity',
+    });
+    return answerIdentityCapability(understanding, { rootDir: opts.rootDir });
+  }
+  if (intent === 'feedback') {
+    const { answerFeedback } = require('./feedbackStore');
+    logRouteDecision({
+      requestId: opts.requestId,
+      intent,
+      lane: 'feedback',
+      reason: 'persist_feedback',
+    });
+    return answerFeedback(message, understanding, {
+      rootDir: opts.rootDir,
+      sessionKey: opts.sessionKey,
+    });
+  }
   if (intent === 'opinion_question' && isExpertOpinionEnabled(opts.rootDir)) {
-    return answerExpertOpinion(message, understanding, {
+    const out = await answerExpertOpinion(message, understanding, {
       rootDir: opts.rootDir,
       understanding,
       reason: 'opinion_question',
@@ -1175,8 +1449,25 @@ async function routeNonMutatingUnderstanding(message, understanding, opts = {}) 
       lastAssistant: opts.lastAssistant,
       history: opts.history,
     });
+    try {
+      const { log } = require('./logger');
+      log('info', 'expert_opinion', {
+        tag: 'expert_opinion',
+        thread: out.opinion_material && out.opinion_material.thread,
+        has_material: !!(out.opinion_material && out.opinion_material.has_material),
+        hedge_retry: false,
+        ok: !out.fallthrough,
+      });
+    } catch (_) { /* optional */ }
+    return out;
   }
-  // conversation / musing / feedback / identity_capability (and opinion when gated off)
+  // conversation / musing (and opinion when gated off)
+  logRouteDecision({
+    requestId: opts.requestId,
+    intent,
+    lane: 'persona_fallthrough',
+    reason: intent || 'fallthrough',
+  });
   return fallthroughFromUnderstanding(understanding, intent);
 }
 
@@ -1186,6 +1477,8 @@ async function routeNonMutatingUnderstanding(message, understanding, opts = {}) 
 async function handleLegateChatTurn(message, opts = {}) {
   const root = opts.rootDir || path.join(__dirname, '..');
   if (!isLegateChatEnabled(root)) return null;
+  const t0 = Date.now();
+  const requestId = opts.requestId || null;
 
   // WP8.2: when authoritative, understand() runs first and veto floors use it.
   // Shadow mode remains fire-and-forget (must not stall chat).
@@ -1215,6 +1508,55 @@ async function handleLegateChatTurn(message, opts = {}) {
     console.warn('[legateChat] understand setup failed', e && e.message ? e.message : e);
   }
 
+  const finish = (result) => {
+    const latency_ms = Date.now() - t0;
+    const intent = understanding && understanding.intent;
+    const lane = (result && (result.mode || (result.fallthrough ? 'persona_fallthrough' : null))) || 'unknown';
+    try {
+      const { log } = require('./logger');
+      log('info', 'chat_turn', {
+        tag: 'chat_turn',
+        requestId,
+        intent,
+        lane,
+        model: (understanding && understanding.model) || opts.understandModel || null,
+        latency_ms,
+        ok: !(result && (result.mode === 'control_failed' || result.mode === 'dispatch_failed')),
+      });
+    } catch (_) { /* optional */ }
+    try {
+      require('./opsMetrics').recordChatTurn({
+        latency_ms,
+        ok: !(result && (result.mode === 'control_failed' || result.mode === 'dispatch_failed')),
+        intent,
+        lane,
+      });
+    } catch (_) { /* optional */ }
+    return result;
+  };
+
+  // P2.3a: authoritative campaign_control → direct action (decide remains for work orders).
+  if (authoritative && understanding && understanding.intent === 'campaign_control'
+    && understanding.control && understanding.control.action) {
+    const ctrl = await handleAuthoritativeCampaignControl(message, understanding, {
+      rootDir: root,
+      isOperator: opts.isOperator === true,
+      requestId,
+    });
+    if (ctrl) return finish(ctrl);
+  }
+
+  // P2.3b: classified mutating-but-unhandled intents — safe explicit replies.
+  if (authoritative && understanding
+    && ['schedule_request', 'config_change', 'agent_command'].includes(String(understanding.intent || ''))) {
+    const safe = handleClassifiedSafeIntent(message, understanding, {
+      rootDir: root,
+      sessionKey: opts.sessionKey,
+      requestId,
+    });
+    if (safe) return finish(safe);
+  }
+
   // WP10 F3: non-mutating intents skip decide — one 27B call (understand) only.
   // WP11: opinion_question uses a second 27B call (expert opinion) when enabled.
   if (authoritative && isNonMutatingUnderstanding(understanding)) {
@@ -1228,13 +1570,15 @@ async function handleLegateChatTurn(message, opts = {}) {
         }
       }
     }
-    return routeNonMutatingUnderstanding(message, understanding, {
+    return finish(await routeNonMutatingUnderstanding(message, understanding, {
       rootDir: root,
       model: opts.model,
       chatFn: opts.chatFn,
       lastAssistant,
       history: opts.history || [],
-    });
+      sessionKey: opts.sessionKey,
+      requestId,
+    }));
   }
 
   // Decide always runs on the Legate model (PIKO_LEGATE_MODEL) — the session
@@ -1252,21 +1596,21 @@ async function handleLegateChatTurn(message, opts = {}) {
     try {
       const { isOperatorOnlyCampaignAction } = require('./adminAuth');
       if (isOperatorOnlyCampaignAction(decision.control_action) && opts.isOperator !== true) {
-        return {
+        return finish({
           reply: 'Campaign control needs an operator login — ask the operator or use the dashboard.',
           mode: 'control_denied',
           decision,
           understanding,
-        };
+        });
       }
     } catch (_) {
       if (opts.isOperator !== true) {
-        return {
+        return finish({
           reply: 'Campaign control needs an operator login — ask the operator or use the dashboard.',
           mode: 'control_denied',
           decision,
           understanding,
-        };
+        });
       }
     }
     try {
@@ -1279,15 +1623,15 @@ async function handleLegateChatTurn(message, opts = {}) {
         || decision.reply
         || 'Campaign updated.',
       ).slice(0, 4000);
-      return { reply, mode: 'control', decision, control: out, understanding };
+      return finish({ reply, mode: 'control', decision, control: out, understanding });
     } catch (e) {
       console.warn('[legateChat] control failed', e && e.message ? e.message : e);
-      return {
+      return finish({
         reply: 'I tried to adjust the campaign but hit a snag — try again in a moment.',
         mode: 'control_failed',
         decision,
         understanding,
-      };
+      });
     }
   }
 
@@ -1304,14 +1648,14 @@ async function handleLegateChatTurn(message, opts = {}) {
       const reply = await synthesizeLookupReply(message, data, {
         model: opts.model,
       });
-      return {
+      return finish({
         reply: reply || formatLookupReply(decision.reply, data),
         mode: 'answer',
         decision: { ...decision, lookups },
         lookup_data: data,
         inject_campaign_state: false,
         understanding,
-      };
+      });
     }
     // WP10 F1: decide-fail recovery (also when decide returned understand_recover).
     if (decision.source === 'decide_fail' || decision.source === 'understand_recover') {
@@ -1319,38 +1663,38 @@ async function handleLegateChatTurn(message, opts = {}) {
         if (decision.lookups && decision.lookups.length) {
           const data = runLookups(decision.lookups, { rootDir: root });
           const reply = await synthesizeLookupReply(message, data, { model: opts.model });
-          return {
+          return finish({
             reply: reply || formatLookupReply('', data),
             mode: 'answer',
             decision: { ...decision, lookups: decision.lookups },
             lookup_data: data,
             inject_campaign_state: false,
             understanding,
-          };
+          });
         }
         if (isNonMutatingUnderstanding(understanding)) {
-          return recoverDecideFailWithUnderstanding(message, understanding, {
+          return finish(await recoverDecideFailWithUnderstanding(message, understanding, {
             rootDir: root,
             model: opts.model,
-          });
+          }));
         }
       }
       if (decision.source === 'decide_fail') {
-        return { reply: decision.reply, mode: 'answer', decision, inject_campaign_state: false, understanding };
+        return finish({ reply: decision.reply, mode: 'answer', decision, inject_campaign_state: false, understanding });
       }
     }
     // Plain conversation: hand back to the main chat brain (full persona).
     // Fall-through must NOT inject LIVE RESEARCH STATE numbers.
     if (decision.source === 'llm' || decision.source === 'understand_recover') {
-      return {
+      return finish({
         reply: null,
         fallthrough: true,
         inject_campaign_state: false,
         decision,
         understanding,
-      };
+      });
     }
-    return { reply: decision.reply, mode: 'answer', decision, inject_campaign_state: false, understanding };
+    return finish({ reply: decision.reply, mode: 'answer', decision, inject_campaign_state: false, understanding });
   }
 
   const queued = dispatchFromLegate(decision, {
@@ -1361,20 +1705,20 @@ async function handleLegateChatTurn(message, opts = {}) {
   });
   if (!queued.ok) {
     console.warn('[legateChat] enqueue failed', queued.error || 'unknown');
-    return {
+    return finish({
       reply: "I understood the ask but couldn't queue the work just now — try again in a moment.",
       mode: 'dispatch_failed',
       decision,
       understanding,
-    };
+    });
   }
-  return {
+  return finish({
     reply: formatDispatchAck(decision, queued),
     mode: 'dispatch',
     job: queued.job,
     decision,
     understanding,
-  };
+  });
 }
 
 async function deliverLegateReviewToChat(job, result, opts = {}) {

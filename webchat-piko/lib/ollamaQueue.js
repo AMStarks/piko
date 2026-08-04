@@ -60,4 +60,13 @@ async function ollamaNativeChat(model, messages, options = {}) {
   return enqueue(model, messages, options, priority);
 }
 
-module.exports = { ollamaNativeChat, ENABLED };
+function getQueueDepth() {
+  return {
+    enabled: !!ENABLED,
+    user: userQueue.length,
+    background: backgroundQueue.length,
+    processing: !!processing,
+  };
+}
+
+module.exports = { ollamaNativeChat, ENABLED, getQueueDepth };

@@ -19,6 +19,7 @@ const BASELINE_PATH = path.join(ROOT, 'regex-baseline.json');
 const EXEMPT_FILES = new Set([
   path.join('scripts', 'check-no-regex.js'),
   path.join('scripts', 'check-no-routing-regex.js'),
+  path.join('scripts', 'check-empty-catch.js'),
 ]);
 
 /** Eval / smoke / finetune / one-off — reported but not zero-gated (WP8.8). */

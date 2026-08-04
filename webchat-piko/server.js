@@ -13,6 +13,9 @@ try {
   console.error(e.message);
   process.exit(1);
 }
+try {
+  require('./lib/opsMetrics').installProcessHandlers();
+} catch (_) { /* non-fatal */ }
 const http = require('http');
 const https = require('https');
 const fs = require('fs');
@@ -8696,6 +8699,16 @@ async function handleRequest(req, res) {
       uptimeMs,
       uptime: `${Math.floor(uptimeMs / 60000)}m`,
     }));
+  }
+
+  // P2.4b: structured ops metrics (admin-gated via /api/ops prefix).
+  if (req.method === 'GET' && pathname === '/api/ops/metrics') {
+    try {
+      const { snapshot } = require('./lib/opsMetrics');
+      return send(res, 200, JSON.stringify(snapshot()));
+    } catch (e) {
+      return send(res, 500, JSON.stringify({ ok: false, error: e.message || String(e) }));
+    }
   }
 
   if (handleConversationQualityRoute(req, res, pathname, metrics, send)) return;
