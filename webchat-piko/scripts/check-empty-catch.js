@@ -75,7 +75,11 @@ function countEmptyCatches(text) {
   return n;
 }
 
-const files = [path.join(ROOT, 'server.js'), ...walk(path.join(ROOT, 'lib'))];
+const files = [
+  path.join(ROOT, 'server.js'),
+  ...walk(path.join(ROOT, 'lib')),
+  ...walk(path.join(ROOT, 'routes')),
+];
 let total = 0;
 for (const f of files) {
   total += countEmptyCatches(fs.readFileSync(f, 'utf8'));

@@ -195,6 +195,7 @@ function collectTargets(opts = {}) {
   const files = [];
   const exemptReported = [];
   files.push(...walkJs(path.join(ROOT, 'lib')));
+  files.push(...walkJs(path.join(ROOT, 'routes')));
   files.push(path.join(ROOT, 'server.js'));
   for (const abs of walkJs(path.join(ROOT, 'scripts'))) {
     const rel = path.relative(ROOT, abs);
