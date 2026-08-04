@@ -96,6 +96,9 @@ function assertSessionAccess(sessionId, principal, opts = {}) {
     return { ok: true, owner, override: true };
   }
 
+  try {
+    require('./opsMetrics').recordSessionForbidden({ session_id: sid.slice(0, 64), owner, principal: want });
+  } catch (_) { /* ok */ }
   return { ok: false, status: 403, error: 'session_forbidden' };
 }
 

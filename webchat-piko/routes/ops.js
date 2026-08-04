@@ -118,10 +118,10 @@ async function handleLegacyMetrics(req, res, ctx) {
 }
 
 async function handleOpsMetrics(req, res, ctx) {
-  const { send } = ctx;
+  const { send, rootDir } = ctx;
   try {
     const { snapshot } = require('../lib/opsMetrics');
-    send(res, 200, JSON.stringify(snapshot()));
+    send(res, 200, JSON.stringify(snapshot({ rootDir })));
   } catch (e) {
     send(res, 500, JSON.stringify({ ok: false, error: e.message || String(e) }));
   }

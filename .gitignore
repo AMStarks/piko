@@ -3,9 +3,20 @@
 .env.*
 !.env.example
 *.key
+sites/*/env.template
+sites/*/secrets-seed/
 
 # Dependencies
 node_modules/
+.venv-os/
+
+# KAIROS local dedupe state (optional)
+data/kairos-last-notify.json
+data/hitl_pending/*.json
+data/egyptian-insights/cultures_cache.sqlite
+data/egyptian-insights/assets/images/*
+!data/egyptian-insights/assets/images/.gitkeep
+!data/egyptian-insights/.gitkeep
 
 # Local data
 history/

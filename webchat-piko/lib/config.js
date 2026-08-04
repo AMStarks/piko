@@ -52,6 +52,10 @@ const SCHEMA = [
   { key: 'PIKO_SCORECARD_JSONL_MAX', type: 'int', default: '500', description: 'Max lines for learning_scorecard.jsonl' },
   { key: 'PIKO_HQ_AUDIT_JSONL_MAX', type: 'int', default: '2000', description: 'Max lines for hq-audit.jsonl' },
   { key: 'PIKO_SESSION_OWNER_OVERRIDE', type: 'bool', default: '0', description: 'Allow operators to access any sessionId (logged)' },
+  { key: 'PIKO_ALARM_QUEUE_STUCK_SEC', type: 'int', default: String(30 * 60), description: 'P4.6 alarm: pending job age seconds' },
+  { key: 'PIKO_ALARM_JOB_FAIL_STREAK', type: 'int', default: '5', description: 'P4.6 alarm: job failures in last hour' },
+  { key: 'PIKO_ALARM_CHAT_P95_MS', type: 'int', default: '120000', description: 'P4.6 alarm: chat p95 threshold ms' },
+  { key: 'PIKO_ALARM_COOLDOWN_MS', type: 'int', default: String(30 * 60 * 1000), description: 'P4.6 alarm cooldown between identical fires' },
 
   { key: 'EGYPTIAN_INSIGHTS_DATA_DIR', type: 'string', default: '', description: 'EI corpus data root' },
   { key: 'PIKO_EGYPTIAN_DATA_DIR', type: 'string', default: '', description: 'Alias for EI data root' },

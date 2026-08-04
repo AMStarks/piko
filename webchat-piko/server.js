@@ -2543,6 +2543,7 @@ async function handleRequest(req, res) {
       parseUrl,
       logPath: LOG_PATH,
       fs,
+      rootDir: __dirname,
     })) return;
   }
 
@@ -3323,6 +3324,13 @@ server.listen(PORT, '0.0.0.0', () => {
     tenantGate: jobEnabled('ea_lookin', __dirname),
     fn: async () => { runExternalOpScript('ea-lookin', 'scripts/ea-lookin.js'); },
   });
+
+  try {
+    const { registerOpsThresholdAlarms } = require('./lib/opsThresholdAlarms');
+    registerOpsThresholdAlarms(bootScheduler, { rootDir: __dirname });
+  } catch (e) {
+    console.warn('[boot] ops threshold alarms:', e.message);
+  }
 
   try {
     const n = bootScheduler.startAll();

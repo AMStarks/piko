@@ -61,20 +61,29 @@ function createScheduler(opts = {}) {
     const t0 = Date.now();
     try {
       await entry.fn({ profile });
+      const latency_ms = Date.now() - t0;
       log('info', 'scheduler_run', {
         tag: 'scheduler_run',
         id: entry.id,
         ok: true,
-        latency_ms: Date.now() - t0,
+        latency_ms,
       });
+      try {
+        require('./opsMetrics').recordSchedulerRun({ id: entry.id, ok: true, latency_ms });
+      } catch (_) { /* ok */ }
     } catch (e) {
+      const latency_ms = Date.now() - t0;
+      const err = String(e && e.message ? e.message : e).slice(0, 200);
       log('error', 'scheduler_run', {
         tag: 'scheduler_run',
         id: entry.id,
         ok: false,
-        latency_ms: Date.now() - t0,
-        error: String(e && e.message ? e.message : e).slice(0, 200),
+        latency_ms,
+        error: err,
       });
+      try {
+        require('./opsMetrics').recordSchedulerRun({ id: entry.id, ok: false, latency_ms, error: err });
+      } catch (_) { /* ok */ }
     }
   }
 

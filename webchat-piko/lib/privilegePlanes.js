@@ -82,6 +82,9 @@ function resolveRole(opts = {}) {
 
 function logPlaneDenied(meta) {
   try {
+    require('./opsMetrics').recordPlaneDenied(meta);
+  } catch (_) { /* ok */ }
+  try {
     require('./logger').log('warn', 'plane_denied', {
       tag: 'plane_denied',
       ...meta,
