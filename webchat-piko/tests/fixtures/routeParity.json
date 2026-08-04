@@ -1,7 +1,7 @@
 {
   "generated_from": "server.js",
   "generated_at": "2026-08-04",
-  "note": "Frozen baseline for Phase 3 decomposition. Update deliberately when adding/removing routes.",
+  "note": "Frozen baseline for Phase 3 decomposition. Update deliberately when adding/removing routes. Removed false-positive POST /api/chat/history (never a real route).",
   "routes": [
     {
       "method": "POST",
@@ -48,13 +48,6 @@
     {
       "method": "POST",
       "path": "/api/chat",
-      "match": "exact",
-      "auth": "api_auth",
-      "group": "chat"
-    },
-    {
-      "method": "POST",
-      "path": "/api/chat/history",
       "match": "exact",
       "auth": "api_auth",
       "group": "chat"

@@ -21,7 +21,6 @@ const https = require('https');
 const fs = require('fs');
 const url = require('url');
 const crypto = require('crypto');
-const cron = require('node-cron');
 const { exec, execSync, execFileSync, spawn } = require('child_process');
 const { promisify } = require('util');
 const execAsync = promisify(exec);
@@ -7638,96 +7637,19 @@ async function handleRequest(req, res) {
 
   if (await handleLaskoModerationRoute(req, res, pathname, { readBody, send, log })) return;
 
-  if (req.method === 'POST' && pathname === '/api/chat') {
-    return handleApiChat(req, res);
-  }
-  if (req.method === 'GET' && pathname === '/api/chat/history') {
-    try {
-      const u = new URL(req.url, 'http://localhost');
-      const sessionId = String(u.searchParams.get('sessionId') || u.searchParams.get('session_id') || '').trim();
-      const automationSession = isAutomationSession(sessionId);
-      const key = automationSession
-        ? (sessionId || 'automation')
-        : (process.env.PIKO_UNIFIED_SESSION_ID || sessionId || 'main');
-      const history = sessionStore.getHistory(key) || [];
-      return send(res, 200, JSON.stringify({
-        ok: true,
-        sessionId: key,
-        count: history.length,
-        max: sessionStore.MAX_HISTORY,
-        messages: history,
-      }));
-    } catch (e) {
-      return send(res, 500, JSON.stringify({ ok: false, error: e.message || 'history failed' }));
-    }
-  }
-  if (req.method === 'DELETE' && pathname === '/api/chat/history') {
-    try {
-      const u = new URL(req.url, 'http://localhost');
-      const sessionId = String(u.searchParams.get('sessionId') || u.searchParams.get('session_id') || '').trim();
-      const automationSession = isAutomationSession(sessionId);
-      const key = automationSession
-        ? (sessionId || 'automation')
-        : (process.env.PIKO_UNIFIED_SESSION_ID || sessionId || 'main');
-      sessionStore.clear(key);
-      return send(res, 200, JSON.stringify({ ok: true, sessionId: key, cleared: true }));
-    } catch (e) {
-      return send(res, 500, JSON.stringify({ ok: false, error: e.message || 'clear failed' }));
-    }
-  }
-
-  if (req.method === 'POST' && pathname === '/api/chat/inject') {
-    readBody(req)
-      .then((body) => {
-        let json;
-        try {
-          json = JSON.parse(body || '{}');
-        } catch (_) {
-          return send(res, 400, JSON.stringify({ error: 'Invalid JSON' }));
-        }
-        // Auth: operator session (via protected-path gate) or PIKO_API_KEY.
-        // When admin auth is disabled, require the API key explicitly.
-        try {
-          const { keyMatches, presentedKey } = require('./lib/apiAuth');
-          const { query: q } = parseUrl(req.url);
-          const hasKey = keyMatches(presentedKey(req, q));
-          if (!adminAuth.isEnabled() && !hasKey) {
-            return send(res, 401, JSON.stringify({ ok: false, error: 'Unauthorized' }));
-          }
-        } catch (_) {
-          if (!adminAuth.isEnabled()) {
-            return send(res, 401, JSON.stringify({ ok: false, error: 'Unauthorized' }));
-          }
-        }
-        const sessionId = String(json.sessionId || json.session_id || '').trim();
-        const role = String(json.role || 'assistant').trim().toLowerCase();
-        const content = json.content;
-        if (!sessionId || typeof content !== 'string') {
-          return send(res, 400, JSON.stringify({ error: 'Missing sessionId or content' }));
-        }
-        if (role !== 'user' && role !== 'assistant') {
-          return send(res, 400, JSON.stringify({ error: 'role must be user or assistant' }));
-        }
-        const ok = sessionStore.append(sessionId, role, content.slice(0, 10000));
-        try {
-          const { recordNotification } = require('./lib/notificationFeed');
-          recordNotification({
-            category: 'system',
-            severity: 'info',
-            source: 'chat_inject',
-            title: 'Chat inject',
-            text: `Injected ${role} message into session ${sessionId.slice(0, 64)} (${String(content).length} chars)`,
-            meta: { session_id: sessionId.slice(0, 128), role },
-          });
-        } catch (_) { /* optional */ }
-        if (process.env.PIKO_LOG_PLANNER === '1') console.log('[MEMORY] Injected', role, 'vision context into session', sessionId.slice(0, 30));
-        return send(res, 200, JSON.stringify({ success: !!ok }));
-      })
-      .catch((e) => {
-        console.error('[MEMORY INJECTION]', e.message);
-        return send(res, 500, JSON.stringify({ error: 'Failed to inject memory' }));
-      });
-    return;
+  // —— Chat routes (extracted: routes/chat.js; pipeline body still handleApiChat) ——
+  if (pathname === '/api/chat' || pathname.startsWith('/api/chat/')) {
+    const { tryHandleChat } = require('./routes/chat');
+    if (await tryHandleChat(req, res, {
+      pathname,
+      send,
+      readBody,
+      sessionStore,
+      isAutomationSession,
+      parseUrl,
+      adminAuth,
+      handleApiChat,
+    })) return;
   }
 
   if (req.method === 'POST' && pathname === '/api/ios-hub') {
@@ -11223,27 +11145,52 @@ server.listen(PORT, '0.0.0.0', () => {
   } catch (e) {
     if (process.env.PIKO_LOG_PLANNER === '1') console.warn('[boot] agent worker:', e.message);
   }
-  // EI research campaign scheduler — enqueue a cycle when due (operator can pause).
-  try {
-    const campaignTimer = setInterval(() => {
-      try {
-        const { dueForCycle } = require('./lib/eiResearchCampaign');
-        if (!dueForCycle()) return;
-        const { enqueueAgentJob } = require('./lib/agentOrchestrator');
-        const { listJobs } = require('./lib/agentJobs');
-        const pending = listJobs(60)
-          .some((j) => j.type === 'campaign_cycle' && ['pending', 'running'].includes(j.status));
-        if (pending) return;
-        enqueueAgentJob('campaign_cycle', { source: 'scheduler' }, { rootDir: __dirname });
-        console.log('[campaign] enqueued research campaign cycle');
-      } catch (e) {
-        if (process.env.PIKO_LOG_PLANNER === '1') console.warn('[campaign] scheduler:', e.message);
-      }
-    }, 60 * 1000);
-    if (typeof campaignTimer.unref === 'function') campaignTimer.unref();
-  } catch (e) {
-    if (process.env.PIKO_LOG_PLANNER === '1') console.warn('[boot] campaign scheduler:', e.message);
-  }
+  // P3.1d: tenant-gated scheduler registry (campaign + previously ungated crons).
+  const { createScheduler, cultureOnly, always, jobEnabled } = require('./lib/scheduler');
+  const bootScheduler = createScheduler({
+    rootDir: __dirname,
+    getTenantProfile: () => getTenantBackgroundProfile(__dirname),
+  });
+  const { isJobEnabled } = require('./lib/operationsOverrides');
+  const TENANT_JOB_BY_OPS_ID = {
+    'proactive-cycle': 'proactive_cycle',
+    'intent-poller': 'intent_poller',
+    'legion-watch': 'legion_watch',
+    'api-ping': 'api_ping',
+    'legion-backup': 'legion_backup',
+    'context-refresh': 'context_refresh',
+    'nightly-wisdom': 'nightly_wisdom',
+    'nightly-quant': 'nightly_quant',
+    'daily-memory-summarize': 'daily_memory_summarize',
+    'rabbit-hole-daily': 'rabbit_hole_daily',
+    'meta-reflection-weekly': 'meta_reflection_weekly',
+    'ea-lookin': 'ea_lookin',
+  };
+  const runExternalOpScript = (jobId, scriptRel) => {
+    const tenantJob = TENANT_JOB_BY_OPS_ID[jobId];
+    if (tenantJob && !isBackgroundJobEnabled(tenantJob, __dirname)) return;
+    if (!isJobEnabled(jobId)) return;
+    const cwd = __dirname;
+    exec(`node ${scriptRel}`, { cwd, env: process.env, timeout: 300000 }, (err) => {
+      if (err) log('error', 'ops_external', { jobId, message: err.message });
+    });
+  };
+  bootScheduler.register({
+    id: 'campaign_cycle_enqueue',
+    intervalMs: 60 * 1000,
+    tenantGate: cultureOnly,
+    fn: async () => {
+      const { dueForCycle } = require('./lib/eiResearchCampaign');
+      if (!dueForCycle()) return;
+      const { enqueueAgentJob } = require('./lib/agentOrchestrator');
+      const { listJobs } = require('./lib/agentJobs');
+      const pending = listJobs(60)
+        .some((j) => j.type === 'campaign_cycle' && ['pending', 'running'].includes(j.status));
+      if (pending) return;
+      enqueueAgentJob('campaign_cycle', { source: 'scheduler' }, { rootDir: __dirname });
+      console.log('[campaign] enqueued research campaign cycle');
+    },
+  });
   if (isBackgroundJobEnabled('friday_closer', __dirname)) {
     try {
       const { startFridayCloser } = require('./scripts/fridayCloser');
@@ -11292,43 +11239,41 @@ server.listen(PORT, '0.0.0.0', () => {
       log('error', 'proactive_cycle_boot', { code: e.code || '', message: e.message });
     });
   }
-  if (isBackgroundJobEnabled('unified_heartbeat', __dirname)) {
-    cron.schedule('*/5 * * * *', runUnifiedHeartbeat);
-  }
-
-  // The Watchman — every 5 mins: evaluate tripwires (AusMaker spine only)
-  if (isBackgroundJobEnabled('tripwire', __dirname)) {
-  cron.schedule('*/5 * * * *', async () => {
-    const { evaluateTripwires } = require('./lib/tripwireEngine');
-    try {
+  // P3.1d — all boot crons/intervals register here (tenantGate + structured scheduler_run).
+  bootScheduler.register({
+    id: 'unified_heartbeat',
+    cronExpr: '*/5 * * * *',
+    tenantGate: jobEnabled('unified_heartbeat', __dirname),
+    fn: async () => { runUnifiedHeartbeat(); },
+  });
+  bootScheduler.register({
+    id: 'tripwire_eval',
+    cronExpr: '*/5 * * * *',
+    tenantGate: jobEnabled('tripwire', __dirname),
+    fn: async () => {
+      const { evaluateTripwires } = require('./lib/tripwireEngine');
       await evaluateTripwires(async (alertMessage) => {
         console.log('[TRIPWIRE TRIGGERED]:', alertMessage.slice(0, 120) + (alertMessage.length > 120 ? '…' : ''));
         await telegramNotify(alertMessage, { category: 'tripwire', title: 'Scheduled check', severity: 'warn', source: 'tripwireEngine' });
       });
-    } catch (e) {
-      log('error', 'tripwire_eval', { message: e.message });
-    }
+    },
   });
-  }
-
-  // Sovereign Watchman — AusMaker RED transition alert (AusMaker spine only)
-  if (isBackgroundJobEnabled('ausmaker_watchman', __dirname)) {
-  cron.schedule('*/5 * * * *', async () => {
-    try {
+  bootScheduler.register({
+    id: 'ausmaker_watchman',
+    cronExpr: '*/5 * * * *',
+    tenantGate: jobEnabled('ausmaker_watchman', __dirname),
+    fn: async () => {
       const AUSMAKER_WATCH_FILE = path.join(DATA_DIR, 'ausmaker-watchman.json');
       const cooldownHours = Math.max(0.25, Number(process.env.PIKO_AUSMAKER_ALERT_COOLDOWN_HOURS || 4));
       const now = Date.now();
-
       let prev = { health: null, lastAlertAt: 0 };
       try {
         if (fs.existsSync(AUSMAKER_WATCH_FILE)) {
           prev = Object.assign(prev, JSON.parse(fs.readFileSync(AUSMAKER_WATCH_FILE, 'utf8') || '{}'));
         }
-      } catch (_) {}
-
+      } catch (_) { /* ok */ }
       const base = stripTrailingSlash(AUSMAKER_BASE_URL);
       const { getUrl } = require('./lib/legionRunPoller');
-
       const forecastRes = await getUrl(`${base}/api/forecast/cached`);
       let forecast = null;
       if (forecastRes.statusCode === 200) {
@@ -11341,7 +11286,6 @@ server.listen(PORT, '0.0.0.0', () => {
       let health = 'GREEN';
       if (reorderCount > 0) health = 'RED';
       else if (reviewCount > 0) health = 'YELLOW';
-
       const salesRes = await getUrl(`${base}/api/sales/summary?period=today`);
       let salesTodayUnits = 0;
       try {
@@ -11349,19 +11293,16 @@ server.listen(PORT, '0.0.0.0', () => {
           const s = JSON.parse(salesRes.body || '{}');
           salesTodayUnits = Number(s.total_units_sold) || 0;
         }
-      } catch (_) {}
-
+      } catch (_) { /* ok */ }
       const syncTs = (forecast && (forecast.last_synced_at || forecast._cached_at || forecast.timestamp)) || null;
-
       const wasRed = String(prev.health || '').toUpperCase() === 'RED';
       const isRed = String(health).toUpperCase() === 'RED';
       const cooledDown = (now - Number(prev.lastAlertAt || 0)) >= cooldownHours * 3600 * 1000;
-
       if (!wasRed && isRed && cooledDown) {
         const msg = [
           '⚠️ **SOVEREIGN ALERT: AUSMAKER AT RISK**',
           '',
-          `Inventory health is now **RED**.`,
+          'Inventory health is now **RED**.',
           `- Reorders Required: **${reorderCount}**`,
           `- Reviews Pending: **${reviewCount}**`,
           `- Ordered (awaiting): **${orderedCount}**`,
@@ -11371,7 +11312,6 @@ server.listen(PORT, '0.0.0.0', () => {
         await telegramNotify(msg);
         prev.lastAlertAt = now;
       }
-
       prev.health = health;
       prev.reorderCount = reorderCount;
       prev.reviewCount = reviewCount;
@@ -11382,16 +11322,14 @@ server.listen(PORT, '0.0.0.0', () => {
       try {
         fs.mkdirSync(DATA_DIR, { recursive: true });
         fs.writeFileSync(AUSMAKER_WATCH_FILE, JSON.stringify(prev, null, 2), 'utf8');
-      } catch (_) {}
-    } catch (e) {
-      log('error', 'ausmaker_watchman', { message: e.message });
-    }
+      } catch (_) { /* ok */ }
+    },
   });
-  }
-
-  // The Daily Digest — every minute: check dynamic schedules (AusMaker)
-  if (isBackgroundJobEnabled('tripwire', __dirname)) {
-    cron.schedule('* * * * *', async () => {
+  bootScheduler.register({
+    id: 'daily_digest',
+    cronExpr: '* * * * *',
+    tenantGate: jobEnabled('tripwire', __dirname),
+    fn: async () => {
       const { loadSchedules, saveSchedules, flushDailyDigest } = require('./lib/tripwireEngine');
       const schedules = loadSchedules();
       if (schedules.length === 0) return;
@@ -11416,112 +11354,96 @@ server.listen(PORT, '0.0.0.0', () => {
         }
       }
       if (schedulesUpdated) saveSchedules(schedules);
-    });
-  }
-
-  // The Urgency Engine — every 30 mins during work hours (9am–5pm) (AusMaker only)
-  if (isBackgroundJobEnabled('urgency_engine', __dirname)) {
-    cron.schedule('*/30 9-17 * * *', async () => {
+    },
+  });
+  bootScheduler.register({
+    id: 'urgency_engine',
+    cronExpr: '*/30 9-17 * * *',
+    tenantGate: jobEnabled('urgency_engine', __dirname),
+    fn: async () => {
       const { runInternalMonologue } = require('./lib/urgencyEngine');
-      try {
-        await runInternalMonologue(async (msg) => await telegramNotify(msg));
-      } catch (e) {
-        log('error', 'urgency_engine', { message: e.message });
-      }
-    });
-  }
-
-  // The Weekly PO — Thursdays at 4 PM (AusMaker only)
-  if (isBackgroundJobEnabled('weekly_po', __dirname)) {
-    cron.schedule('0 16 * * 4', async () => {
+      await runInternalMonologue(async (msg) => await telegramNotify(msg));
+    },
+  });
+  bootScheduler.register({
+    id: 'weekly_po',
+    cronExpr: '0 16 * * 4',
+    tenantGate: jobEnabled('weekly_po', __dirname),
+    fn: async () => {
       const { flushWeeklyPO } = require('./lib/tripwireEngine');
-      try {
-        await flushWeeklyPO(async (reportMessage) => {
-          await telegramNotify(reportMessage);
-        });
-      } catch (e) {
-        console.error('[WEEKLY PO] Failed:', e.message);
-      }
-    });
-  }
-
-  if (isBackgroundJobEnabled('history_dump', __dirname)) {
-    cron.schedule('* * * * *', () => {
+      await flushWeeklyPO(async (reportMessage) => {
+        await telegramNotify(reportMessage);
+      });
+    },
+  });
+  bootScheduler.register({
+    id: 'history_dump',
+    cronExpr: '* * * * *',
+    tenantGate: jobEnabled('history_dump', __dirname),
+    fn: async () => {
       const today = new Date().toISOString().slice(0, 10);
       if (today > lastDumpDate) {
         dumpHistory(lastDumpDate);
         lastDumpDate = today;
       }
-    });
-  }
-
-  const { isJobEnabled } = require('./lib/operationsOverrides');
-  const TENANT_JOB_BY_OPS_ID = {
-    'proactive-cycle': 'proactive_cycle',
-    'intent-poller': 'intent_poller',
-    'legion-watch': 'legion_watch',
-    'api-ping': 'api_ping',
-    'legion-backup': 'legion_backup',
-    'context-refresh': 'context_refresh',
-    'nightly-wisdom': 'nightly_wisdom',
-    'nightly-quant': 'nightly_quant',
-    'daily-memory-summarize': 'daily_memory_summarize',
-    'rabbit-hole-daily': 'rabbit_hole_daily',
-    'meta-reflection-weekly': 'meta_reflection_weekly',
-    'ea-lookin': 'ea_lookin',
-  };
-  const runExternalOpScript = (jobId, scriptRel) => {
-    const tenantJob = TENANT_JOB_BY_OPS_ID[jobId];
-    if (tenantJob && !isBackgroundJobEnabled(tenantJob, __dirname)) return;
-    if (!isJobEnabled(jobId)) return;
-    const cwd = __dirname;
-    exec(`node ${scriptRel}`, { cwd, env: process.env, timeout: 300000 }, (err) => {
-      if (err) log('error', 'ops_external', { jobId, message: err.message });
-    });
-  };
-
-  if (isBackgroundJobEnabled('proactive_cycle', __dirname)) {
-    cron.schedule('*/5 * * * *', () => {
+    },
+  });
+  bootScheduler.register({
+    id: 'proactive_cycle',
+    cronExpr: '*/5 * * * *',
+    tenantGate: jobEnabled('proactive_cycle', __dirname),
+    fn: async () => {
       if (!isJobEnabled('proactive-cycle')) return;
-      proactiveCycleRunner.run('scheduler', { skipIfBusy: true }).catch((e) => {
-        log('error', 'proactive_cycle', { code: e.code || '', message: e.message });
-      });
-    });
-  }
-  if (isBackgroundJobEnabled('intent_poller', __dirname)) {
-    cron.schedule('*/5 * * * *', () => {
+      await proactiveCycleRunner.run('scheduler', { skipIfBusy: true });
+    },
+  });
+  bootScheduler.register({
+    id: 'intent_poller',
+    cronExpr: '*/5 * * * *',
+    tenantGate: jobEnabled('intent_poller', __dirname),
+    fn: async () => {
       if (!isJobEnabled('intent-poller')) return;
-      const cwd = __dirname;
-      exec('node scripts/intent-poller.js', { cwd, env: process.env, timeout: 60000 }, (err) => {
-        if (err) log('error', 'intent_poller', { message: err.message }, null);
+      await new Promise((resolve) => {
+        exec('node scripts/intent-poller.js', { cwd: __dirname, env: process.env, timeout: 60000 }, (err) => {
+          if (err) log('error', 'intent_poller', { message: err.message }, null);
+          resolve();
+        });
       });
-    });
-  }
-  if (isBackgroundJobEnabled('legion_watch', __dirname)) {
-    cron.schedule('*/5 * * * *', () => {
-      runExternalOpScript('legion-watch', 'scripts/legion-watch.js');
-    });
-  }
-  if (isBackgroundJobEnabled('api_ping', __dirname)) {
-    cron.schedule('*/15 * * * *', () => {
-      runExternalOpScript('api-ping', 'scripts/api-ping-site.js');
-    });
-  }
-  if (isBackgroundJobEnabled('legion_backup', __dirname)) {
-    cron.schedule('30 2 * * *', () => {
+    },
+  });
+  bootScheduler.register({
+    id: 'legion_watch',
+    cronExpr: '*/5 * * * *',
+    tenantGate: jobEnabled('legion_watch', __dirname),
+    fn: async () => { runExternalOpScript('legion-watch', 'scripts/legion-watch.js'); },
+  });
+  bootScheduler.register({
+    id: 'api_ping',
+    cronExpr: '*/15 * * * *',
+    tenantGate: jobEnabled('api_ping', __dirname),
+    fn: async () => { runExternalOpScript('api-ping', 'scripts/api-ping-site.js'); },
+  });
+  bootScheduler.register({
+    id: 'legion_backup',
+    cronExpr: '30 2 * * *',
+    tenantGate: jobEnabled('legion_backup', __dirname),
+    fn: async () => {
       if (!isJobEnabled('legion-backup')) return;
-      const cwd = __dirname;
-      exec('bash scripts/legion-backup-onbox.sh', { cwd, env: process.env, timeout: 300000 }, (err) => {
-        if (err) log('error', 'legion_backup', { message: err.message });
+      await new Promise((resolve) => {
+        exec('bash scripts/legion-backup-onbox.sh', { cwd: __dirname, env: process.env, timeout: 300000 }, (err) => {
+          if (err) log('error', 'legion_backup', { message: err.message });
+          resolve();
+        });
       });
-    });
-  }
-  if (isBackgroundJobEnabled('context_refresh', __dirname)) {
-    cron.schedule('0 6,12,18 * * *', () => {
-      runExternalOpScript('context-refresh', 'scripts/context-refresh.js');
-    });
-  }
-  // Phase 3: continuous mind loop — processes due intents every 60s when ReAct agent enabled
+    },
+  });
+  bootScheduler.register({
+    id: 'context_refresh',
+    cronExpr: '0 6,12,18 * * *',
+    tenantGate: jobEnabled('context_refresh', __dirname),
+    fn: async () => { runExternalOpScript('context-refresh', 'scripts/context-refresh.js'); },
+  });
+  // Continuous mind loop — processes due intents every 60s when ReAct agent enabled
   const useReAct = process.env.PIKO_USE_REACT_AGENT === '1' || process.env.PIKO_USE_REACT_AGENT === 'true';
   if (useReAct) {
     const { fork } = require('child_process');
@@ -11533,76 +11455,68 @@ server.listen(PORT, '0.0.0.0', () => {
     });
     if (process.env.PIKO_LOG_PLANNER === '1') console.log('[boot] Mind loop spawned');
   }
-  // Moltbook disabled — no longer maintained. Removed cron to avoid 403s and event-loop churn.
-  if (isBackgroundJobEnabled('nightly_wisdom', __dirname)) {
-    cron.schedule('0 2 * * *', () => {
+  bootScheduler.register({
+    id: 'nightly_wisdom',
+    cronExpr: '0 2 * * *',
+    tenantGate: jobEnabled('nightly_wisdom', __dirname),
+    fn: async () => {
       if (!isJobEnabled('nightly-wisdom')) return;
-      require('./scripts/nightly_wisdom').runNightlyWisdom().catch((e) => log('error', 'nightly_wisdom', { message: e.message }));
-    });
-  }
-  // EI platform eval — 3:30 AM culture spine (smoke + golden harvest rubric)
-  if (isBackgroundJobEnabled('ei_platform_eval', __dirname)) {
-    cron.schedule('30 3 * * *', async () => {
-      try {
-        const { isAgentOrchEnabled, enqueueAgentJob } = require('./lib/agentOrchestrator');
-        if (!isAgentOrchEnabled(__dirname)) return;
-        const queued = enqueueAgentJob('ei_platform_eval', {
-          source: 'cron:nightly',
-          notify: true,
-          notify_telegram: true,
-        }, { rootDir: __dirname });
-        log('info', 'ei_platform_eval', { queued: queued.ok, job_id: queued.job && queued.job.id }, null);
-      } catch (e) {
-        log('error', 'ei_platform_eval', { message: e.message }, null);
-      }
-    });
-  }
-  // EI engineering queue tick — every 15 min when auto mode on
-  if (isBackgroundJobEnabled('ei_engineering_queue', __dirname)) {
-    cron.schedule('*/15 * * * *', () => {
-      try {
-        const { tickEngineeringQueue } = require('./lib/eiEngineeringQueue');
-        const out = tickEngineeringQueue(__dirname);
-        if (out.processed > 0) {
-          log('info', 'ei_engineering_queue', out, null);
-        }
-      } catch (e) {
-        log('error', 'ei_engineering_queue', { message: e.message }, null);
-      }
-    });
-  }
-  // WP11 W3 — stance synthesis (position papers) daily 4:15 AM culture spine
-  if (isBackgroundJobEnabled('ei_stance_synthesis', __dirname)) {
-    cron.schedule('15 4 * * *', async () => {
-      try {
-        const { runStanceSynthesis } = require('./lib/eiStancePositions');
-        const out = await runStanceSynthesis({});
-        log('info', 'ei_stance_synthesis', {
-          rebuilt: out.rebuilt,
-          skipped: (out.skipped || []).length,
-        }, null);
-      } catch (e) {
-        log('error', 'ei_stance_synthesis', { message: e.message }, null);
-      }
-    });
-  }
-  // P1.5 — permanently delete quarantined harvests older than 14 days (5:30 AM)
-  if (isBackgroundJobEnabled('ei_quarantine_cleanup', __dirname)) {
-    cron.schedule('30 5 * * *', () => {
-      try {
-        const { purgeExpiredQuarantine } = require('./lib/culturesCorpusApi');
-        const out = purgeExpiredQuarantine({});
-        if (out.purged > 0) {
-          log('info', 'ei_quarantine_cleanup', out, null);
-        }
-      } catch (e) {
-        log('error', 'ei_quarantine_cleanup', { message: e.message }, null);
-      }
-    });
-  }
-  // Nightly Quant Agent — 1 AM: AusMaker inventory forecasts only
-  if (isBackgroundJobEnabled('nightly_quant', __dirname)) {
-    cron.schedule('0 1 * * *', async () => {
+      await require('./scripts/nightly_wisdom').runNightlyWisdom();
+    },
+  });
+  bootScheduler.register({
+    id: 'ei_platform_eval',
+    cronExpr: '30 3 * * *',
+    tenantGate: jobEnabled('ei_platform_eval', __dirname),
+    fn: async () => {
+      const { isAgentOrchEnabled, enqueueAgentJob } = require('./lib/agentOrchestrator');
+      if (!isAgentOrchEnabled(__dirname)) return;
+      const queued = enqueueAgentJob('ei_platform_eval', {
+        source: 'cron:nightly',
+        notify: true,
+        notify_telegram: true,
+      }, { rootDir: __dirname });
+      log('info', 'ei_platform_eval', { queued: queued.ok, job_id: queued.job && queued.job.id }, null);
+    },
+  });
+  bootScheduler.register({
+    id: 'ei_engineering_queue',
+    cronExpr: '*/15 * * * *',
+    tenantGate: jobEnabled('ei_engineering_queue', __dirname),
+    fn: async () => {
+      const { tickEngineeringQueue } = require('./lib/eiEngineeringQueue');
+      const out = tickEngineeringQueue(__dirname);
+      if (out.processed > 0) log('info', 'ei_engineering_queue', out, null);
+    },
+  });
+  bootScheduler.register({
+    id: 'ei_stance_synthesis',
+    cronExpr: '15 4 * * *',
+    tenantGate: jobEnabled('ei_stance_synthesis', __dirname),
+    fn: async () => {
+      const { runStanceSynthesis } = require('./lib/eiStancePositions');
+      const out = await runStanceSynthesis({});
+      log('info', 'ei_stance_synthesis', {
+        rebuilt: out.rebuilt,
+        skipped: (out.skipped || []).length,
+      }, null);
+    },
+  });
+  bootScheduler.register({
+    id: 'ei_quarantine_cleanup',
+    cronExpr: '30 5 * * *',
+    tenantGate: jobEnabled('ei_quarantine_cleanup', __dirname),
+    fn: async () => {
+      const { purgeExpiredQuarantine } = require('./lib/culturesCorpusApi');
+      const out = purgeExpiredQuarantine({});
+      if (out.purged > 0) log('info', 'ei_quarantine_cleanup', out, null);
+    },
+  });
+  bootScheduler.register({
+    id: 'nightly_quant',
+    cronExpr: '0 1 * * *',
+    tenantGate: jobEnabled('nightly_quant', __dirname),
+    fn: async () => {
       if (!isJobEnabled('nightly-quant')) return;
       const { getConfig } = require('./lib/configManager');
       if (getConfig().nightlyQuantEnabled === false) {
@@ -11610,10 +11524,10 @@ server.listen(PORT, '0.0.0.0', () => {
         return;
       }
       console.log('[CRON] Waking up Quant Agent for nightly batch forecast...');
+      const { deploySubAgent } = require('./lib/legionSwarm');
+      const { notifyAdmin } = require('./lib/notifyAdmin');
+      const taskContext = 'Deploy the quant agent to run our statistical forecasts and write all SKUs to the database.';
       try {
-        const { deploySubAgent } = require('./lib/legionSwarm');
-        const { notifyAdmin } = require('./lib/notifyAdmin');
-        const taskContext = 'Deploy the quant agent to run our statistical forecasts and write all SKUs to the database.';
         const result = await deploySubAgent('quant', taskContext);
         if (result && !result.startsWith('Error:') && !result.includes('Failed after')) {
           await notifyAdmin('Overnight forecasts are done — stock predictions for the whole catalogue are refreshed and ready for today.', {
@@ -11624,7 +11538,6 @@ server.listen(PORT, '0.0.0.0', () => {
           });
         } else {
           console.error('[CRON] Quant Agent failed:', result || 'No result');
-          // Raw error stays in the server log + meta; clients get plain language.
           await notifyAdmin("Last night's forecast run didn't finish, so today's stock predictions may be a day old. Piko will retry tonight automatically.", {
             category: 'nightly_quant',
             title: 'Overnight forecasts',
@@ -11635,7 +11548,6 @@ server.listen(PORT, '0.0.0.0', () => {
         }
       } catch (e) {
         console.error('[CRON] Quant Agent failed:', e.message);
-        const { notifyAdmin } = require('./lib/notifyAdmin');
         await notifyAdmin("Last night's forecast run didn't finish, so today's stock predictions may be a day old. Piko will retry tonight automatically.", {
           category: 'nightly_quant',
           title: 'Overnight forecasts',
@@ -11644,53 +11556,88 @@ server.listen(PORT, '0.0.0.0', () => {
           meta: { error: e.message || 'Unknown error' },
         }).catch(() => {});
       }
-    });
-  }
-  cron.schedule('0 3 * * *', () => {
-    if (!isJobEnabled('belief-consolidation')) return;
-    beliefLoop.runBeliefConsolidation()
-      .then(() => memory.pruneEpisodicOlderThanDays())
-      .then(() => beliefLoop.resolveBeliefConflicts())
-      .catch((e) => log('error', 'belief_consolidation', { message: e.message }));
+    },
   });
-  cron.schedule('0 3 * * 0', () => {
-    if (!isJobEnabled('memory-consolidation')) return;
-    require('./scripts/memoryConsolidation').consolidateSoul().catch((e) => log('error', 'memory_consolidation', { message: e.message }));
+  bootScheduler.register({
+    id: 'belief-consolidation',
+    cronExpr: '0 3 * * *',
+    tenantGate: always,
+    fn: async () => {
+      if (!isJobEnabled('belief-consolidation')) return;
+      await beliefLoop.runBeliefConsolidation();
+      await memory.pruneEpisodicOlderThanDays();
+      await beliefLoop.resolveBeliefConflicts();
+    },
   });
-  cron.schedule('0 8 * * 0', () => {
-    if (!isJobEnabled('weekly-retro')) return;
-    try {
+  bootScheduler.register({
+    id: 'memory-consolidation',
+    cronExpr: '0 3 * * 0',
+    tenantGate: always,
+    fn: async () => {
+      if (!isJobEnabled('memory-consolidation')) return;
+      await require('./scripts/memoryConsolidation').consolidateSoul();
+    },
+  });
+  bootScheduler.register({
+    id: 'weekly-retro',
+    cronExpr: '0 8 * * 0',
+    tenantGate: always,
+    fn: async () => {
+      if (!isJobEnabled('weekly-retro')) return;
       const { weeklyRetro } = require('./lib/metrics');
       const report = weeklyRetro();
       if (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) {
         const https = require('https');
         const body = JSON.stringify({ chat_id: process.env.TELEGRAM_CHAT_ID, text: report });
         const u = new URL(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`);
-        const req = https.request({ hostname: u.hostname, path: u.pathname + u.search, method: 'POST', headers: { 'Content-Type': 'application/json' } }, () => {});
-        req.on('error', (e) => log('error', 'weekly_retro_telegram', { message: e.message }));
-        req.write(body);
-        req.end();
+        await new Promise((resolve, reject) => {
+          const req = https.request({
+            hostname: u.hostname,
+            path: u.pathname + u.search,
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+          }, () => resolve());
+          req.on('error', reject);
+          req.write(body);
+          req.end();
+        });
       } else {
         const retroPath = path.join(DATA_DIR, 'learning', 'weekly-retro.md');
         fs.mkdirSync(path.dirname(retroPath), { recursive: true });
-        fs.appendFileSync(retroPath, '\n\n---\n' + new Date().toISOString() + '\n\n' + report, 'utf8');
+        fs.appendFileSync(retroPath, `\n\n---\n${new Date().toISOString()}\n\n${report}`, 'utf8');
       }
-    } catch (e) {
-      log('error', 'weekly_retro', { message: e.message });
-    }
+    },
+  });
+  bootScheduler.register({
+    id: 'daily_memory_summarize',
+    cronExpr: '0 0 * * *',
+    tenantGate: jobEnabled('daily_memory_summarize', __dirname),
+    fn: async () => { runExternalOpScript('daily-memory-summarize', 'scripts/daily-memory-summarize.js'); },
+  });
+  bootScheduler.register({
+    id: 'rabbit_hole_daily',
+    cronExpr: '0 23 * * *',
+    tenantGate: jobEnabled('rabbit_hole_daily', __dirname),
+    fn: async () => { runExternalOpScript('rabbit-hole-daily', 'scripts/rabbit-hole-daily.js'); },
+  });
+  bootScheduler.register({
+    id: 'meta_reflection_weekly',
+    cronExpr: '0 10 * * 0',
+    tenantGate: jobEnabled('meta_reflection_weekly', __dirname),
+    fn: async () => { runExternalOpScript('meta-reflection-weekly', 'scripts/meta-reflection-weekly.js'); },
+  });
+  bootScheduler.register({
+    id: 'ea_lookin',
+    cronExpr: '*/30 * * * *',
+    tenantGate: jobEnabled('ea_lookin', __dirname),
+    fn: async () => { runExternalOpScript('ea-lookin', 'scripts/ea-lookin.js'); },
   });
 
-  if (isBackgroundJobEnabled('daily_memory_summarize', __dirname)) {
-    cron.schedule('0 0 * * *', () => runExternalOpScript('daily-memory-summarize', 'scripts/daily-memory-summarize.js'));
-  }
-  if (isBackgroundJobEnabled('rabbit_hole_daily', __dirname)) {
-    cron.schedule('0 23 * * *', () => runExternalOpScript('rabbit-hole-daily', 'scripts/rabbit-hole-daily.js'));
-  }
-  if (isBackgroundJobEnabled('meta_reflection_weekly', __dirname)) {
-    cron.schedule('0 10 * * 0', () => runExternalOpScript('meta-reflection-weekly', 'scripts/meta-reflection-weekly.js'));
-  }
-  if (isBackgroundJobEnabled('ea_lookin', __dirname)) {
-    cron.schedule('*/30 * * * *', () => runExternalOpScript('ea-lookin', 'scripts/ea-lookin.js'));
+  try {
+    const n = bootScheduler.startAll();
+    console.log(`[scheduler] started ${n} jobs: ${bootScheduler.list().map((j) => j.id).join(', ')}`);
+  } catch (e) {
+    console.warn('[boot] scheduler start:', e.message);
   }
 
   console.log(`[heartbeat] tenant profile=${TENANT_BG.profileId}; shared jobs on; AusMaker ops ${TENANT_BG.isAusmaker ? 'enabled' : 'disabled'}`);
