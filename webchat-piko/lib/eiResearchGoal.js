@@ -39,6 +39,7 @@ const FALLBACK = {
   default_harvest_limit: 15,
   phase1_connectors: [
     'met', 'commons', 'artic', 'digital_giza', 'archive_org', 'web_pdf', 'topbib', 'tla',
+    'oraec', 'papyri', 'open_context', 'trismegistos',
   ],
 };
 
@@ -51,6 +52,10 @@ const CONNECTOR_ALIASES = {
   web_pdf: ['web_pdf', 'web pdf', 'open web', 'open-web', 'searxng', 'serper'],
   topbib: ['topbib', 'top bib', 'porter & moss', 'porter and moss', 'griffith topbib'],
   tla: ['tla', 'thesaurus linguae', 'thesaurus-linguae'],
+  oraec: ['oraec', 'open ras egyptian', 'oraec corpus'],
+  papyri: ['papyri', 'papyri.info', 'idp.data', 'ddbdp', 'duke databank'],
+  open_context: ['open_context', 'open context', 'opencontext'],
+  trismegistos: ['trismegistos', 'tm texts', 'demotic tm'],
   source_scout: [
     'source_scout',
     'source scout',
@@ -60,7 +65,9 @@ const CONNECTOR_ALIASES = {
   ],
 };
 
-const LITERATURE_SOURCES = ['archive_org', 'topbib', 'tla'];
+const LITERATURE_SOURCES = [
+  'archive_org', 'topbib', 'tla', 'oraec', 'papyri', 'trismegistos', 'open_context',
+];
 const OBJECT_SOURCES = ['met', 'commons', 'artic', 'digital_giza'];
 const DEFAULT_SOURCES = [...OBJECT_SOURCES, ...LITERATURE_SOURCES];
 

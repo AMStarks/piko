@@ -12,8 +12,13 @@ const {
   harvestAdapterPayload,
 } = require('./eiResearchGoal');
 
-const LIT_SOURCES = LITERATURE_SOURCES || ['archive_org', 'topbib', 'tla'];
-const IMAGE_SOURCES = ['met', 'commons', 'artic', 'digital_giza', 'archive_org', 'topbib', 'tla'];
+const LIT_SOURCES = LITERATURE_SOURCES || [
+  'archive_org', 'topbib', 'tla', 'oraec', 'papyri', 'trismegistos', 'open_context',
+];
+const IMAGE_SOURCES = [
+  'met', 'commons', 'artic', 'digital_giza', 'archive_org', 'topbib', 'tla',
+  'oraec', 'papyri', 'open_context',
+];
 /** Open-web seek engines: SearXNG/Serper finds PDFs anywhere; Archive.org is a preferred library among hosts, not an exclusive silo. */
 const SEEK_FILE_SOURCES = ['web_pdf', 'archive_org'];
 const { parseNamedWork, focusedSeekQuery } = require('./eiGoalParse');
@@ -233,7 +238,7 @@ function buildHarvestInput(goalText, overrides = {}) {
     || constraints.sources
     || [...IMAGE_SOURCES];
   if (overrides.bibliography_only === true) {
-    sources = ['topbib', 'tla'];
+    sources = ['topbib', 'tla', 'oraec', 'papyri', 'trismegistos'];
   }
   if (overrides.seek_files === true || overrides.volume_job === true || overrides.require_document === true) {
     if (!overrides.sources) sources = [...SEEK_FILE_SOURCES];
@@ -309,6 +314,95 @@ async function runLegionCap(capability, input, opts = {}) {
     pollTimeoutMs: opts.pollTimeoutMs,
     shouldAbort: opts.shouldAbort,
   });
+}
+
+async function runNamedSourceSeek(sourceName, toolName, args = {}, opts = {}) {
+  const mission = String(opts.goal || args.query || args.note || '').trim();
+  const q = args.query || mission;
+  const lim = Math.max(3, Math.min(20, Number(args.limit || 8)));
+  const input = buildHarvestInput(q, {
+    literature_only: true,
+    require_image: false,
+    require_document: false,
+    sources: [sourceName],
+    limit: lim,
+    note: mission.slice(0, 800),
+  });
+  const out = await runLegionCap('research.scrape.run', input, opts);
+  const items = (out.result && out.result.items) || [];
+  const kept = Number((out.result && out.result.kept) || items.length || 0);
+  return {
+    ok: out.status === 'ok' || items.length > 0,
+    tool: toolName,
+    artifact: [
+      out.artifact_text || `${toolName}: ${items.length} hit(s)`,
+      ...items.slice(0, 8).map((it) => `  · ${stripGapPrefix(it.title || it.source_id || '').slice(0, 80)}`),
+    ].join('\n'),
+    result: { source: sourceName, kept, items: items.slice(0, lim), raw: out.result || null },
+  };
+}
+
+async function runPointerChase(sourceName, toolName, args = {}, opts = {}) {
+  const mission = String(opts.goal || args.query || args.note || '').trim();
+  const named = parseNamedWork(mission);
+  const q = args.query || named.seekQuery || mission;
+  const lim = Math.max(3, Math.min(20, Number(args.limit || 8)));
+  const chaseLim = Math.max(1, Math.min(5, Number(args.chase_limit || 3)));
+  const input = buildHarvestInput(q, {
+    literature_only: true,
+    require_image: false,
+    require_document: false,
+    sources: [sourceName],
+    limit: lim,
+    note: mission.slice(0, 800),
+  });
+  const out = await runLegionCap('research.scrape.run', input, opts);
+  const items = (out.result && out.result.items) || [];
+  const pointers = items
+    .map((it) => ({
+      title: stripGapPrefix(it.title).slice(0, 160),
+      id: it.harvest_id || it.id,
+    }))
+    .filter((p) => p.title && p.title.length > 6)
+    .slice(0, chaseLim);
+
+  const chased = [];
+  for (const p of pointers) {
+    const seekQ = named.author
+      ? `"${p.title}" ${named.author} PDF`
+      : `"${p.title}" PDF Egypt`;
+    try {
+      const seekOut = await runTool('seek_files', {
+        query: seekQ,
+        limit: 8,
+        max_keeps: 1,
+      }, {
+        ...opts,
+        goal: named.author
+          ? `Please find and add to Corpus ${named.author}'s ${p.title}`
+          : `Please find and add to Corpus ${p.title}`,
+      });
+      chased.push({
+        pointer: p.title,
+        ok: !!seekOut.ok,
+        kept: (seekOut.result && seekOut.result.kept) || 0,
+        mission_fit: seekOut.mission_fit || null,
+      });
+    } catch (e) {
+      chased.push({ pointer: p.title, ok: false, error: String(e.message || e).slice(0, 120) });
+    }
+  }
+  const art = [
+    out.artifact_text,
+    `${sourceName} pointers chased: ${chased.length}`,
+    ...chased.map((c) => `  · ${c.pointer.slice(0, 50)} → kept=${c.kept || 0}${c.error ? ` err=${c.error}` : ''}`),
+  ].join('\n');
+  return {
+    ok: chased.some((c) => c.kept > 0) || out.status === 'ok',
+    tool: toolName,
+    artifact: art,
+    result: { pointers, chased, [sourceName]: out.result || null },
+  };
 }
 
 const TOOLS = {
@@ -658,66 +752,57 @@ const TOOLS = {
       'Search TopBib for bibliographic pointers matching the goal, then chase the best titles with open-web seek (pointer → PDF).',
     input_schema: { query: 'string', limit: 'number', chase_limit: 'number' },
     async run(args = {}, opts = {}) {
-      const mission = String(opts.goal || args.query || args.note || '').trim();
-      const named = parseNamedWork(mission);
-      const q = args.query || named.seekQuery || mission;
-      const lim = Math.max(3, Math.min(20, Number(args.limit || 8)));
-      const chaseLim = Math.max(1, Math.min(5, Number(args.chase_limit || 3)));
-      const input = buildHarvestInput(q, {
-        literature_only: true,
-        require_image: false,
-        require_document: false,
-        sources: ['topbib'],
-        limit: lim,
-        note: mission.slice(0, 800),
-      });
-      const out = await runLegionCap('research.scrape.run', input, opts);
-      const items = (out.result && out.result.items) || [];
-      const pointers = items
-        .map((it) => ({
-          title: stripGapPrefix(it.title).slice(0, 160),
-          id: it.harvest_id || it.id,
-        }))
-        .filter((p) => p.title && p.title.length > 6)
-        .slice(0, chaseLim);
+      return runPointerChase('topbib', 'chase_topbib', args, opts);
+    },
+  },
 
-      const chased = [];
-      for (const p of pointers) {
-        const seekQ = named.author
-          ? `"${p.title}" ${named.author} PDF`
-          : `"${p.title}" PDF Egypt`;
-        try {
-          const seekOut = await runTool('seek_files', {
-            query: seekQ,
-            limit: 8,
-            max_keeps: 1,
-          }, {
-            ...opts,
-            goal: named.author
-              ? `Please find and add to Corpus ${named.author}'s ${p.title}`
-              : `Please find and add to Corpus ${p.title}`,
-          });
-          chased.push({
-            pointer: p.title,
-            ok: !!seekOut.ok,
-            kept: (seekOut.result && seekOut.result.kept) || 0,
-            mission_fit: seekOut.mission_fit || null,
-          });
-        } catch (e) {
-          chased.push({ pointer: p.title, ok: false, error: String(e.message || e).slice(0, 120) });
-        }
-      }
-      const art = [
-        out.artifact_text,
-        `TopBib pointers chased: ${chased.length}`,
-        ...chased.map((c) => `  · ${c.pointer.slice(0, 50)} → kept=${c.kept || 0}${c.error ? ` err=${c.error}` : ''}`),
-      ].join('\n');
-      return {
-        ok: chased.some((c) => c.kept > 0) || out.status === 'ok',
-        tool: 'chase_topbib',
-        artifact: art,
-        result: { pointers, chased, topbib: out.result || null },
-      };
+  chase_tla: {
+    name: 'chase_tla',
+    description:
+      'Search Thesaurus Linguae Aegyptiae object/text index, then chase promising titles via open-web seek.',
+    input_schema: { query: 'string', limit: 'number', chase_limit: 'number' },
+    async run(args = {}, opts = {}) {
+      return runPointerChase('tla', 'chase_tla', args, opts);
+    },
+  },
+
+  seek_oraec: {
+    name: 'seek_oraec',
+    description:
+      'Search the ORAEC open Egyptian text corpus (inscriptions with translations / bibliography).',
+    input_schema: { query: 'string', limit: 'number' },
+    async run(args = {}, opts = {}) {
+      return runNamedSourceSeek('oraec', 'seek_oraec', args, opts);
+    },
+  },
+
+  seek_papyri: {
+    name: 'seek_papyri',
+    description:
+      'Search Integrating Digital Papyrology (papyri/idp.data — DDbDP/HGV/APIS/DCLP). Uses the open GitHub dump; papyri.info UI is bot-gated.',
+    input_schema: { query: 'string', limit: 'number' },
+    async run(args = {}, opts = {}) {
+      return runNamedSourceSeek('papyri', 'seek_papyri', args, opts);
+    },
+  },
+
+  seek_open_context: {
+    name: 'seek_open_context',
+    description:
+      'Search Open Context for archaeological excavation/archive records (primary context, not literary PDFs).',
+    input_schema: { query: 'string', limit: 'number' },
+    async run(args = {}, opts = {}) {
+      return runNamedSourceSeek('open_context', 'seek_open_context', args, opts);
+    },
+  },
+
+  seek_trismegistos: {
+    name: 'seek_trismegistos',
+    description:
+      'Search Trismegistos Demotic/Egyptian text index (christiancasey open dump → TM text pages).',
+    input_schema: { query: 'string', limit: 'number' },
+    async run(args = {}, opts = {}) {
+      return runNamedSourceSeek('trismegistos', 'seek_trismegistos', args, opts);
     },
   },
 
