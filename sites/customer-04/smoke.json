@@ -1,0 +1,24 @@
+{
+  "tenant_id": "customer-04",
+  "display_name": "customer-04",
+  "adapter_id": "customer-04-adapter",
+  "business_api": {
+    "port": 5001,
+    "health_paths": ["/", "/api/health"]
+  },
+  "adapter_steps": [
+    {
+      "name": "health_capability",
+      "capability": "health.check",
+      "input": {},
+      "poll_until": "completed",
+      "poll_max": 20
+    }
+  ],
+  "webchat_checks": [
+    "/api/health",
+    "/api/control/legion-adapter-health",
+    "/api/observe/summary"
+  ],
+  "post_scripts": []
+}

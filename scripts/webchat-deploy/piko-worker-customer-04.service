@@ -1,0 +1,17 @@
+[Unit]
+Description=Piko agent worker (customer-04)
+After=network.target
+Wants=piko-webchat-customer-04.service
+
+[Service]
+Type=simple
+WorkingDirectory=/home/chief/webchat-piko-customer-04
+ExecStart=/usr/bin/node scripts/agent-worker.js
+Restart=on-failure
+RestartSec=5
+Environment=PIKO_AGENT_ORCH=1
+Environment=PIKO_WORKER_STANDALONE=1
+EnvironmentFile=-/home/chief/webchat-piko-customer-04/.env
+
+[Install]
+WantedBy=default.target

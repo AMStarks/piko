@@ -19,6 +19,13 @@ const {
   stripTrailingSlash,
 } = require('./text');
 
+function authHeaders(extra = {}) {
+  const headers = { 'Content-Type': 'application/json', ...extra };
+  const key = String(process.env.PIKO_API_KEY || '').trim();
+  if (key) headers['X-Piko-Key'] = key;
+  return headers;
+}
+
 function postChat(baseUrl, message, sessionId = 'default', options = {}) {
   const timeout = options.timeout != null ? options.timeout : DEFAULT_TIMEOUT_MS;
   return new Promise((resolve, reject) => {
@@ -30,7 +37,7 @@ function postChat(baseUrl, message, sessionId = 'default', options = {}) {
       port: u.port || (isHttps ? 443 : 80),
       path: u.pathname,
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
     };
     const lib = isHttps ? https : http;
     const req = lib.request(opts, (res) => {
@@ -59,5 +66,6 @@ function postChat(baseUrl, message, sessionId = 'default', options = {}) {
 
 module.exports = {
   postChat,
+  authHeaders,
   DEFAULT_TIMEOUT_MS,
 };

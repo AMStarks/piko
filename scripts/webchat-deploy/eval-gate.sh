@@ -15,7 +15,7 @@ note() { echo "  [gate] $*"; }
 
 is_culture_tenant() {
   case "$TENANT" in
-    staging|customer-03|ei) return 0 ;;
+    staging|customer-03|ei|customer-04) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -140,7 +140,30 @@ else
 fi
 
 # 4. Culture-tenant retrieval golden probes (P3.5)
-if is_culture_tenant; then
+# Synthetic-culture dress rehearsal (customer-04) has lunar/mars threads, not Osireion corpus.
+# Load tenant .env inside the node probe so PIKO_DATA_DIR → ontology.json resolves.
+ONTOLOGY_PROFILE="$(ssh "$T_HOST" "cd '$T_DIR' && node -e \"
+  try {
+    const fs = require('fs');
+    if (fs.existsSync('.env')) {
+      for (const line of fs.readFileSync('.env', 'utf8').split('\\n')) {
+        const s = line.trim();
+        if (!s || s.startsWith('#') || !s.includes('=')) continue;
+        const i = s.indexOf('=');
+        const k = s.slice(0, i);
+        let v = s.slice(i + 1);
+        if (!process.env[k]) process.env[k] = v;
+      }
+    }
+    const { getOntologyPack, resetOntologyCache } = require('./lib/ontologyPack');
+    resetOntologyCache();
+    const p = getOntologyPack(__dirname) || {};
+    console.log(p.profile || '');
+  } catch (e) { console.log(''); }
+\"" 2>/dev/null || echo '')"
+is_synthetic_culture() { [[ "$ONTOLOGY_PROFILE" == "synthetic-culture" ]]; }
+
+if is_culture_tenant && ! is_synthetic_culture; then
   OSIREION_MSG='Have you come to any conclusions on the Osireion and its possible origins?'
   if gate_chat_post "$OSIREION_MSG" 'eval-gate-osireion' /tmp/gate-osireion.json 180; then
     OSIREION_OK="$(python3 -c 'import json,sys
@@ -185,11 +208,51 @@ else:
   else
     note "thread-alias (soft): WARN ($ALIAS_OK — non-blocking)"
   fi
+elif is_culture_tenant && is_synthetic_culture; then
+  note "osireion opinion: SKIP (synthetic-culture pack — no EI corpus)"
+  ALIAS_JSON="$(ssh "$T_HOST" "cd '$T_DIR' && node -e \"
+    const fs = require('fs');
+    if (fs.existsSync('.env')) {
+      for (const line of fs.readFileSync('.env', 'utf8').split('\\n')) {
+        const s = line.trim();
+        if (!s || s.startsWith('#') || !s.includes('=')) continue;
+        const i = s.indexOf('=');
+        const k = s.slice(0, i);
+        let v = s.slice(i + 1);
+        if (!process.env[k]) process.env[k] = v;
+      }
+    }
+    const { resetOntologyCache } = require('./lib/ontologyPack');
+    resetOntologyCache();
+    const d = require('./lib/eiThreadDossiers');
+    console.log(JSON.stringify({
+      moonbase: d.resolveThreadAlias('moonbase'),
+      osireion: d.resolveThreadAlias('osireion'),
+      unknown: d.resolveThreadAlias('atlantis-osireion')
+    }));
+  \"" 2>/dev/null || echo '{}')"
+  ALIAS_OK="$(python3 -c 'import json,sys
+try:
+    a = json.loads(sys.argv[1] or "{}")
+except Exception:
+    print("parse_fail"); sys.exit(0)
+if a.get("moonbase") == "lunar-base" and a.get("osireion") in (None, "") and a.get("unknown") in (None, ""):
+    print("ok")
+else:
+    print("bad", a)' "$ALIAS_JSON" 2>/dev/null || echo "parse_fail")"
+  if [[ "$ALIAS_OK" == "ok" ]]; then
+    note "thread-alias (soft): OK (moonbase→lunar-base; osireion absent — pack isolation)"
+  else
+    note "thread-alias (soft): FAIL ($ALIAS_OK — synthetic pack isolation)"; FAIL=1
+  fi
 fi
 
 # 5. Grounded status probe (culture tenants): a campaign status *question* must
 # answer (not dispatch) and quote a real number from live campaign state.
-if is_culture_tenant && gate_curl '/api/cultures/campaign' /tmp/gate-campaign.json; then
+# Synthetic-culture dress rehearsal has no live EI campaign corpus — skip.
+if is_culture_tenant && is_synthetic_culture; then
+  note "grounded status: SKIP (synthetic-culture — no live campaign state)"
+elif is_culture_tenant && gate_curl '/api/cultures/campaign' /tmp/gate-campaign.json; then
   CYCLES="$(python3 -c 'import json,sys
 try:
     s = json.load(sys.stdin).get("status") or {}
@@ -315,6 +378,29 @@ if [[ $MONEY_PROBE_OK -eq 0 ]]; then
     note "money confirm: FAIL (expected 403 money_confirm_required on ausmaker/customer money routes)"
     FAIL=1
   fi
+fi
+
+# 7. Soft schema guard for /api/ops/metrics (P5.4b) — denials/worker/scheduler keys.
+METRICS_JSON="$(ssh "$T_HOST" "cd '$T_DIR' && (set -a; [ -f .env ] && . ./.env; set +a; \
+  if [ -n \"\${PIKO_API_KEY:-}\" ]; then \
+    curl -sf -m 15 -H \"X-Piko-Key: \${PIKO_API_KEY}\" '$BASE/api/ops/metrics'; \
+  else \
+    curl -sf -m 15 '$BASE/api/ops/metrics'; \
+  fi)" 2>/dev/null || echo '{}')"
+METRICS_OK="$(python3 -c 'import json,sys
+try:
+    d=json.loads(sys.argv[1] or "{}")
+except Exception:
+    print("parse_fail"); sys.exit(0)
+missing=[k for k in ("denials","worker","scheduler") if k not in d]
+if missing:
+    print("missing:"+(",".join(missing)))
+else:
+    print("ok")' "$METRICS_JSON" 2>/dev/null || echo parse_fail)"
+if [[ "$METRICS_OK" == "ok" ]]; then
+  note "ops metrics schema (soft): OK (denials, worker, scheduler)"
+else
+  note "ops metrics schema (soft): WARN ($METRICS_OK — non-blocking)"
 fi
 
 [[ $FAIL -eq 0 ]] && { echo "  [gate] PASS"; exit 0; } || { echo "  [gate] FAIL"; exit 1; }

@@ -1,0 +1,40 @@
+{
+  "version": 2,
+  "contextFile": "context/aggregate.json",
+  "silentCapabilities": [],
+  "defaultAdapter": "egyptian-insights",
+  "dashboardProfile": "culture",
+  "contextRefresh": {
+    "enabled": true,
+    "skipIfFresh": true,
+    "maxAgeHours": 48,
+    "steps": [
+      {
+        "capability": "health.check",
+        "label": "Culture spine health"
+      }
+    ]
+  },
+  "adapterAliases": [
+    {
+      "pattern": "\\begypt|\\bhieroglyph|\\bpapyrus|\\bgardiner|\\bancient\\s+egypt|\\bcuneiform",
+      "adapterId": "egyptian-insights"
+    }
+  ],
+  "nativeCapabilities": [
+    {
+      "id": "system.intents.read",
+      "description": "Trigger when the user asks about tasks, reminders, pending items, what is in the queue, or what is scheduled."
+    },
+    {
+      "id": "system.intents.manage",
+      "description": "Trigger when the user wants to cancel, delete, stop, or remove a scheduled scan, reminder, or job."
+    },
+    {
+      "id": "system.operations.read",
+      "description": "Trigger when the user asks about background jobs, cron jobs, scripts, or server schedules."
+    }
+  ],
+  "detectors": [],
+  "notes": "Ancient Cultures / Egyptian Insights tenant. Research goal: earliest-period primary sources for Abydos/Oserion, Heliopolis, Giza. No AusMaker inventory or sales capabilities — isolation by design."
+}

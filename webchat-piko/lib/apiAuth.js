@@ -49,10 +49,22 @@ function presentedKey(req, query) {
   return '';
 }
 
+/**
+ * Match presented key to shared or named client key (P5.1c).
+ * @returns {{ name: string } | null} name is `shared` or client id
+ */
+function matchApiKey(presented) {
+  if (!presented) return null;
+  try {
+    const { matchNamedApiKey } = require('./secretsStore');
+    return matchNamedApiKey(presented);
+  } catch (_) {
+    return null;
+  }
+}
+
 function keyMatches(presented) {
-  if (!presented) return false;
-  const { verifySecret } = require('./secretsStore');
-  return verifySecret('api-key', presented);
+  return !!matchApiKey(presented);
 }
 
 function hasAdminSession(req, dataDir) {
@@ -105,6 +117,7 @@ module.exports = {
   checkApiAuth,
   isPrivateIp,
   keyMatches,
+  matchApiKey,
   presentedKey,
   cameThroughProxy,
 };

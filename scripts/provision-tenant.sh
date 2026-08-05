@@ -20,9 +20,12 @@ esac
 SITE_DIR="$ROOT/sites/$TENANT"
 KNOW_DIR="$ROOT/knowledge/$TENANT"
 ONTOLOGY_SRC="$ROOT/webchat-piko/config/ontology"
+# Culture dress rehearsal / new culture tenants seed the synthetic pack (isolated
+# threads/aliases from live EI culture.json). AusMaker falls back to culture pack
+# until a dedicated ausmaker ontology exists.
 ONTOLOGY_DST_NAME="culture.json"
-if [[ "$PROFILE" == "culture" ]]; then ONTOLOGY_DST_NAME="culture.json"; fi
-if [[ "$PROFILE" == "ausmaker" ]]; then ONTOLOGY_DST_NAME="culture.json"; fi  # fallback pack until ausmaker pack exists
+if [[ "$PROFILE" == "culture" ]]; then ONTOLOGY_DST_NAME="synthetic-culture.json"; fi
+if [[ "$PROFILE" == "ausmaker" ]]; then ONTOLOGY_DST_NAME="culture.json"; fi
 UNIT_WEB="piko-webchat-${TENANT}.service"
 UNIT_WORKER="piko-worker-${TENANT}.service"
 DEPLOY_CONF="$ROOT/scripts/webchat-deploy/tenants.conf"
@@ -128,6 +131,14 @@ ENV_OUT="$SITE_DIR/env.template"
   echo "PIKO_AGENT_WORKER=1"
   echo "PIKO_OLLAMA_ONLY=1"
   echo "PIKO_OLLAMA_QUEUE=1"
+  # Point at the GPU inference host (muscle rig). The local 127.0.0.1 Ollama on
+  # Optimus is CPU-only and times out on real ontology-context prompts (c04 incident 2026-08-05).
+  echo "OLLAMA_URL=http://192.168.0.190:11434"
+  echo "OLLAMA_MODEL=llama3.1:8b"
+  echo "PIKO_LEGATE_MODEL=llama3.1:8b"
+  echo "PIKO_UNDERSTAND_MODEL=llama3.1:8b"
+  echo "PIKO_HEAVY_MODEL=llama3.1:8b"
+  echo "TZ=Australia/Sydney"
   echo "PIKO_ADMIN_USER=admin"
   echo "PIKO_ADMIN_PASSWORD=$ADMIN_PASS"
   echo "PIKO_API_KEY=$API_KEY"

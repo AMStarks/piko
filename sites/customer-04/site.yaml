@@ -1,0 +1,38 @@
+# Customer site template — copy to sites/{tenant_id}/site.yaml
+tenant_id: customer-04
+display_name: customer-04
+business_unit_default: customer-04
+status: template
+
+public:
+  url: https://piko.example.com/piko
+  dashboard_path: /ios-dashboard
+  break_glass_url: http://0.0.0.0:3000
+
+ai_subnet:
+  host: unassigned
+  piko_port: 3000
+  ollama_port: 11434
+  legion_adapter_port: 8000
+  business_api_port: 5001
+
+paths:
+  knowledge: knowledge
+  data: data
+  webchat_root: /home/chief/webchat-piko
+
+knowledge:
+  manifest: knowledge/manifest.json
+  default_adapter: customer-04-adapter
+
+observe:
+  contract_version: "2026-06-12.observe.v1"
+  api_ping_interval_min: 15
+
+backup:
+  enabled: true
+  retention_days: 14
+
+context_refresh:
+  enabled: true
+  cron: "0 6,12,18 * * *"

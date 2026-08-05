@@ -153,6 +153,46 @@ function verifySecret(name, presented) {
   return false;
 }
 
+/**
+ * List API-key secret file basenames under secrets/ (api-key + api-key-*).
+ * @returns {string[]} e.g. ['api-key', 'api-key-telegram', 'api-key-ios']
+ */
+function listApiKeySecretNames() {
+  const dir = secretsDir();
+  const names = ['api-key'];
+  try {
+    if (!fs.existsSync(dir)) return names;
+    for (const ent of fs.readdirSync(dir)) {
+      if (!ent.endsWith('.json')) continue;
+      const base = ent.slice(0, -5);
+      if (base === 'api-key') continue;
+      if (base.startsWith('api-key-') && base.length > 'api-key-'.length) {
+        names.push(base);
+      }
+    }
+  } catch (_) { /* ok */ }
+  return names;
+}
+
+/**
+ * Match presented material to a named API key.
+ * Shared key file `api-key.json` (or PIKO_API_KEY env) → name `shared`.
+ * Named files `api-key-<client>.json` → name `<client>`.
+ * @returns {{ name: string } | null}
+ */
+function matchNamedApiKey(presented) {
+  if (!presented) return null;
+  for (const secretName of listApiKeySecretNames()) {
+    if (!verifySecret(secretName, presented)) continue;
+    if (secretName === 'api-key') return { name: 'shared' };
+    const prefix = 'api-key-';
+    if (secretName.startsWith(prefix)) {
+      return { name: secretName.slice(prefix.length) || 'shared' };
+    }
+  }
+  return null;
+}
+
 module.exports = {
   secretsDir,
   secretFilePath,
@@ -160,5 +200,7 @@ module.exports = {
   setSecret,
   hasSecret,
   verifySecret,
+  listApiKeySecretNames,
+  matchNamedApiKey,
   ENV_BY_NAME,
 };

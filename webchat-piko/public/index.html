@@ -70,6 +70,42 @@
       border: 1px solid var(--border);
     }
     .msg .role { font-size: 0.7rem; color: var(--text-dim); margin-bottom: 0.25rem; }
+    .msg.writing {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.6rem;
+      color: var(--text-dim);
+      font-size: 0.85rem;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      max-width: fit-content;
+    }
+    .msg.writing .writing-icon {
+      display: inline-grid;
+      place-items: center;
+      animation: piko-write-bob 0.9s ease-in-out infinite;
+      transform-origin: 50% 80%;
+    }
+    .msg.writing .writing-dots span {
+      display: inline-block;
+      width: 5px;
+      height: 5px;
+      margin-left: 3px;
+      background: var(--text-dim);
+      border-radius: 50%;
+      opacity: 0.45;
+      animation: piko-write-dot 1.2s ease-in-out infinite;
+    }
+    .msg.writing .writing-dots span:nth-child(2) { animation-delay: 0.15s; }
+    .msg.writing .writing-dots span:nth-child(3) { animation-delay: 0.3s; }
+    @keyframes piko-write-bob {
+      0%, 100% { transform: translateY(0) rotate(-8deg); }
+      50% { transform: translateY(-5px) rotate(8deg); }
+    }
+    @keyframes piko-write-dot {
+      0%, 80%, 100% { opacity: 0.3; transform: translateY(0); }
+      40% { opacity: 1; transform: translateY(-2px); }
+    }
     #form {
       padding: 1rem;
       border-top: 1px solid var(--border);
@@ -115,6 +151,7 @@
     <span style="display:flex;gap:0.5rem;align-items:center;">
       <button type="button" id="voiceBtn" title="Voice input (Web Speech API)">🎤 Voice</button>
       <button type="button" id="newChat">New chat</button>
+      <a href="/command-centre" style="font-size:0.85rem;color:var(--text-dim);text-decoration:none;margin-right:0.75rem;">Command Centre</a>
       <a href="/control" style="font-size:0.85rem;color:var(--text-dim);text-decoration:none;">Control</a>
     </span>
   </header>
@@ -134,15 +171,57 @@
     const statusEl = document.getElementById('status');
     const newChatBtn = document.getElementById('newChat');
 
-    let sessionId = crypto.randomUUID ? crypto.randomUUID() : 's-' + Date.now();
-    let loading = false;
+    const LS_SESSION = 'piko_webchat_session:' + (location.pathname || '/');
+    function newSessionId() {
+      return crypto.randomUUID ? crypto.randomUUID() : ('s-' + Date.now());
+    }
+    function loadStoredSessionId() {
+      try {
+        const sid = localStorage.getItem(LS_SESSION);
+        if (sid && String(sid).trim()) return String(sid).trim();
+      } catch (_) { /* ignore */ }
+      return null;
+    }
+    function persistSessionId(sid) {
+      try { localStorage.setItem(LS_SESSION, sid); } catch (_) { /* ignore */ }
+    }
+    let sessionId = loadStoredSessionId() || newSessionId();
+    persistSessionId(sessionId);
 
     function setStatus(text, isError) {
       statusEl.textContent = text;
       statusEl.className = 'status' + (isError ? ' error' : '');
     }
 
+    // P6.3: under PIKO_API_AUTH=strict, chat needs an admin session cookie.
+    function loginUrl() {
+      const next = encodeURIComponent(location.pathname + location.search || '/');
+      return '/admin/login?next=' + next;
+    }
+    function promptLogin(reason) {
+      const why = reason || 'Sign in required';
+      setStatus(why + ' — open admin login to chat.', true);
+      statusEl.innerHTML = '';
+      const span = document.createElement('span');
+      span.textContent = why + ' — ';
+      const a = document.createElement('a');
+      a.href = loginUrl();
+      a.textContent = 'Sign in to chat';
+      a.style.color = 'var(--accent, #6cf)';
+      statusEl.appendChild(span);
+      statusEl.appendChild(a);
+      statusEl.className = 'status error';
+    }
+    async function apiFetch(path, opts) {
+      const res = await fetch(path, { credentials: 'include', ...(opts || {}) });
+      if (res.status === 401) {
+        promptLogin('Unauthorized');
+      }
+      return res;
+    }
+
     function appendMessage(role, content) {
+      hideWriting();
       const div = document.createElement('div');
       div.className = 'msg ' + role;
       const roleLabel = document.createElement('div');
@@ -156,32 +235,144 @@
       messagesEl.scrollTop = messagesEl.scrollHeight;
     }
 
+    function showWriting() {
+      hideWriting();
+      const div = document.createElement('div');
+      div.className = 'msg assistant writing';
+      div.id = 'writing-indicator';
+      div.setAttribute('aria-live', 'polite');
+      div.setAttribute('aria-label', 'Piko is writing');
+      div.innerHTML = '<span class="writing-icon" aria-hidden="true">✎</span><span>Writing</span><span class="writing-dots" aria-hidden="true"><span></span><span></span><span></span></span>';
+      messagesEl.appendChild(div);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    function hideWriting() {
+      const el = document.getElementById('writing-indicator');
+      if (el) el.remove();
+    }
+
+    async function loadChatHistory() {
+      try {
+        const res = await apiFetch('/api/chat/history?sessionId=' + encodeURIComponent(sessionId));
+        if (res.status === 401) return;
+        if (!res.ok) return;
+        const data = await res.json();
+        const msgs = (data && data.messages) || [];
+        if (!msgs.length) return;
+        messagesEl.innerHTML = '';
+        for (const m of msgs) {
+          if (!m || (m.role !== 'user' && m.role !== 'assistant')) continue;
+          if (m.role === 'assistant') shownAssistant.add(m.content || '');
+          appendMessage(m.role, m.content || '');
+        }
+      } catch (_) { /* ignore */ }
+    }
+
+    function extractJobId(text) {
+      const m = String(text || '').match(/\bJob:\s*(job_[A-Za-z0-9_-]+)/);
+      return m ? m[1] : null;
+    }
+
+    let jobWatchTimer = null;
+    const shownAssistant = new Set();
+
+    function stopJobWatch() {
+      if (jobWatchTimer) {
+        clearInterval(jobWatchTimer);
+        jobWatchTimer = null;
+      }
+    }
+
+    function startJobWatch(jobId) {
+      stopJobWatch();
+      let ticks = 0;
+      const maxTicks = 180; // ~6 min at 2s
+      setStatus('Worker running — live progress…');
+      jobWatchTimer = setInterval(async () => {
+        ticks += 1;
+        try {
+          const histRes = await apiFetch('/api/chat/history?sessionId=' + encodeURIComponent(sessionId));
+          if (histRes.ok) {
+            const data = await histRes.json();
+            const msgs = (data && data.messages) || [];
+            for (const m of msgs) {
+              if (!m || m.role !== 'assistant') continue;
+              const content = m.content || '';
+              if (shownAssistant.has(content)) continue;
+              shownAssistant.add(content);
+              appendMessage('assistant', content);
+            }
+          }
+          if (jobId) {
+            const jobRes = await apiFetch('/api/agents/jobs/' + encodeURIComponent(jobId));
+            if (jobRes.ok) {
+              const body = await jobRes.json();
+              const job = body && body.job;
+              if (job && job.status === 'done') {
+                stopJobWatch();
+                setStatus('');
+                return;
+              }
+            }
+          }
+        } catch (_) { /* ignore */ }
+        if (ticks >= maxTicks) {
+          stopJobWatch();
+          setStatus('Still working in the background — refresh history or /agents status.');
+        }
+      }, 2000);
+    }
+
     async function sendMessage(text) {
-      if (loading || !text.trim()) return;
+      if (window.isSendingRequest) {
+        console.warn('Attempted to send message while previous request is still in flight. Ignoring.');
+        return;
+      }
+      if (!text.trim()) return;
+      window.isSendingRequest = true;
+      sendBtn.disabled = true;
+      input.disabled = true;
+      input.placeholder = 'Piko is writing…';
       appendMessage('user', text.trim());
       input.value = '';
-      sendBtn.disabled = true;
-      loading = true;
-      setStatus('Piko is thinking…');
+      setStatus('Piko is writing…');
+      showWriting();
 
       try {
-        const res = await fetch('/api/chat', {
+        const res = await apiFetch('/api/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ message: text.trim(), sessionId }),
         });
-        const data = await res.json();
+        if (res.status === 401) {
+          hideWriting();
+          return;
+        }
+        const data = await res.json().catch(() => ({}));
         if (!res.ok) {
+          hideWriting();
           setStatus(data.error || 'Request failed', true);
           return;
         }
-        appendMessage('assistant', data.reply || '');
+        const reply = data.reply || '';
+        shownAssistant.add(reply);
+        appendMessage('assistant', reply);
         setStatus('');
+        const jobId = extractJobId(reply);
+        if (jobId || (data.legate && data.legate.mode === 'dispatch')) {
+          startJobWatch(jobId || extractJobId(reply));
+        }
       } catch (e) {
+        hideWriting();
         setStatus('Network error: ' + e.message, true);
       } finally {
+        hideWriting();
+        window.isSendingRequest = false;
         sendBtn.disabled = false;
-        loading = false;
+        input.disabled = false;
+        input.placeholder = 'Message Piko…';
+        input.focus();
       }
     }
 
@@ -197,12 +388,21 @@
       }
     });
 
-    newChatBtn.addEventListener('click', () => {
-      sessionId = crypto.randomUUID ? crypto.randomUUID() : 's-' + Date.now();
+    newChatBtn.addEventListener('click', async () => {
+      try {
+        const res = await apiFetch('/api/chat/history?sessionId=' + encodeURIComponent(sessionId), { method: 'DELETE' });
+        if (res.status === 401) return;
+      } catch (_) { /* ignore */ }
+      sessionId = newSessionId();
+      persistSessionId(sessionId);
       messagesEl.innerHTML = '';
+      shownAssistant.clear();
+      stopJobWatch();
       setStatus('New chat started.');
       setTimeout(() => setStatus(''), 2000);
     });
+
+    loadChatHistory();
 
     // Phase 4: Voice input (Web Speech API)
     const voiceBtn = document.getElementById('voiceBtn');
@@ -224,7 +424,7 @@
       voiceBtn.title = 'Voice not supported in this browser';
     }
     voiceBtn.addEventListener('click', () => {
-      if (!recognition || loading) return;
+      if (!recognition || window.isSendingRequest) return;
       voiceBtn.textContent = 'Listening…';
       voiceBtn.disabled = true;
       setStatus('Listening…');

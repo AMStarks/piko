@@ -2,7 +2,7 @@
  * Session ownership (P3.3c) — bind history read/clear/inject to a principal.
  * Existing sessions without meta are stamped owner=operator (additive).
  */
-const { keyMatches, presentedKey } = require('./apiAuth');
+const { matchApiKey, presentedKey } = require('./apiAuth');
 
 function principalId(principal) {
   if (!principal || typeof principal !== 'object') return 'operator';
@@ -28,8 +28,9 @@ function resolvePrincipal(req, opts = {}) {
     }
   } catch (_) { /* ok */ }
   try {
-    if (keyMatches(presentedKey(req, query))) {
-      return { kind: 'api_key', id: 'shared' };
+    const matched = matchApiKey(presentedKey(req, query));
+    if (matched && matched.name) {
+      return { kind: 'api_key', id: String(matched.name) };
     }
   } catch (_) { /* ok */ }
   if (opts.channelIdentity) {

@@ -217,80 +217,6 @@ function buildConnectorContext() {
   };
 }
 
-function loadMobilePreferences() {
-  const defaults = {
-    quietStart: null,
-    quietEnd: null,
-    mobilePushEnabled: true,
-    backgroundSyncEnabled: true,
-    updatedAt: null,
-  };
-  try {
-    if (!fs.existsSync(EA_PREFERENCES_FILE)) return defaults;
-    const raw = fs.readFileSync(EA_PREFERENCES_FILE, 'utf8');
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object') return defaults;
-    return {
-      ...defaults,
-      ...parsed,
-      mobilePushEnabled: parsed.mobilePushEnabled !== false,
-      backgroundSyncEnabled: parsed.backgroundSyncEnabled !== false,
-      updatedAt: parsed.updatedAt ? String(parsed.updatedAt) : null,
-    };
-  } catch (_) {
-    return defaults;
-  }
-}
-
-function saveMobilePreferences(nextPrefs, expectedUpdatedAt) {
-  const current = loadMobilePreferences();
-  const expected = String(expectedUpdatedAt || '').trim();
-  if (expected && current.updatedAt && expected !== current.updatedAt) {
-    const err = new Error('Preference version conflict');
-    err.code = 'PREFERENCES_CONFLICT';
-    err.current = current;
-    throw err;
-  }
-  const merged = mergeMobilePreferences(current, nextPrefs);
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.writeFileSync(EA_PREFERENCES_FILE, JSON.stringify(merged, null, 2), 'utf8');
-  return merged;
-}
-
-function buildIntentSnapshot(now) {
-  const intents = loadIntents();
-  const reminders = intents.filter((i) => i.type === 'reminder' && (i.status === 'pending' || !i.status));
-  const scheduled = intents.filter((i) => i.type === 'scheduled' && (i.status === 'pending' || !i.status));
-  const queue = intents.filter((i) => (i.type === 'queue' || i.type === 'task') && (i.status === 'pending' || !i.status));
-  const reminderDue = (r) => r.dueAt || r.time;
-  const scheduledRun = (s) => s.dueAt || s.run;
-  const nextReminder = reminders
-    .filter((r) => new Date(reminderDue(r) || 0) > now)
-    .sort((a, b) => new Date(reminderDue(a)) - new Date(reminderDue(b)))[0] || null;
-  const nextScheduled = scheduled
-    .filter((s) => new Date(scheduledRun(s) || 0) > now)
-    .sort((a, b) => new Date(scheduledRun(a)) - new Date(scheduledRun(b)))[0] || null;
-  return {
-    queueLength: queue.length,
-    remindersCount: reminders.length,
-    scheduledCount: scheduled.length,
-    nextReminder: nextReminder ? {
-      at: reminderDue(nextReminder),
-      text: (nextReminder.title || nextReminder.message || nextReminder.text || '').slice(0, 120),
-    } : null,
-    nextScheduled: nextScheduled ? {
-      at: scheduledRun(nextScheduled),
-      command: (nextScheduled.command || '').slice(0, 120),
-    } : null,
-  };
-}
-
-function getMobilePollHintSeconds(intentSnapshot) {
-  if (intentSnapshot.nextReminder) return 60;
-  if (intentSnapshot.queueLength > 0) return 120;
-  return 300;
-}
-
 const OLLAMA_HEALTH_CACHE_MS = Math.max(5000, Number(process.env.PIKO_OLLAMA_HEALTH_CACHE_MS || 30000));
 // 1.5s flagged healthy-but-cold models (esp. remote inference lanes) as
 // "unreachable" on the dashboards; a real outage still fails fast at connect.
@@ -764,6 +690,21 @@ const {
   nextDueFromSchedule,
 } = require('./lib/intents.js');
 
+// P6.4: telegram + proactive webhook (mobile helpers wait for mergeMobilePreferences below)
+const { telegramNotify } = require('./lib/telegramNotify');
+const {
+  appendPendingNotification,
+  resolveProactiveWebhookUrl,
+  sendProactiveWebhook,
+} = require('./lib/proactiveWebhook').createProactiveWebhookHelpers({
+  dataDir: DATA_DIR,
+  pendingNotificationsFile: PENDING_NOTIFICATIONS_FILE,
+  webhookUrl: PROACTIVE_WEBHOOK_URL,
+  whatsappUrl: PROACTIVE_WEBHOOK_WHATSAPP_URL,
+  imessageUrl: PROACTIVE_WEBHOOK_IMESSAGE_URL,
+  bearer: PROACTIVE_WEBHOOK_BEARER,
+});
+
 /** Normalize natural-language schedule from LLM to canonical format for nextDueFromSchedule. */
 function normalizeSchedule(s) {
   if (!s || typeof s !== 'string') return s;
@@ -857,6 +798,20 @@ const {
   mergeMobilePreferences,
 } = require('./lib/mobileSync');
 const {
+  loadMobilePreferences,
+  saveMobilePreferences,
+  buildIntentSnapshot,
+  getMobilePollHintSeconds,
+  getMobileLanBaseURL,
+  getMobilePublicBaseURL,
+} = require('./lib/mobileHelpers').createMobileHelpers({
+  dataDir: DATA_DIR,
+  preferencesFile: EA_PREFERENCES_FILE,
+  loadIntents,
+  stripTrailingSlash,
+  mergeMobilePreferences,
+});
+const {
   loadRegistry,
   promoteModel,
   rollbackModel,
@@ -893,71 +848,6 @@ function saveSessionsConfig(config) {
     console.error('[sessions] save failed:', e.message);
     return false;
   }
-}
-
-function appendPendingNotification(line) {
-  try {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-    fs.appendFileSync(PENDING_NOTIFICATIONS_FILE, String(line || '').slice(0, 2000) + '\n', 'utf8');
-    return true;
-  } catch (_) {
-    return false;
-  }
-}
-
-function resolveProactiveWebhookUrl(meta) {
-  const rawTarget = String((meta && meta.target) || '').trim();
-  const target = rawTarget.toLowerCase();
-  if (rawTarget.startsWith('http://') || rawTarget.startsWith('https://')) return rawTarget;
-  if (target === 'whatsapp_bridge' && PROACTIVE_WEBHOOK_WHATSAPP_URL) return PROACTIVE_WEBHOOK_WHATSAPP_URL;
-  if (target === 'imessage_bridge' && PROACTIVE_WEBHOOK_IMESSAGE_URL) return PROACTIVE_WEBHOOK_IMESSAGE_URL;
-  return PROACTIVE_WEBHOOK_URL;
-}
-
-async function sendProactiveWebhook(message, meta) {
-  const target = String((meta && meta.target) || '').toLowerCase();
-  const endpoint = resolveProactiveWebhookUrl(meta);
-  if (target === 'whatsapp_bridge' && !PROACTIVE_WEBHOOK_WHATSAPP_URL && !PROACTIVE_WEBHOOK_URL) {
-    throw new Error('Missing PIKO_PROACTIVE_WEBHOOK_WHATSAPP_URL (or global webhook fallback)');
-  }
-  if (target === 'imessage_bridge' && !PROACTIVE_WEBHOOK_IMESSAGE_URL && !PROACTIVE_WEBHOOK_URL) {
-    throw new Error('Missing PIKO_PROACTIVE_WEBHOOK_IMESSAGE_URL (or global webhook fallback)');
-  }
-  if (!endpoint) throw new Error('No proactive webhook endpoint configured');
-  let parsed;
-  try {
-    parsed = new url.URL(endpoint);
-  } catch (_) {
-    throw new Error('Invalid proactive webhook URL');
-  }
-  const body = JSON.stringify({
-    source: 'piko_proactive',
-    at: new Date().toISOString(),
-    channel: meta && meta.channel ? String(meta.channel).slice(0, 60) : 'webhook',
-    target: meta && meta.target ? String(meta.target).slice(0, 60) : 'webhook',
-    urgency: meta && meta.urgency ? String(meta.urgency).slice(0, 20) : 'normal',
-    message: String(message || '').slice(0, 2000),
-  });
-  const headers = {
-    'Content-Type': 'application/json',
-    'Content-Length': Buffer.byteLength(body),
-    'User-Agent': 'piko-proactive/1.0',
-  };
-  if (PROACTIVE_WEBHOOK_BEARER) headers.Authorization = 'Bearer ' + PROACTIVE_WEBHOOK_BEARER;
-  const opts = {
-    hostname: parsed.hostname,
-    port: parsed.port || (parsed.protocol === 'http:' ? 80 : 443),
-    path: (parsed.pathname || '/') + (parsed.search || ''),
-    method: 'POST',
-    headers,
-  };
-  const requester = parsed.protocol === 'http:' ? httpRequest : httpsRequest;
-  const { statusCode, data } = await requester(opts, body);
-  if (statusCode < 200 || statusCode >= 300) {
-    const payload = String(data || '').slice(0, 200);
-    throw new Error(`Webhook dispatch failed (${statusCode}): ${payload}`);
-  }
-  return { ok: true };
 }
 
 const proactiveEngine = createProactiveEngine({
@@ -1956,45 +1846,6 @@ function readBody(req) {
 // —— iOS hub: single endpoint for Shortcuts / Share / app (reminder, calendar, notes_capture, inquiry) ——
 const TELEGRAM_BOT_TOKEN_HUB = process.env.TELEGRAM_BOT_TOKEN || process.env.TELEGRAM_TOKEN;
 const TELEGRAM_CHAT_ID_HUB = process.env.TELEGRAM_CHAT_ID;
-function telegramNotify(text, meta = {}) {
-  const opts = meta && typeof meta === 'object' ? meta : {};
-  const { notifyAdmin } = require('./lib/notifyAdmin');
-  return notifyAdmin(String(text).slice(0, 4096), {
-    category: opts.category || 'system',
-    title: opts.title,
-    severity: opts.severity || 'info',
-    source: opts.source || 'telegramNotify',
-    meta: opts.meta,
-    parseMode: opts.parseMode,
-  }).then((r) => ({ statusCode: r.telegram === 'sent' ? 200 : 500, ...r }));
-}
-
-function getMobileLanBaseURL() {
-  const fromEnv = stripTrailingSlash(String(process.env.PIKO_LAN_BASE_URL || process.env.PIKO_IOS_BASE_URL || '').trim());
-  if (fromEnv) return fromEnv;
-  try {
-    const { execSync } = require('child_process');
-    const out = String(execSync('hostname -I', { encoding: 'utf8', timeout: 2000 })).trim().split(' ').filter(Boolean);
-    const ip = out.find((x) => x.startsWith('192.168.') || x.startsWith('10.'));
-    if (ip) return `http://${ip}:3000`;
-  } catch (_) { /* ignore */ }
-  return null;
-}
-
-function getMobilePublicBaseURL() {
-  const fromEnv = stripTrailingSlash(String(process.env.PIKO_PUBLIC_BASE_URL || process.env.PIKO_IOS_PUBLIC_URL || '').trim());
-  if (fromEnv) return fromEnv;
-  const defaultPublic = 'https://andrewstarkey.net/piko';
-  if (process.env.PIKO_DEFAULT_PUBLIC_URL !== '0') return defaultPublic;
-  try {
-    const filePath = process.env.PIKO_IOS_PUBLIC_URL_FILE || '/opt/piko/ios_public_url.txt';
-    if (fs.existsSync(filePath)) {
-      const raw = stripTrailingSlash(String(fs.readFileSync(filePath, 'utf8')).trim());
-      if (raw.startsWith('http://') || raw.startsWith('https://')) return raw;
-    }
-  } catch (_) { /* ignore */ }
-  return null;
-}
 
 /** Fail closed: unset/empty YOLO/health key never authorizes. */
 function checkYoloApiAuth(req) {
@@ -2851,45 +2702,6 @@ server.listen(PORT, '0.0.0.0', () => {
     getTenantProfile: () => getTenantBackgroundProfile(__dirname),
   });
   const { isJobEnabled } = require('./lib/operationsOverrides');
-  const TENANT_JOB_BY_OPS_ID = {
-    'proactive-cycle': 'proactive_cycle',
-    'intent-poller': 'intent_poller',
-    'legion-watch': 'legion_watch',
-    'api-ping': 'api_ping',
-    'legion-backup': 'legion_backup',
-    'context-refresh': 'context_refresh',
-    'nightly-wisdom': 'nightly_wisdom',
-    'nightly-quant': 'nightly_quant',
-    'daily-memory-summarize': 'daily_memory_summarize',
-    'rabbit-hole-daily': 'rabbit_hole_daily',
-    'meta-reflection-weekly': 'meta_reflection_weekly',
-    'ea-lookin': 'ea_lookin',
-  };
-  const runExternalOpScript = (jobId, scriptRel) => {
-    const tenantJob = TENANT_JOB_BY_OPS_ID[jobId];
-    if (tenantJob && !isBackgroundJobEnabled(tenantJob, __dirname)) return;
-    if (!isJobEnabled(jobId)) return;
-    const cwd = __dirname;
-    exec(`node ${scriptRel}`, { cwd, env: process.env, timeout: 300000 }, (err) => {
-      if (err) log('error', 'ops_external', { jobId, message: err.message });
-    });
-  };
-  bootScheduler.register({
-    id: 'campaign_cycle_enqueue',
-    intervalMs: 60 * 1000,
-    tenantGate: cultureOnly,
-    fn: async () => {
-      const { dueForCycle } = require('./lib/eiResearchCampaign');
-      if (!dueForCycle()) return;
-      const { enqueueAgentJob } = require('./lib/agentOrchestrator');
-      const { listJobs } = require('./lib/agentJobs');
-      const pending = listJobs(60)
-        .some((j) => j.type === 'campaign_cycle' && ['pending', 'running'].includes(j.status));
-      if (pending) return;
-      enqueueAgentJob('campaign_cycle', { source: 'scheduler' }, { rootDir: __dirname });
-      console.log('[campaign] enqueued research campaign cycle');
-    },
-  });
   if (isBackgroundJobEnabled('friday_closer', __dirname)) {
     try {
       const { startFridayCloser } = require('./scripts/fridayCloser');
@@ -2938,391 +2750,25 @@ server.listen(PORT, '0.0.0.0', () => {
       log('error', 'proactive_cycle_boot', { code: e.code || '', message: e.message });
     });
   }
-  // P3.1d — all boot crons/intervals register here (tenantGate + structured scheduler_run).
-  bootScheduler.register({
-    id: 'unified_heartbeat',
-    cronExpr: '*/5 * * * *',
-    tenantGate: jobEnabled('unified_heartbeat', __dirname),
-    fn: async () => { runUnifiedHeartbeat(); },
-  });
-  bootScheduler.register({
-    id: 'tripwire_eval',
-    cronExpr: '*/5 * * * *',
-    tenantGate: jobEnabled('tripwire', __dirname),
-    fn: async () => {
-      const { evaluateTripwires } = require('./lib/tripwireEngine');
-      await evaluateTripwires(async (alertMessage) => {
-        console.log('[TRIPWIRE TRIGGERED]:', alertMessage.slice(0, 120) + (alertMessage.length > 120 ? '…' : ''));
-        await telegramNotify(alertMessage, { category: 'tripwire', title: 'Scheduled check', severity: 'warn', source: 'tripwireEngine' });
-      });
+  const { registerBootJobs } = require('./lib/bootJobs');
+  registerBootJobs(bootScheduler, {
+    rootDir: __dirname,
+    cultureOnly,
+    jobEnabled,
+    always,
+    runUnifiedHeartbeat,
+    telegramNotify,
+    DATA_DIR,
+    AUSMAKER_BASE_URL,
+    stripTrailingSlash,
+    dumpHistory,
+    lastDumpDateRef: {
+      get value() { return lastDumpDate; },
+      set value(v) { lastDumpDate = v; },
     },
-  });
-  bootScheduler.register({
-    id: 'ausmaker_watchman',
-    cronExpr: '*/5 * * * *',
-    tenantGate: jobEnabled('ausmaker_watchman', __dirname),
-    fn: async () => {
-      const AUSMAKER_WATCH_FILE = path.join(DATA_DIR, 'ausmaker-watchman.json');
-      const cooldownHours = Math.max(0.25, Number(process.env.PIKO_AUSMAKER_ALERT_COOLDOWN_HOURS || 4));
-      const now = Date.now();
-      let prev = { health: null, lastAlertAt: 0 };
-      try {
-        if (fs.existsSync(AUSMAKER_WATCH_FILE)) {
-          prev = Object.assign(prev, JSON.parse(fs.readFileSync(AUSMAKER_WATCH_FILE, 'utf8') || '{}'));
-        }
-      } catch (_) { /* ok */ }
-      const base = stripTrailingSlash(AUSMAKER_BASE_URL);
-      const { getUrl } = require('./lib/legionRunPoller');
-      const forecastRes = await getUrl(`${base}/api/forecast/cached`);
-      let forecast = null;
-      if (forecastRes.statusCode === 200) {
-        try { forecast = JSON.parse(forecastRes.body || '{}'); } catch (_) { forecast = null; }
-      }
-      const recs = (forecast && (forecast.purchase_recommendations || forecast.purchase_order_items)) || [];
-      const reorderCount = Array.isArray(recs) ? recs.filter((r) => String(r.flag || r.status || '').toLowerCase() === 'reorder').length : 0;
-      const reviewCount = Array.isArray(recs) ? recs.filter((r) => String(r.flag || r.status || '').toLowerCase() === 'review').length : 0;
-      const orderedCount = Array.isArray(recs) ? recs.filter((r) => String(r.flag || r.status || '').toLowerCase() === 'ordered').length : 0;
-      let health = 'GREEN';
-      if (reorderCount > 0) health = 'RED';
-      else if (reviewCount > 0) health = 'YELLOW';
-      const salesRes = await getUrl(`${base}/api/sales/summary?period=today`);
-      let salesTodayUnits = 0;
-      try {
-        if (salesRes.statusCode === 200) {
-          const s = JSON.parse(salesRes.body || '{}');
-          salesTodayUnits = Number(s.total_units_sold) || 0;
-        }
-      } catch (_) { /* ok */ }
-      const syncTs = (forecast && (forecast.last_synced_at || forecast._cached_at || forecast.timestamp)) || null;
-      const wasRed = String(prev.health || '').toUpperCase() === 'RED';
-      const isRed = String(health).toUpperCase() === 'RED';
-      const cooledDown = (now - Number(prev.lastAlertAt || 0)) >= cooldownHours * 3600 * 1000;
-      if (!wasRed && isRed && cooledDown) {
-        const msg = [
-          '⚠️ **SOVEREIGN ALERT: AUSMAKER AT RISK**',
-          '',
-          'Inventory health is now **RED**.',
-          `- Reorders Required: **${reorderCount}**`,
-          `- Reviews Pending: **${reviewCount}**`,
-          `- Ordered (awaiting): **${orderedCount}**`,
-          `- Sales Today (units): **${Math.round(salesTodayUnits)}**`,
-          syncTs ? `- Last Sync: **${String(syncTs)}**` : null,
-        ].filter(Boolean).join('\n');
-        await telegramNotify(msg);
-        prev.lastAlertAt = now;
-      }
-      prev.health = health;
-      prev.reorderCount = reorderCount;
-      prev.reviewCount = reviewCount;
-      prev.orderedCount = orderedCount;
-      prev.salesTodayUnits = salesTodayUnits;
-      prev.sync_ts = syncTs;
-      prev.updated_at = new Date().toISOString();
-      try {
-        fs.mkdirSync(DATA_DIR, { recursive: true });
-        fs.writeFileSync(AUSMAKER_WATCH_FILE, JSON.stringify(prev, null, 2), 'utf8');
-      } catch (_) { /* ok */ }
-    },
-  });
-  bootScheduler.register({
-    id: 'daily_digest',
-    cronExpr: '* * * * *',
-    tenantGate: jobEnabled('tripwire', __dirname),
-    fn: async () => {
-      const { loadSchedules, saveSchedules, flushDailyDigest } = require('./lib/tripwireEngine');
-      const schedules = loadSchedules();
-      if (schedules.length === 0) return;
-      const now = new Date();
-      const currentDateString = now.toDateString();
-      const currentMinutes = now.getHours() * 60 + now.getMinutes();
-      let schedulesUpdated = false;
-      for (const sched of schedules) {
-        const [schedH, schedM] = sched.time.split(':').map(Number);
-        const schedMinutes = (schedH || 0) * 60 + (schedM || 0);
-        if (currentMinutes >= schedMinutes && sched.lastSentDate !== currentDateString) {
-          try {
-            await flushDailyDigest(async (reportMessage) => {
-              console.log('[DAILY DIGEST TO USER]:', reportMessage.slice(0, 80) + '…');
-              await telegramNotify(reportMessage);
-            });
-            sched.lastSentDate = currentDateString;
-            schedulesUpdated = true;
-          } catch (e) {
-            console.error('[DIGEST] Failed:', e.message);
-          }
-        }
-      }
-      if (schedulesUpdated) saveSchedules(schedules);
-    },
-  });
-  bootScheduler.register({
-    id: 'urgency_engine',
-    cronExpr: '*/30 9-17 * * *',
-    tenantGate: jobEnabled('urgency_engine', __dirname),
-    fn: async () => {
-      const { runInternalMonologue } = require('./lib/urgencyEngine');
-      await runInternalMonologue(async (msg) => await telegramNotify(msg));
-    },
-  });
-  bootScheduler.register({
-    id: 'weekly_po',
-    cronExpr: '0 16 * * 4',
-    tenantGate: jobEnabled('weekly_po', __dirname),
-    fn: async () => {
-      const { flushWeeklyPO } = require('./lib/tripwireEngine');
-      await flushWeeklyPO(async (reportMessage) => {
-        await telegramNotify(reportMessage);
-      });
-    },
-  });
-  bootScheduler.register({
-    id: 'history_dump',
-    cronExpr: '* * * * *',
-    tenantGate: jobEnabled('history_dump', __dirname),
-    fn: async () => {
-      const today = new Date().toISOString().slice(0, 10);
-      if (today > lastDumpDate) {
-        dumpHistory(lastDumpDate);
-        lastDumpDate = today;
-      }
-    },
-  });
-  bootScheduler.register({
-    id: 'proactive_cycle',
-    cronExpr: '*/5 * * * *',
-    tenantGate: jobEnabled('proactive_cycle', __dirname),
-    fn: async () => {
-      if (!isJobEnabled('proactive-cycle')) return;
-      await proactiveCycleRunner.run('scheduler', { skipIfBusy: true });
-    },
-  });
-  bootScheduler.register({
-    id: 'intent_poller',
-    cronExpr: '*/5 * * * *',
-    tenantGate: jobEnabled('intent_poller', __dirname),
-    fn: async () => {
-      if (!isJobEnabled('intent-poller')) return;
-      await new Promise((resolve) => {
-        exec('node scripts/intent-poller.js', { cwd: __dirname, env: process.env, timeout: 60000 }, (err) => {
-          if (err) log('error', 'intent_poller', { message: err.message }, null);
-          resolve();
-        });
-      });
-    },
-  });
-  bootScheduler.register({
-    id: 'legion_watch',
-    cronExpr: '*/5 * * * *',
-    tenantGate: jobEnabled('legion_watch', __dirname),
-    fn: async () => { runExternalOpScript('legion-watch', 'scripts/legion-watch.js'); },
-  });
-  bootScheduler.register({
-    id: 'api_ping',
-    cronExpr: '*/15 * * * *',
-    tenantGate: jobEnabled('api_ping', __dirname),
-    fn: async () => { runExternalOpScript('api-ping', 'scripts/api-ping-site.js'); },
-  });
-  bootScheduler.register({
-    id: 'legion_backup',
-    cronExpr: '30 2 * * *',
-    tenantGate: jobEnabled('legion_backup', __dirname),
-    fn: async () => {
-      if (!isJobEnabled('legion-backup')) return;
-      await new Promise((resolve) => {
-        exec('bash scripts/legion-backup-onbox.sh', { cwd: __dirname, env: process.env, timeout: 300000 }, (err) => {
-          if (err) log('error', 'legion_backup', { message: err.message });
-          resolve();
-        });
-      });
-    },
-  });
-  bootScheduler.register({
-    id: 'context_refresh',
-    cronExpr: '0 6,12,18 * * *',
-    tenantGate: jobEnabled('context_refresh', __dirname),
-    fn: async () => { runExternalOpScript('context-refresh', 'scripts/context-refresh.js'); },
-  });
-  // Continuous mind loop — processes due intents every 60s when ReAct agent enabled
-  const useReAct = process.env.PIKO_USE_REACT_AGENT === '1' || process.env.PIKO_USE_REACT_AGENT === 'true';
-  if (useReAct) {
-    const { fork } = require('child_process');
-    const mindPath = path.join(__dirname, 'workers', 'pikoMind.js');
-    const mindProcess = fork(mindPath, [], { env: process.env, cwd: __dirname });
-    mindProcess.on('error', (err) => console.error('[pikoMind] spawn error:', err.message));
-    mindProcess.on('exit', (code, sig) => {
-      if (code !== 0 && code !== null) console.warn('[pikoMind] exited', code, sig);
-    });
-    if (process.env.PIKO_LOG_PLANNER === '1') console.log('[boot] Mind loop spawned');
-  }
-  bootScheduler.register({
-    id: 'nightly_wisdom',
-    cronExpr: '0 2 * * *',
-    tenantGate: jobEnabled('nightly_wisdom', __dirname),
-    fn: async () => {
-      if (!isJobEnabled('nightly-wisdom')) return;
-      await require('./scripts/nightly_wisdom').runNightlyWisdom();
-    },
-  });
-  bootScheduler.register({
-    id: 'ei_platform_eval',
-    cronExpr: '30 3 * * *',
-    tenantGate: jobEnabled('ei_platform_eval', __dirname),
-    fn: async () => {
-      const { isAgentOrchEnabled, enqueueAgentJob } = require('./lib/agentOrchestrator');
-      if (!isAgentOrchEnabled(__dirname)) return;
-      const queued = enqueueAgentJob('ei_platform_eval', {
-        source: 'cron:nightly',
-        notify: true,
-        notify_telegram: true,
-      }, { rootDir: __dirname });
-      log('info', 'ei_platform_eval', { queued: queued.ok, job_id: queued.job && queued.job.id }, null);
-    },
-  });
-  bootScheduler.register({
-    id: 'ei_engineering_queue',
-    cronExpr: '*/15 * * * *',
-    tenantGate: jobEnabled('ei_engineering_queue', __dirname),
-    fn: async () => {
-      const { tickEngineeringQueue } = require('./lib/eiEngineeringQueue');
-      const out = tickEngineeringQueue(__dirname);
-      if (out.processed > 0) log('info', 'ei_engineering_queue', out, null);
-    },
-  });
-  bootScheduler.register({
-    id: 'ei_stance_synthesis',
-    cronExpr: '15 4 * * *',
-    tenantGate: jobEnabled('ei_stance_synthesis', __dirname),
-    fn: async () => {
-      const { runStanceSynthesis } = require('./lib/eiStancePositions');
-      const out = await runStanceSynthesis({});
-      log('info', 'ei_stance_synthesis', {
-        rebuilt: out.rebuilt,
-        skipped: (out.skipped || []).length,
-      }, null);
-    },
-  });
-  bootScheduler.register({
-    id: 'ei_quarantine_cleanup',
-    cronExpr: '30 5 * * *',
-    tenantGate: jobEnabled('ei_quarantine_cleanup', __dirname),
-    fn: async () => {
-      const { purgeExpiredQuarantine } = require('./lib/culturesCorpusApi');
-      const out = purgeExpiredQuarantine({});
-      if (out.purged > 0) log('info', 'ei_quarantine_cleanup', out, null);
-    },
-  });
-  bootScheduler.register({
-    id: 'nightly_quant',
-    cronExpr: '0 1 * * *',
-    tenantGate: jobEnabled('nightly_quant', __dirname),
-    fn: async () => {
-      if (!isJobEnabled('nightly-quant')) return;
-      const { getConfig } = require('./lib/configManager');
-      if (getConfig().nightlyQuantEnabled === false) {
-        console.log('[CRON] Nightly Quant Agent disabled in piko_config.json');
-        return;
-      }
-      console.log('[CRON] Waking up Quant Agent for nightly batch forecast...');
-      const { deploySubAgent } = require('./lib/legionSwarm');
-      const { notifyAdmin } = require('./lib/notifyAdmin');
-      const taskContext = 'Deploy the quant agent to run our statistical forecasts and write all SKUs to the database.';
-      try {
-        const result = await deploySubAgent('quant', taskContext);
-        if (result && !result.startsWith('Error:') && !result.includes('Failed after')) {
-          await notifyAdmin('Overnight forecasts are done — stock predictions for the whole catalogue are refreshed and ready for today.', {
-            category: 'nightly_quant',
-            title: 'Overnight forecasts',
-            severity: 'info',
-            source: 'cron:nightly_quant',
-          });
-        } else {
-          console.error('[CRON] Quant Agent failed:', result || 'No result');
-          await notifyAdmin("Last night's forecast run didn't finish, so today's stock predictions may be a day old. Piko will retry tonight automatically.", {
-            category: 'nightly_quant',
-            title: 'Overnight forecasts',
-            severity: 'error',
-            source: 'cron:nightly_quant',
-            meta: { error: (result || '').slice(0, 500) },
-          });
-        }
-      } catch (e) {
-        console.error('[CRON] Quant Agent failed:', e.message);
-        await notifyAdmin("Last night's forecast run didn't finish, so today's stock predictions may be a day old. Piko will retry tonight automatically.", {
-          category: 'nightly_quant',
-          title: 'Overnight forecasts',
-          severity: 'error',
-          source: 'cron:nightly_quant',
-          meta: { error: e.message || 'Unknown error' },
-        }).catch(() => {});
-      }
-    },
-  });
-  // P3.2c: enqueue-only — heavy belief/memory/retro work runs in the agent worker.
-  bootScheduler.register({
-    id: 'belief-consolidation',
-    cronExpr: '0 3 * * *',
-    tenantGate: always,
-    fn: async () => {
-      if (!isJobEnabled('belief-consolidation')) return;
-      const { enqueueAgentJob } = require('./lib/agentOrchestrator');
-      const { listJobs } = require('./lib/agentJobs');
-      const pending = listJobs(60).some((j) => j.type === 'belief_consolidation'
-        && ['pending', 'running'].includes(j.status));
-      if (pending) return;
-      enqueueAgentJob('belief_consolidation', { source: 'scheduler' }, { rootDir: __dirname });
-    },
-  });
-  bootScheduler.register({
-    id: 'memory-consolidation',
-    cronExpr: '0 3 * * 0',
-    tenantGate: always,
-    fn: async () => {
-      if (!isJobEnabled('memory-consolidation')) return;
-      const { enqueueAgentJob } = require('./lib/agentOrchestrator');
-      const { listJobs } = require('./lib/agentJobs');
-      const pending = listJobs(60).some((j) => j.type === 'memory_consolidation'
-        && ['pending', 'running'].includes(j.status));
-      if (pending) return;
-      enqueueAgentJob('memory_consolidation', { source: 'scheduler' }, { rootDir: __dirname });
-    },
-  });
-  bootScheduler.register({
-    id: 'weekly-retro',
-    cronExpr: '0 8 * * 0',
-    tenantGate: always,
-    fn: async () => {
-      if (!isJobEnabled('weekly-retro')) return;
-      const { enqueueAgentJob } = require('./lib/agentOrchestrator');
-      const { listJobs } = require('./lib/agentJobs');
-      const pending = listJobs(60).some((j) => j.type === 'weekly_retro'
-        && ['pending', 'running'].includes(j.status));
-      if (pending) return;
-      enqueueAgentJob('weekly_retro', { source: 'scheduler' }, { rootDir: __dirname });
-    },
-  });
-  bootScheduler.register({
-    id: 'daily_memory_summarize',
-    cronExpr: '0 0 * * *',
-    tenantGate: jobEnabled('daily_memory_summarize', __dirname),
-    fn: async () => { runExternalOpScript('daily-memory-summarize', 'scripts/daily-memory-summarize.js'); },
-  });
-  bootScheduler.register({
-    id: 'rabbit_hole_daily',
-    cronExpr: '0 23 * * *',
-    tenantGate: jobEnabled('rabbit_hole_daily', __dirname),
-    fn: async () => { runExternalOpScript('rabbit-hole-daily', 'scripts/rabbit-hole-daily.js'); },
-  });
-  bootScheduler.register({
-    id: 'meta_reflection_weekly',
-    cronExpr: '0 10 * * 0',
-    tenantGate: jobEnabled('meta_reflection_weekly', __dirname),
-    fn: async () => { runExternalOpScript('meta-reflection-weekly', 'scripts/meta-reflection-weekly.js'); },
-  });
-  bootScheduler.register({
-    id: 'ea_lookin',
-    cronExpr: '*/30 * * * *',
-    tenantGate: jobEnabled('ea_lookin', __dirname),
-    fn: async () => { runExternalOpScript('ea-lookin', 'scripts/ea-lookin.js'); },
+    isJobEnabled,
+    proactiveCycleRunner,
+    log,
   });
 
   try {

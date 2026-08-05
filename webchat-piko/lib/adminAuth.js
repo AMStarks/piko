@@ -496,9 +496,10 @@ function isProtectedApiPath(pathname, method) {
   return false;
 }
 
-// Read-only monitoring endpoints that on-box tooling (smoke, legion-watch, api-ping,
-// context-refresh) must reach without an admin session. Only honoured for GET requests
-// originating from loopback — browser/WAN traffic still requires login.
+// Read-only monitoring endpoints that on-box tooling (api-ping, HQ poller) may reach
+// without an admin session. P5.1d: under PIKO_API_AUTH=strict, loopback alone is not
+// enough — clients must present a valid API key (shared or named). Loopback-without-key
+// remains only for lan/off during migration. checkApiAuth still runs first under strict.
 const MONITOR_READONLY_PATHS = new Set([
   '/api/observe/summary',
   '/api/hq/status',
@@ -513,22 +514,19 @@ function isLoopbackAddress(addr) {
   return a === '127.0.0.1' || a === '::1' || a === '::ffff:127.0.0.1';
 }
 
-// True when this is a safe on-box read-only monitor request that may bypass admin auth.
-// Uses the real socket peer only (never X-Forwarded-For) so a proxied external request
-// cannot spoof loopback.
+// True when this GET may bypass admin auth (not apiAuth). Prefer API key; loopback
+// without key only when mode !== strict.
 function isMonitorBypass(req, pathname, method) {
   if (String(method || '').toUpperCase() !== 'GET') return false;
   if (!MONITOR_READONLY_PATHS.has(String(pathname || ''))) return false;
-  const peer = req && req.socket && req.socket.remoteAddress;
-  if (isLoopbackAddress(peer)) return true;
-  // Cross-host monitors (HQ registry poller) authenticate with the tenant's
-  // API key instead of an admin session.
   try {
-    const { keyMatches } = require('./apiAuth');
-    const presented = String((req && req.headers && req.headers['x-piko-key']) || '').trim();
-    if (presented && keyMatches(presented)) return true;
-  } catch (_) {}
-  return false;
+    const { keyMatches, presentedKey } = require('./apiAuth');
+    if (keyMatches(presentedKey(req, {}))) return true;
+  } catch (_) { /* ok */ }
+  const mode = String(process.env.PIKO_API_AUTH || 'strict').toLowerCase();
+  if (mode === 'strict') return false;
+  const peer = req && req.socket && req.socket.remoteAddress;
+  return isLoopbackAddress(peer);
 }
 
 function listDashboards() {

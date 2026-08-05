@@ -4,8 +4,7 @@
  * Env: DISCORD_TOKEN (bot token), PIKO_WEBCHAT_URL (e.g. http://localhost:3000).
  */
 const { Client, GatewayIntentBits } = require('discord.js');
-const http = require('http');
-const https = require('https');
+const { postToPiko } = require('../shared/pikoClient');
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN || process.env.DISCORD_BOT_TOKEN;
 const PIKO_URL = process.env.PIKO_WEBCHAT_URL || 'http://localhost:3000';
@@ -15,36 +14,9 @@ if (!DISCORD_TOKEN) {
   process.exit(1);
 }
 
-function postChat(message, sessionId) {
-  return new Promise((resolve, reject) => {
-    const u = new URL(PIKO_URL + '/api/chat');
-    const body = JSON.stringify({ message, sessionId: sessionId || 'discord-default' });
-    const isHttps = u.protocol === 'https:';
-    const opts = {
-      hostname: u.hostname,
-      port: u.port || (isHttps ? 443 : 80),
-      path: u.pathname,
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-    };
-    const lib = isHttps ? https : http;
-    const req = lib.request(opts, (res) => {
-      let data = '';
-      res.on('data', (ch) => (data += ch));
-      res.on('end', () => {
-        try {
-          const json = JSON.parse(data);
-          resolve(json.reply || json.error || 'No reply.');
-        } catch (_) {
-          resolve(data.slice(0, 500));
-        }
-      });
-    });
-    req.on('error', reject);
-    req.setTimeout(60000, () => { req.destroy(); reject(new Error('timeout')); });
-    req.write(body);
-    req.end();
-  });
+async function postChat(message, sessionId) {
+  const json = await postToPiko(PIKO_URL, message, sessionId || 'discord-default');
+  return json.reply || json.error || 'No reply.';
 }
 
 const client = new Client({

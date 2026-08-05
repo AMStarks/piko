@@ -1,0 +1,118 @@
+{
+  "version": 2,
+  "updated_at": "2026-07-20T10:45:00.000Z",
+  "hq_host": "rodimus",
+  "tenants": [
+    {
+      "tenant_id": "customer-01",
+      "display_name": "AusMaker Supplies",
+      "status": "live",
+      "observe_url": "http://127.0.0.1:3000/api/observe/summary",
+      "mgmt_url": "http://127.0.0.1:3000/api/mgmt",
+      "public_url": "https://andrewstarkey.net/piko",
+      "dashboard_url": "http://114.73.210.115:3000/ios-dashboard",
+      "break_glass_dashboard_url": "http://114.73.210.115:3000/ios-dashboard",
+      "lan_dashboard_url": "http://192.168.0.190:3000/ios-dashboard",
+      "adapter_id": "ausmakersupplies",
+      "hq_dashboard_url": "http://127.0.0.1:3000/hq-dashboard",
+      "node_host": "rodimus",
+      "version": "legion-ai-node-v1",
+      "last_seen": null,
+      "last_release": null,
+      "last_release_ok": null,
+      "observe_key_secret": "api-key-monitor"
+    },
+    {
+      "tenant_id": "customer-02",
+      "display_name": "Customer 02 (template)",
+      "status": "planned",
+      "observe_url": null,
+      "mgmt_url": null,
+      "public_url": null,
+      "node_host": "unassigned",
+      "version": null,
+      "notes": "Copy sites/_template \u2014 needs adapter + node before live"
+    },
+    {
+      "tenant_id": "customer-03",
+      "display_name": "Egyptian Insights",
+      "status": "live",
+      "observe_url": "http://192.168.0.121:3021/api/observe/summary",
+      "adapter_id": "egyptian-insights",
+      "node_host": "optimus",
+      "version": "legion-ai-node-v1",
+      "notes": "Egyptian Insights spine live on Optimus :3021 (adapter :8010); WAN via Rodimus http://114.73.210.115/piko-ei",
+      "piko_port": 3021,
+      "mgmt_url": "http://114.73.210.115/piko-ei/api/mgmt",
+      "public_url": "http://114.73.210.115/piko-ei",
+      "dashboard_url": "http://114.73.210.115/piko-ei/ios-dashboard",
+      "break_glass_dashboard_url": "http://114.73.210.115/piko-ei/ios-dashboard",
+      "lan_dashboard_url": "http://192.168.0.121:3021/ios-dashboard",
+      "setup_checklist": [
+        {
+          "id": "scaffold",
+          "title": "Scaffold site pack",
+          "detail": "Create sites/{id}/site.yaml, smoke.json, knowledge/{id}/manifest.json, and a planned registry row.",
+          "order": 1,
+          "status": "done"
+        },
+        {
+          "id": "adapter",
+          "title": "Implement Legion adapter",
+          "detail": "Register adapter capabilities (health + domain tools).",
+          "order": 2,
+          "status": "done"
+        },
+        {
+          "id": "node",
+          "title": "Assign dedicated node",
+          "detail": "Pick Rodimus or Optimus.",
+          "order": 3,
+          "status": "done"
+        },
+        {
+          "id": "spine",
+          "title": "Deploy tenant spine on the node",
+          "detail": "Dedicated webchat + Legion adapter.",
+          "order": 4,
+          "status": "done"
+        },
+        {
+          "id": "observe",
+          "title": "Wire observe_url",
+          "detail": "Point registry observe_url at node observe summary.",
+          "order": 5,
+          "status": "done"
+        },
+        {
+          "id": "go_live",
+          "title": "Mark live + smoke",
+          "detail": "Set status=live and confirm HQ spine.",
+          "order": 6,
+          "status": "done"
+        }
+      ],
+      "observe_key_secret": "api-key-monitor"
+    },
+    {
+      "tenant_id": "customer-04",
+      "display_name": "customer-04 (synthetic-culture demo)",
+      "status": "demo",
+      "observe_url": "http://192.168.0.121:3023/api/observe/summary",
+      "adapter_id": "customer-04-adapter",
+      "node_host": "optimus",
+      "profile": "culture",
+      "piko_port": 3023,
+      "setup_checklist": {
+        "scaffold": true,
+        "adapter": false,
+        "node": true,
+        "spine": true,
+        "observe": true,
+        "live": false
+      },
+      "observe_key_secret": "api-key-monitor",
+      "notes": "Spine-only synthetic-culture demo on Optimus :3023 (no legion adapter \u2014 accepted P6.5)."
+    }
+  ]
+}

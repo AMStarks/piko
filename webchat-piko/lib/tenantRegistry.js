@@ -116,7 +116,16 @@ async function buildHqStatus(rootDir, dataDir) {
     let observe = null;
     let status = 'unknown';
     if (t.observe_url) {
-      const fetched = await fetchJson(t.observe_url, 10000, { apiKey: t.observe_key || null });
+      // P6.2c: prefer inline observe_key; else resolve observe_key_secret from secretsStore
+      // (avoids committing key material into registry.json).
+      let observeKey = t.observe_key || null;
+      if (!observeKey && t.observe_key_secret) {
+        try {
+          const { getSecret } = require('./secretsStore');
+          observeKey = getSecret(String(t.observe_key_secret)) || null;
+        } catch (_) { /* ok */ }
+      }
+      const fetched = await fetchJson(t.observe_url, 10000, { apiKey: observeKey });
       if (fetched.ok && fetched.body) {
         observe = fetched.body;
         status = observe.overall === 'pass' ? 'healthy' : 'degraded';

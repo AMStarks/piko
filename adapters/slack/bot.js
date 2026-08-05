@@ -4,8 +4,7 @@
  * Uses Socket Mode (no public URL). Env: SLACK_BOT_TOKEN, SLACK_APP_TOKEN, PIKO_WEBCHAT_URL.
  */
 const { App } = require('@slack/bolt');
-const http = require('http');
-const https = require('https');
+const { postToPiko } = require('../shared/pikoClient');
 
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN || process.env.SLACK_BOT_USER_OAUTH_TOKEN;
 const SLACK_APP_TOKEN = process.env.SLACK_APP_TOKEN || process.env.SLACK_APP_LEVEL_TOKEN;
@@ -16,36 +15,9 @@ if (!SLACK_BOT_TOKEN || !SLACK_APP_TOKEN) {
   process.exit(1);
 }
 
-function postChat(message, sessionId) {
-  return new Promise((resolve, reject) => {
-    const u = new URL(PIKO_URL + '/api/chat');
-    const body = JSON.stringify({ message, sessionId: sessionId || 'slack-default' });
-    const isHttps = u.protocol === 'https:';
-    const opts = {
-      hostname: u.hostname,
-      port: u.port || (isHttps ? 443 : 80),
-      path: u.pathname,
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-    };
-    const lib = isHttps ? https : http;
-    const req = lib.request(opts, (res) => {
-      let data = '';
-      res.on('data', (ch) => (data += ch));
-      res.on('end', () => {
-        try {
-          const json = JSON.parse(data);
-          resolve(json.reply || json.error || 'No reply.');
-        } catch (_) {
-          resolve(data.slice(0, 500));
-        }
-      });
-    });
-    req.on('error', reject);
-    req.setTimeout(60000, () => { req.destroy(); reject(new Error('timeout')); });
-    req.write(body);
-    req.end();
-  });
+async function postChat(message, sessionId) {
+  const json = await postToPiko(PIKO_URL, message, sessionId || 'slack-default');
+  return json.reply || json.error || 'No reply.';
 }
 
 const app = new App({

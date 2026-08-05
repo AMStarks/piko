@@ -4,44 +4,22 @@
  * Env: PIKO_WEBCHAT_URL (e.g. http://localhost:3000). Auth state in ./auth (scan QR on first run).
  */
 const { makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
-const http = require('http');
-const https = require('https');
 const path = require('path');
 const fs = require('fs');
+const { postToPiko, shouldSendErrorReply } = require('../shared/pikoClient');
+const {
+  nextReconnectDelayMs,
+  decideReconnect,
+  BACKOFF_CAP_MS,
+} = require('./reconnect');
 
 const PIKO_URL = process.env.PIKO_WEBCHAT_URL || 'http://localhost:3000';
 const AUTH_DIR = path.join(__dirname, 'auth');
 
-function postChat(message, sessionId) {
-  return new Promise((resolve, reject) => {
-    const u = new URL(PIKO_URL + '/api/chat');
-    const body = JSON.stringify({ message, sessionId: sessionId || 'whatsapp-default' });
-    const isHttps = u.protocol === 'https:';
-    const opts = {
-      hostname: u.hostname,
-      port: u.port || (isHttps ? 443 : 80),
-      path: u.pathname,
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-    };
-    const lib = isHttps ? https : http;
-    const req = lib.request(opts, (res) => {
-      let data = '';
-      res.on('data', (ch) => (data += ch));
-      res.on('end', () => {
-        try {
-          const json = JSON.parse(data);
-          resolve(json.reply || json.error || 'No reply.');
-        } catch (_) {
-          resolve(data.slice(0, 500));
-        }
-      });
-    });
-    req.on('error', reject);
-    req.setTimeout(60000, () => { req.destroy(); reject(new Error('timeout')); });
-    req.write(body);
-    req.end();
-  });
+async function postChat(message, sessionId) {
+  const json = await postToPiko(PIKO_URL, message, sessionId || 'whatsapp-default');
+  if (json && json.dropped) return null;
+  return json.reply || json.error || 'No reply.';
 }
 
 function getMessageText(msg) {
@@ -52,7 +30,7 @@ function getMessageText(msg) {
   return '';
 }
 
-async function main() {
+async function connect(attempt = 0) {
   fs.mkdirSync(AUTH_DIR, { recursive: true });
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
 
@@ -66,12 +44,20 @@ async function main() {
   sock.ev.on('connection.update', (update) => {
     const { connection, lastDisconnect } = update;
     if (connection === 'close') {
-      const status = lastDisconnect?.error?.output?.statusCode;
-      if (status === DisconnectReason.loggedOut) {
-        console.error('[whatsapp] Logged out. Delete auth/ and restart to re-pair.');
+      const decision = decideReconnect(lastDisconnect, attempt, DisconnectReason.loggedOut);
+      if (decision.action === 'exit_reauth') {
+        console.error('[whatsapp] Logged out. Delete auth/ and restart to re-pair (QR re-auth required).');
         process.exit(1);
+        return;
       }
-      console.error('[whatsapp] Disconnected. Reconnecting...');
+      const delayMs = decision.delayMs || nextReconnectDelayMs(attempt);
+      console.error(`[whatsapp] Disconnected. Reconnecting in ${delayMs}ms (attempt ${attempt + 1})…`);
+      setTimeout(() => {
+        connect(attempt + 1).catch((e) => {
+          console.error('[whatsapp] reconnect failed:', e.message || e);
+          process.exit(1);
+        });
+      }, delayMs);
     } else if (connection === 'open') {
       console.log('Piko WhatsApp adapter ready. PIKO_WEBCHAT_URL=', PIKO_URL);
     }
@@ -87,17 +73,33 @@ async function main() {
       const sessionId = 'whatsapp-' + (jid || 'unknown').replace(/@.*/, '');
       try {
         const reply = await postChat(text.trim(), sessionId);
+        if (reply == null) continue; // dropped (in-flight flood)
         const out = (reply && reply.length > 4096) ? reply.slice(0, 4093) + '…' : reply;
         await sock.sendMessage(jid, { text: out || '(no reply)' });
       } catch (e) {
         console.error('[whatsapp]', e.message);
-        await sock.sendMessage(jid, { text: 'Piko error: ' + e.message }).catch(() => {});
+        if (shouldSendErrorReply(sessionId)) {
+          await sock.sendMessage(jid, { text: 'Piko error: ' + e.message }).catch(() => {});
+        }
       }
     }
   });
 }
 
-main().catch((e) => {
-  console.error(e);
-  process.exit(1);
-});
+async function main() {
+  await connect(0);
+}
+
+if (require.main === module) {
+  main().catch((e) => {
+    console.error(e);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  nextReconnectDelayMs,
+  decideReconnect,
+  BACKOFF_CAP_MS,
+  connect,
+};

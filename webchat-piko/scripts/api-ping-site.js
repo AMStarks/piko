@@ -20,7 +20,16 @@ const ADAPTER = process.env.LEGION_ADAPTER_API_BASE
 function get(url) {
   return new Promise((resolve, reject) => {
     const u = new URL(url);
-    http.get({ hostname: u.hostname, port: u.port, path: `${u.pathname}${u.search}`, timeout: 10000 }, (res) => {
+    const headers = {};
+    const key = String(process.env.PIKO_API_KEY || '').trim();
+    if (key) headers['X-Piko-Key'] = key;
+    http.get({
+      hostname: u.hostname,
+      port: u.port,
+      path: `${u.pathname}${u.search}`,
+      timeout: 10000,
+      headers,
+    }, (res) => {
       let raw = '';
       res.on('data', (c) => { raw += c; });
       res.on('end', () => resolve({ status: res.statusCode, body: raw }));

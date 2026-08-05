@@ -1,0 +1,14 @@
+[Unit]
+Description=Piko webchat tenant customer-04
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/chief/webchat-piko-customer-04
+EnvironmentFile=-/home/chief/webchat-piko-customer-04/.env
+ExecStart=/usr/bin/node /home/chief/webchat-piko-customer-04/server.js
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
