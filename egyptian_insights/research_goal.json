@@ -1,0 +1,156 @@
+{
+  "id": "alternative-history-core",
+  "title": "Alternative history — lost civilizations, cataclysms, anomalous engineering",
+  "summary": "Gather large volumes of open literature and primary material for alternative-history research, then learn from it. Core threads: precision engineering and early monuments in Egypt (Giza, Abydos/Oserion, Heliopolis); Göbekli Tepe and pre-pottery Anatolia; Tiahuanaco / Puma Punku; Younger Dryas impact and megaflood geology (Bretz, Scablands); Atlantis and antediluvian literature (Donnelly onward); comparative flood myths and archaeoastronomy (Hamlet's Mill lineage); classic alternative authors (Hapgood, Schwaller de Lubicz, Tompkins, West, Hancock, Schoch, Bauval, Dunn) alongside the orthodox excavation record they argue against.",
+  "periods": ["Pre-Younger-Dryas", "Predynastic", "Early Dynastic", "Old Kingdom", "Pre-Columbian Andes", "Pre-Pottery Neolithic"],
+  "sites": [
+    {
+      "id": "abydos",
+      "label": "Abydos / Oserion / Umm el-Qa'ab",
+      "aliases": ["abydos", "oserion", "osireion", "umm el-qa'ab", "umm el-qaab", "ummelqaab"],
+      "query": "Abydos Umm el-Qa'ab Early Dynastic ivory label hieroglyph",
+      "query_pack": [
+        "Abydos Egypt",
+        "Umm el-Qaab",
+        "Umm el-Qa'ab",
+        "Osireion Abydos",
+        "Early Dynastic ivory label Egypt"
+      ],
+      "priorities": [
+        "Umm el-Qa'ab tomb labels and early writing",
+        "Oserion / Osireion architecture and inscriptions",
+        "Museum objects provenanced to Abydos (BM, Cairo, etc.)"
+      ]
+    },
+    {
+      "id": "heliopolis",
+      "label": "Heliopolis (Iunu / Innu)",
+      "aliases": ["heliopolis", "iunu", "innu", "on"],
+      "query": "Heliopolis Iunu Old Kingdom hieroglyph obelisk",
+      "query_pack": [
+        "Heliopolis Egypt ancient",
+        "Heliopolis Kafr Ammar",
+        "Iunu Egypt",
+        "obelisk Heliopolis Egypt",
+        "Heliopolis temple Ra Egypt",
+        "Matariya Heliopolis Egypt"
+      ],
+      "priorities": [
+        "Temple of Ra / Benben-related finds",
+        "Obelisks and temple blocks with early inscriptions",
+        "Museum catalogue entries for Heliopolis provenance"
+      ]
+    },
+    {
+      "id": "giza",
+      "label": "Giza complex",
+      "aliases": ["giza", "gizeh", "khufu", "khafre", "menkaure", "great pyramid"],
+      "query": "Giza Pyramid Old Kingdom hieroglyph inscription Giza Project",
+      "query_pack": [
+        "Giza Egypt pyramid",
+        "Gizeh mastaba",
+        "pyramids and temples of Gizeh",
+        "Gizeh and Rifeh",
+        "Khufu Giza",
+        "Digital Giza"
+      ],
+      "priorities": [
+        "Giza Project / Digital Giza records",
+        "Pyramid / mastaba texts and reliefs (early OK)",
+        "Museum objects with Giza provenance and images"
+      ]
+    },
+    {
+      "id": "gobekli-tepe",
+      "label": "Göbekli Tepe / pre-pottery Anatolia",
+      "aliases": ["gobekli tepe", "göbekli tepe", "gobekli", "göbekli", "karahan tepe", "tas tepeler"],
+      "query": "Göbekli Tepe excavation report Klaus Schmidt PDF",
+      "query_pack": [
+        "Göbekli Tepe Klaus Schmidt",
+        "Gobekli Tepe excavation",
+        "Karahan Tepe",
+        "Tas Tepeler Neolithic",
+        "pre-pottery Neolithic enclosure pillar"
+      ],
+      "priorities": [
+        "Excavation reports and peer papers (Schmidt et al.)",
+        "Pillar iconography and archaeoastronomy analyses",
+        "Dating evidence relative to the Younger Dryas boundary"
+      ]
+    },
+    {
+      "id": "tiahuanaco",
+      "label": "Tiahuanaco / Puma Punku",
+      "aliases": ["tiahuanaco", "tiahuanacu", "tiwanaku", "puma punku", "pumapunku"],
+      "query": "Tiahuanacu Posnansky monuments PDF",
+      "query_pack": [
+        "Tiahuanacu Posnansky",
+        "Tiwanaku excavation report",
+        "Puma Punku stonework",
+        "Tiwanaku archaeoastronomy Kalasasaya"
+      ],
+      "priorities": [
+        "Posnansky volumes and early surveys",
+        "Puma Punku precision stonework documentation",
+        "Modern excavation reports and dating debates"
+      ]
+    },
+    {
+      "id": "cataclysm",
+      "label": "Younger Dryas / megaflood geology",
+      "aliases": ["younger dryas", "scablands", "channeled scabland", "missoula flood", "cataclysm", "impact hypothesis"],
+      "query": "Younger Dryas impact hypothesis Firestone Kennett PDF",
+      "query_pack": [
+        "Channeled Scabland Bretz",
+        "Missoula floods geology",
+        "Younger Dryas impact hypothesis",
+        "Younger Dryas boundary evidence PNAS",
+        "black mat Younger Dryas"
+      ],
+      "priorities": [
+        "Bretz Scablands papers and later vindication literature",
+        "Firestone / West / Kennett impact-hypothesis papers and rebuttals",
+        "Meltwater pulse and sea-level rise evidence"
+      ]
+    },
+    {
+      "id": "flood-myths",
+      "label": "Atlantis literature & comparative flood traditions",
+      "aliases": ["atlantis", "flood myth", "deluge", "popol vuh", "antediluvian", "timaeus", "critias"],
+      "query": "Atlantis antediluvian Donnelly flood traditions PDF",
+      "query_pack": [
+        "Atlantis Antediluvian World Donnelly",
+        "Plato Timaeus Critias Atlantis",
+        "Popol Vuh translation",
+        "Mesopotamian flood tablet Atrahasis Gilgamesh",
+        "comparative deluge myths"
+      ],
+      "priorities": [
+        "Primary texts: Plato, Popol Vuh, Mesopotamian flood tablets, Egyptian funerary texts",
+        "Donnelly and the antediluvian literature lineage",
+        "Hamlet's Mill and archaeoastronomy of myth"
+      ]
+    }
+  ],
+  "preferred_sources": [
+    "Internet Archive open scans (canon alternative-history works and excavation reports)",
+    "TopBib / Porter & Moss digital",
+    "Thesaurus Linguae Aegyptiae (TLA)",
+    "Digital Giza / Giza Project",
+    "Open-access journals (PNAS, GSA, antiquity) for Younger Dryas / Scablands papers",
+    "British Museum / Cairo / open museum catalogues",
+    "Wikimedia Commons facsimiles (with catalogue IDs)"
+  ],
+  "phase1_connectors": [
+    "met",
+    "commons",
+    "artic",
+    "digital_giza",
+    "archive_org",
+    "topbib",
+    "tla"
+  ],
+  "agent_mandate": "Gather huge volumes of alternative-history literature into cultures_cache, then learn from it: ingest operator seed lists, expand bibliographies iteratively (snowball), keep strong matches, queue unsures for the operator, index keeps for RAG and notes. Cover both alternative authors and the orthodox primary record they contest. Structure meta by site id when a thread matches (abydos|heliopolis|giza|gobekli-tepe|tiahuanaco|cataclysm|flood-myths). Run scribe/scholar only after real harvest items exist.",
+  "default_harvest_limit": 15,
+  "start_hint": "Paste a seed list of works/URLs to snowball, or brief ei-worker on one thread (e.g. Younger Dryas papers)."
+}
