@@ -904,13 +904,8 @@ function saveAllowlist(allowlist) {
     return false;
   }
 }
-/** Derive source and externalId from sessionId (e.g. "discord-123" -> { source: "discord", externalId: "123" }). */
-function parseSessionSource(sessionId) {
-  if (!sessionId || sessionId === 'default') return { source: 'webchat', externalId: null };
-  const idx = sessionId.indexOf('-');
-  if (idx <= 0) return { source: 'webchat', externalId: null };
-  return { source: sessionId.slice(0, idx).toLowerCase(), externalId: sessionId.slice(idx + 1) };
-}
+/** Derive source and externalId from sessionId (known channel prefixes only). */
+const { parseSessionSource, isAllowedByAllowlist } = require('./lib/channelAllowlist');
 // Non-human automation clients should never share the unified human chat memory.
 function isAutomationSession(sessionId) {
   const s = String(sessionId || '').trim().toLowerCase();
@@ -1014,8 +1009,6 @@ function buildLearningUpdateReply() {
     return fallback;
   }
 }
-const { isAllowedByAllowlist } = require('./lib/channelAllowlist');
-
 // Phase 4: Local skills/ dir (loadable handlers)
 const SKILLS_DIR = path.join(__dirname, 'skills');
 let loadedSkills = [];

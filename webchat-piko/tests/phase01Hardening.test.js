@@ -36,6 +36,19 @@ test('P0.3: missing allowlist source denies non-webchat by default', () => {
   });
 });
 
+test('P0.3: browser UUID session ids parse as webchat (not a fake channel)', () => {
+  const { parseSessionSource, isAllowedByAllowlist } = require('../lib/channelAllowlist');
+  const uuid = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
+  const parsed = parseSessionSource(uuid);
+  assert.equal(parsed.source, 'webchat');
+  assert.equal(isAllowedByAllowlist({}, parsed.source, parsed.externalId), true);
+  assert.equal(parseSessionSource('telegram-42').source, 'telegram');
+  assert.equal(parseSessionSource('telegram-42').externalId, '42');
+  assert.equal(parseSessionSource('webchat-abc').source, 'webchat');
+  assert.equal(parseSessionSource('main').source, 'webchat');
+  assert.equal(parseSessionSource('s-1785899585653').source, 'webchat');
+});
+
 test('P0.3: PIKO_CHANNEL_ALLOWLIST_OPEN=1 restores open channels', () => {
   const { isAllowedByAllowlist } = require('../lib/channelAllowlist');
   return withEnv({ PIKO_CHANNEL_ALLOWLIST_OPEN: '1' }, () => {

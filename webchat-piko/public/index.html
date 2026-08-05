@@ -173,7 +173,9 @@
 
     const LS_SESSION = 'piko_webchat_session:' + (location.pathname || '/');
     function newSessionId() {
-      return crypto.randomUUID ? crypto.randomUUID() : ('s-' + Date.now());
+      // Prefix webchat- so session ids never look like telegram-/ios- channels.
+      const raw = crypto.randomUUID ? crypto.randomUUID().split('-').join('') : String(Date.now());
+      return 'webchat-' + raw;
     }
     function loadStoredSessionId() {
       try {
