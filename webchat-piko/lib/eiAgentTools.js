@@ -244,7 +244,7 @@ function buildHarvestInput(goalText, overrides = {}) {
     if (!overrides.sources) sources = [...SEEK_FILE_SOURCES];
   }
   if (constraints.literature_only || overrides.literature_only) {
-    sources = sources.filter((s) => LIT_SOURCES.includes(s) || s === 'source_scout' || s === 'web_pdf' || s === 'web_text');
+    sources = sources.filter((s) => LIT_SOURCES.includes(s) || s === 'source_scout' || s === 'web_pdf' || s === 'web_text' || s === 'web_document');
     if (!sources.length) sources = [...LIT_SOURCES];
   }
   if (constraints.discover_sources && !sources.includes('source_scout')) {
@@ -293,6 +293,7 @@ function buildHarvestInput(goalText, overrides = {}) {
     min_text_chars: overrides.min_text_chars != null ? overrides.min_text_chars : (requireDocument ? 400 : undefined),
     seek_files: overrides.seek_files === true,
     volume_job: overrides.volume_job === true || requireDocument,
+    auto_route: overrides.auto_route != null ? !!overrides.auto_route : undefined,
   };
 }
 
@@ -382,11 +383,16 @@ async function runPointerChase(sourceName, toolName, args = {}, opts = {}) {
           ? `Please find and add to Corpus ${named.author}'s ${p.title}`
           : `Please find and add to Corpus ${p.title}`,
       });
+      const mf = seekOut.mission_fit
+        || (seekOut.result && seekOut.result.mission_fit)
+        || null;
+      const keptFromMf = ((mf && mf.judgments) || [])
+        .filter((j) => j && j.verdict === 'keep' && !j.purged).length;
       chased.push({
         pointer: p.title,
         ok: !!seekOut.ok,
-        kept: (seekOut.result && seekOut.result.kept) || 0,
-        mission_fit: seekOut.mission_fit || null,
+        kept: keptFromMf || (seekOut.result && seekOut.result.kept) || 0,
+        mission_fit: mf,
       });
     } catch (e) {
       chased.push({ pointer: p.title, ok: false, error: String(e.message || e).slice(0, 120) });
@@ -560,6 +566,9 @@ const TOOLS = {
               purgeDrops: true,
               limit: lim,
               maxKeeps: maxKeeps != null ? maxKeeps : undefined,
+              campaignDomain: opts.campaignDomain === true || opts.source === 'ei_research_campaign',
+              campaignTopic: opts.campaignTopic || null,
+              thread: opts.thread || null,
             });
             missionFitText = formatMissionFitReport(missionFit);
           } catch (e) {
@@ -618,11 +627,17 @@ const TOOLS = {
   ingest_url: {
     name: 'ingest_url',
     description:
-      'Ingest a specific operator-provided URL into the corpus, then run mission-fit. Handles Archive.org / direct PDF links AND plain-HTML text sites (an online book\'s index page is scraped word-for-word into a .txt document). Use when open search cannot find a copy or the operator pastes a URL.',
+      'Ingest a specific operator-provided URL into the corpus, then run mission-fit. Probes the URL and routes: PDF → web_pdf, TEI/XML/TXT or HTML with a Download/full-text link → fetch_document (one file), flat HTML book index → web_text crawl. Use when the operator pastes a URL. Set force=true or recrawl=true to discard an incomplete shelf hit.',
     input_schema: {
       url: 'string',
       note: 'string',
       title: 'string',
+      force: 'boolean',
+      recrawl: 'boolean',
+      deliver_existing: 'boolean',
+      site_crawl: 'boolean',
+      thread: 'string',
+      focus: 'string',
     },
     async run(args = {}, opts = {}) {
       const url = String(args.url || args.query || '').trim();
@@ -634,24 +649,128 @@ const TOOLS = {
           result: null,
         };
       }
+      const mission = String(opts.goal || args.note || args.title || `Ingest ${url}`).trim();
+      // Accept LLM aliases: force/recrawl, force_recrawl; deliver_existing:false means recrawl.
+      let force = !!(
+        args.force
+        || args.recrawl
+        || args.force_recrawl
+        || args['force/recrawl'] === true
+        || args['force/recrawl'] === 'true'
+        || args.deliver_existing === false
+      );
+      if (!force) {
+        try {
+          const { isForceRecrawlIntent } = require('./eiWorkPlanner');
+          if (isForceRecrawlIntent(mission)) force = true;
+        } catch (_) { /* optional */ }
+      }
+      const deliverExisting = args.deliver_existing !== false && !force;
+      let existing = null;
       try {
-        const { alreadyKeptUrl, normalizeSourceUrl } = require('./eiResearchCampaign');
-        if (alreadyKeptUrl(url)) {
-          return {
-            ok: true,
-            tool: 'ingest_url',
-            artifact: `Skipped duplicate URL (already in corpus): ${normalizeSourceUrl(url) || url}`,
-            result: {
-              url,
-              kept: 0,
-              skipped_duplicate_url: true,
-              mission_fit: { judgments: [], counts: { keep: 0, drop: 0, unsure: 0 } },
-            },
-            mission_fit: { judgments: [], counts: { keep: 0, drop: 0, unsure: 0 } },
-          };
+        const { findKeptItemByUrl, normalizeSourceUrl } = require('./eiResearchCampaign');
+        existing = findKeptItemByUrl(url);
+        if (existing && !force) {
+          const { isSiteIndexIntent, isTocLikeUrl } = require('./eiWorkPlanner');
+          const wantsCrawl = !!(args.site_crawl || isSiteIndexIntent(mission) || isTocLikeUrl(url));
+          // P0: only short-circuit when crawl QA proves a full on-work delivery.
+          const {
+            evidenceFromExistingItem,
+            formatDeliveryEvidenceBlock,
+            presentWebTextTitle,
+          } = require('./eiWebTextDelivery');
+          const evidence = evidenceFromExistingItem(existing, url);
+          const fullDoc = !!(existing.is_full_document || (existing.meta && existing.meta.is_full_document));
+          const fullOk = !!(existing.is_full_web_text && evidence && evidence.crawl_qa && evidence.crawl_qa.ok);
+          if ((fullOk || fullDoc) && (existing.is_full_web_text || fullDoc || deliverExisting)) {
+            let digested = false;
+            try {
+              const { deepDigestItem } = require('./eiCorpusNotes');
+              await deepDigestItem(existing.harvest_id);
+              digested = true;
+            } catch (_) { /* best-effort */ }
+            const displayTitle = (evidence && evidence.display_title)
+              || presentWebTextTitle(existing.title, existing.pages_scraped)
+              || existing.title;
+            const judgment = {
+              verdict: 'keep',
+              harvest_id: existing.harvest_id,
+              work_title: displayTitle,
+              title: displayTitle,
+              relation: fullDoc ? 'web_document' : 'web_text_site_crawl',
+              author: (existing.meta && (existing.meta.author || existing.meta.work_author)) || 'unknown',
+              purged: false,
+              existing: true,
+              pages_scraped: existing.pages_scraped,
+              is_full_web_text: !fullDoc,
+              is_full_document: !!fullDoc,
+            };
+            const missionFit = {
+              judgments: [judgment],
+              counts: { keep: 1, drop: 0, unsure: 0 },
+            };
+            const chars = evidence && evidence.text_chars_total;
+            return {
+              ok: true,
+              tool: 'ingest_url',
+              artifact: [
+                formatDeliveryEvidenceBlock(evidence),
+                `Already in corpus as #${existing.harvest_id}`
+                  + (existing.pages_scraped ? ` (${existing.pages_scraped} pages scraped)` : '')
+                  + `: ${displayTitle}`,
+                fullDoc
+                  ? `Full document already on the shelf (#${existing.harvest_id}${chars ? `, ${chars} chars` : ''}).`
+                  : (`QA-green full web_text site crawl on the shelf (${existing.pages_scraped || '?'} pages`
+                    + (chars ? `, ${chars} chars` : '')
+                    + ').'),
+                digested ? 'Deep-digested existing keep for operator ask.' : null,
+                'Delivered existing keep — no duplicate ingest.',
+              ].filter(Boolean).join('\n'),
+              result: {
+                url,
+                kept: 1,
+                skipped_duplicate_url: true,
+                existing_harvest_id: existing.harvest_id,
+                harvest_id: existing.harvest_id,
+                pages_scraped: existing.pages_scraped,
+                text_chars_total: chars || null,
+                has_local_document: existing.has_local_document,
+                is_full_web_text: !fullDoc,
+                is_full_document: !!fullDoc,
+                crawl_qa: evidence && evidence.crawl_qa,
+                crawl_prefix: (evidence && evidence.crawl_prefix) || url,
+                work_title: displayTitle,
+                delivery_evidence: evidence,
+                mission_fit: missionFit,
+                quality: { substantive_count: 1, with_document: existing.has_local_document ? 1 : 0 },
+              },
+              mission_fit: missionFit,
+            };
+          }
+          // Incomplete / thin / crawl ask: fall through to Legion re-scrape
+          // (force_recrawl set below). Do not fail closed — that blocked force-recrawl.
+          const incomplete = !!(
+            existing.is_partial_web_text
+            || existing.is_thin_stub
+            || (!existing.is_full_web_text && !existing.is_full_document)
+          );
+          if (wantsCrawl || incomplete) {
+            // fall through
+          } else {
+            return {
+              ok: false,
+              tool: 'ingest_url',
+              artifact: `Skipped duplicate URL without full delivery proof: ${url}`,
+              result: {
+                url,
+                kept: 0,
+                skipped_duplicate_url: true,
+                existing_harvest_id: existing.harvest_id,
+              },
+            };
+          }
         }
       } catch (_) { /* best-effort */ }
-      const mission = String(opts.goal || args.note || args.title || `Ingest ${url}`).trim();
       const query = `SEED_URL:${url}`;
       const input = buildHarvestInput(query, {
         seek_files: true,
@@ -659,17 +778,31 @@ const TOOLS = {
         literature_only: true,
         require_image: false,
         require_document: true,
-        // web_pdf claims PDFs; web_text crawls HTML book sites word-for-word.
-        sources: ['web_pdf', 'web_text'],
+        // Probe inside harvest picks one: web_pdf | web_document | web_text.
+        sources: ['web_pdf', 'web_document', 'web_text'],
         limit: 3,
         skip_thin: true,
         note: mission.slice(0, 1000),
+        auto_route: true,
+        focus: args.thread || args.focus || args.site || undefined,
       });
       input.query = query;
+      input.auto_route = true;
+      if (force || (existing && (existing.is_thin_stub || existing.is_partial_web_text || (!existing.is_full_web_text && !existing.is_full_document)))) {
+        input.force_recrawl = true;
+      }
+      if (args.site_crawl) input.site_crawl = true;
       const out = await runLegionCap('research.scrape.run', input, {
         ...opts,
-        timeoutMs: Math.max(120000, Number(opts.timeoutMs || 300000)),
-        pollTimeoutMs: Math.max(120000, Number(opts.pollTimeoutMs || 300000)),
+        // Large TOC crawls can take 15–20+ minutes; keep poll aligned.
+        timeoutMs: Math.max(
+          900000,
+          Number(opts.timeoutMs || process.env.PIKO_EI_INGEST_URL_TIMEOUT_MS || 1200000),
+        ),
+        pollTimeoutMs: Math.max(
+          900000,
+          Number(opts.pollTimeoutMs || process.env.PIKO_EI_INGEST_URL_TIMEOUT_MS || 1200000),
+        ),
       });
       const coverage = extractSeekCoverage(out.result || {});
       let missionFit = null;
@@ -708,6 +841,9 @@ const TOOLS = {
               purgeDrops: true,
               limit: 5,
               maxKeeps: 1,
+              campaignDomain: opts.campaignDomain === true || opts.source === 'ei_research_campaign',
+              campaignTopic: opts.campaignTopic || null,
+              thread: opts.thread || null,
             });
             missionFitText = formatMissionFitReport(missionFit);
             try {
@@ -724,25 +860,68 @@ const TOOLS = {
         }
       }
       const kept = (missionFit && missionFit.counts && missionFit.counts.keep) || 0;
+      let scrapeHid = 0;
+      try {
+        const { harvestIdsFromToolResult } = require('./eiMissionFitReview');
+        scrapeHid = Number((harvestIdsFromToolResult(out.result || {}) || [])[0] || 0);
+      } catch (_) { /* optional */ }
+      if (!scrapeHid) {
+        for (const it of (out.result && out.result.items) || []) {
+          scrapeHid = Number(it && (it.harvest_id || it.id)) || 0;
+          if (scrapeHid) break;
+        }
+      }
       const voice = coverageVoiceSummary(coverage, missionFit);
+      const route = (out.result && out.result.ingest_route) || input.ingest_route || null;
+      const routeLine = route && route.connector
+        ? `Ingest route: ${route.connector} (${route.kind || 'page'}${route.hint ? `, ${route.hint}` : ''}${route.fetch_url && route.fetch_url !== url ? ` via ${route.fetch_url}` : ''}).`
+        : '';
       const emptyHint = kept === 0
-        ? '\nIf this URL is paywalled or not a direct PDF, try an Archive.org details link or a direct .pdf URL.'
+        ? '\nIf this URL is paywalled or not a direct PDF/TEI download, try an Archive.org details link or a direct .pdf / .xml URL.'
         : '';
       return {
         ok: out.status === 'ok' && kept > 0,
         tool: 'ingest_url',
-        artifact: [out.artifact_text, formatSeekCoverage(coverage), missionFitText, voice + emptyHint].filter(Boolean).join('\n\n'),
+        artifact: [out.artifact_text, routeLine, formatSeekCoverage(coverage), missionFitText, voice + emptyHint].filter(Boolean).join('\n\n'),
         result: {
           ...(out.result || {}),
           seek_coverage: coverage,
           mission_fit: missionFit,
           url,
           kept,
+          harvest_id: scrapeHid || undefined,
+          force_recrawl: !!input.force_recrawl,
+          ingest_route: route,
         },
         seek_coverage: coverage,
         mission_fit: missionFit,
         input,
       };
+    },
+  },
+
+  fetch_document: {
+    name: 'fetch_document',
+    description:
+      'Fetch a single full document (PDF, TEI/XML, plain text, or an HTML viewer that offers Download/full text) into the corpus. Prefer this over HTML site crawl when the work is one file. For a pasted URL, ingest_url also auto-routes here after probing.',
+    input_schema: {
+      url: 'string',
+      note: 'string',
+      title: 'string',
+      force: 'boolean',
+      recrawl: 'boolean',
+    },
+    async run(args = {}, opts = {}) {
+      const out = await TOOLS.ingest_url.run({
+        ...args,
+        site_crawl: false,
+      }, {
+        ...opts,
+        timeoutMs: Math.max(120000, Number(opts.timeoutMs || process.env.PIKO_EI_FETCH_DOCUMENT_TIMEOUT_MS || 180000)),
+        pollTimeoutMs: Math.max(120000, Number(opts.pollTimeoutMs || process.env.PIKO_EI_FETCH_DOCUMENT_TIMEOUT_MS || 180000)),
+      });
+      if (out && typeof out === 'object') out.tool = 'fetch_document';
+      return out;
     },
   },
 
@@ -783,6 +962,16 @@ const TOOLS = {
     input_schema: { query: 'string', limit: 'number' },
     async run(args = {}, opts = {}) {
       return runNamedSourceSeek('papyri', 'seek_papyri', args, opts);
+    },
+  },
+
+  seek_digital_giza: {
+    name: 'seek_digital_giza',
+    description:
+      'Search Digital Giza / Giza Project object and tomb records (primary excavation context).',
+    input_schema: { query: 'string', limit: 'number' },
+    async run(args = {}, opts = {}) {
+      return runNamedSourceSeek('digital_giza', 'seek_digital_giza', args, opts);
     },
   },
 
@@ -903,12 +1092,43 @@ const TOOLS = {
     },
   },
 
+  research_pm: {
+    name: 'research_pm',
+    description:
+      'Piko research PM: propose one named spine work, deploy a thinking seeker, confirm the edition/URL, then ingest. Actions: start, pause, resume, stop, status, propose, deploy, confirm, tick, scorecard. Confirm stays with Piko (27b) / operator — seeker does not ingest.',
+    input_schema: {
+      action: 'start|pause|resume|stop|status|propose|deploy|confirm|tick|scorecard',
+      topic: 'string',
+      title: 'string',
+      author: 'string',
+      thread: 'string',
+      url: 'string',
+      id: 'string',
+      verdict: 'keep|recrawl|drop|retag|ask_operator',
+      why: 'string',
+      interval_minutes: 'number',
+      auto_confirm: 'boolean',
+    },
+    async run(args = {}, opts = {}) {
+      const pm = require('./eiResearchPm');
+      const action = String(args.action || 'status').toLowerCase();
+      const out = await pm.runPmTool(args, opts);
+      return {
+        ok: out.ok !== false,
+        tool: 'research_pm',
+        artifact: pm.formatPmToolArtifact(action, out),
+        result: out,
+        mission_fit: null,
+      };
+    },
+  },
+
   research_campaign: {
     name: 'research_campaign',
     description:
-      'Control the standing research campaign that autonomously keeps growing the corpus on the topic: start, pause, resume, stop, status, or run one cycle now. It seeks new sources each cycle, skips duplicates, expands bibliographies, digests keeps into notes, and sets its own next missions from what it learns.',
+      'Piko research PM mode (default): start/pause/resume/stop/status/run_now/scorecard. Start deploys thinking seekers under Piko confirm — not the old autonomous forklift. Use action start_forklift only to re-enable the legacy campaign daemon. backfill_learning still digests existing keeps.',
     input_schema: {
-      action: 'start|pause|resume|stop|status|run_now|backfill_learning|scorecard',
+      action: 'start|pause|resume|stop|status|run_now|backfill_learning|scorecard|start_forklift',
       topic: 'string',
       focus_only: 'boolean',
       interval_minutes: 'number',
@@ -917,30 +1137,56 @@ const TOOLS = {
     },
     async run(args = {}, opts = {}) {
       const campaign = require('./eiResearchCampaign');
+      const pm = require('./eiResearchPm');
       const action = String(args.action || 'status').toLowerCase();
       let out;
-      if (action === 'start') {
+      if (action === 'start_forklift') {
+        try { pm.stopPm(); } catch (_) { /* PM may already be off */ }
+        out = campaign.startCampaign({
+          topic: args.topic || opts.goal,
+          focus_only: !!args.focus_only,
+          interval_minutes: args.interval_minutes,
+          force_forklift: true,
+        });
+      } else if (action === 'start') {
         const phrase = String(args.topic || opts.goal || '').trim();
         const focusOnly = !!args.focus_only || includesAny(toLowerAsciiish(phrase), ['focus only on']);
-        out = campaign.startCampaign({
-          topic: focusOnly ? phrase : undefined,
-          focus_only: focusOnly,
-          interval_minutes: args.interval_minutes,
-        });
-        // Queue targeted operator leads from the keep-researching / topic phrase
-        // without overwriting the standing campaign topic (unless focus_only).
-        if (phrase) {
-          const leads = campaign.leadsFromTopicPhrase(phrase, 3);
-          if (leads.length) {
-            const added = campaign.addCampaignLeads(leads);
-            out.operator_leads_added = added.added || 0;
-            out.status = campaign.getCampaignStatus().status;
+        if (pm.pmModeDefaultOn()) {
+          const keepGoing = includesAny(toLowerAsciiish(phrase), [
+            'keep research', 'keep ingest', 'keep seek', 'keep gather', 'keep think',
+            'gather more', 'more resource', 'more source', 'keep going',
+          ]);
+          out = pm.startPm({
+            topic: focusOnly ? phrase : (phrase || undefined),
+            interval_minutes: args.interval_minutes,
+          });
+          out.operator_leads_added = 0;
+          if (keepGoing) {
+            out = await pm.tickPm({ force: true, rootDir: opts.rootDir });
+          }
+        } else {
+          out = campaign.startCampaign({
+            topic: focusOnly ? phrase : undefined,
+            focus_only: focusOnly,
+            interval_minutes: args.interval_minutes,
+          });
+          if (phrase) {
+            const leads = campaign.leadsFromTopicPhrase(phrase, 3);
+            if (leads.length) {
+              const added = campaign.addCampaignLeads(leads);
+              out.operator_leads_added = added.added || 0;
+              out.status = campaign.getCampaignStatus().status;
+            }
           }
         }
-      } else if (action === 'pause') out = campaign.pauseCampaign();
-      else if (action === 'resume') out = campaign.resumeCampaign();
-      else if (action === 'stop') out = campaign.stopCampaign();
-      else if (action === 'backfill_learning') {
+      } else if (action === 'pause') {
+        out = pm.loadState().enabled ? pm.pausePm() : campaign.pauseCampaign();
+      } else if (action === 'resume') {
+        out = pm.loadState().enabled || pm.loadState().created_at ? pm.resumePm() : campaign.resumeCampaign();
+      } else if (action === 'stop') {
+        if (pm.loadState().enabled || pm.loadState().created_at) out = pm.stopPm();
+        else out = campaign.stopCampaign();
+      } else if (action === 'backfill_learning') {
         const { backfillCorpusLearning } = require('./eiCorpusNotes');
         const bf = await backfillCorpusLearning({
           limit: args.limit != null ? Number(args.limit) : 40,
@@ -948,22 +1194,48 @@ const TOOLS = {
         });
         out = { ok: !!bf.ok, status: campaign.getCampaignStatus().status, backfill: bf };
       } else if (action === 'scorecard') {
-        out = campaign.getLearningScorecard();
+        out = pm.isPmManaging() || (pm.loadState().stats && pm.loadState().stats.confirmed_keep)
+          ? pm.pmScorecard()
+          : campaign.getLearningScorecard();
       } else if (action === 'run_now') {
-        const { enqueueAgentJob } = require('./agentOrchestrator');
-        campaign.startCampaign({});
-        campaign.resetIdleStreak();
-        const queued = enqueueAgentJob('campaign_cycle', { source: 'chat' }, { rootDir: opts.rootDir });
-        out = { ok: !!queued.ok, status: campaign.getCampaignStatus().status };
-      } else out = campaign.getCampaignStatus();
+        if (pm.pmModeDefaultOn()) {
+          if (!pm.loadState().enabled) pm.startPm({ topic: args.topic || opts.goal });
+          out = await pm.tickPm({ force: true, rootDir: opts.rootDir });
+        } else {
+          const { enqueueAgentJob } = require('./agentOrchestrator');
+          campaign.startCampaign({});
+          campaign.resetIdleStreak();
+          const queued = enqueueAgentJob('campaign_cycle', { source: 'chat' }, { rootDir: opts.rootDir });
+          out = { ok: !!queued.ok, status: campaign.getCampaignStatus().status };
+        }
+      } else if (pm.loadState().enabled) {
+        out = pm.getPmStatus();
+      } else {
+        out = campaign.getCampaignStatus();
+      }
+      let artifact;
+      if (action === 'backfill_learning' && out.backfill) {
+        artifact = `Backfill: digested ${(out.backfill.digested || []).length}, skipped ${(out.backfill.skipped || []).length}, errors ${(out.backfill.errors || []).length}`;
+      } else if (action === 'start_forklift') {
+        artifact = campaign.formatCampaignStatus(out.status);
+      } else if (
+        out.mode === 'research_pm'
+        || out.packet
+        || out.work
+        || out.confirmed_spine_total != null
+        || out.skipped
+        || (pm.loadState().enabled && action !== 'backfill_learning')
+      ) {
+        artifact = pm.formatPmToolArtifact(action === 'run_now' ? 'tick' : action, out);
+      } else if (action === 'scorecard') {
+        artifact = `Learning scorecard: notes/keep=${out.notes_keep_ratio ?? '?'} · attributed=${out.attributed_keep_pct ?? '?'}% · reflection/100=${out.reflection_survival_per_100_cycles ?? '?'} · dead_threads=${out.dead_thread_count ?? '?'}`;
+      } else {
+        artifact = campaign.formatCampaignStatus(out.status || out);
+      }
       return {
-        ok: !!out.ok,
+        ok: out.ok !== false,
         tool: 'research_campaign',
-        artifact: action === 'backfill_learning' && out.backfill
-          ? `Backfill: digested ${(out.backfill.digested || []).length}, skipped ${(out.backfill.skipped || []).length}, errors ${(out.backfill.errors || []).length}`
-          : action === 'scorecard'
-            ? `Learning scorecard: notes/keep=${out.notes_keep_ratio ?? '?'} · attributed=${out.attributed_keep_pct ?? '?'}% · reflection/100=${out.reflection_survival_per_100_cycles ?? '?'} · dead_threads=${out.dead_thread_count ?? '?'}`
-          : campaign.formatCampaignStatus(out.status),
+        artifact,
         result: out,
         mission_fit: null,
       };
@@ -1004,7 +1276,7 @@ const TOOLS = {
   thread_dossier: {
     name: 'thread_dossier',
     description:
-      'Load or rebuild the expert dossier for a research thread (giza, abydos, gobekli-tepe, tiahuanaco, cataclysm, flood-myths, atlantis). Claims cite corpus harvest ids.',
+      'Load or rebuild the expert dossier for a research thread (giza, abydos, heliopolis, self-view, premodern-reception, gobekli-tepe, cataclysm, atlantis, tiahuanaco, flood-myths). Claims cite corpus harvest ids.',
     input_schema: { thread: 'string', rebuild: 'boolean' },
     async run(args = {}) {
       const d = require('./eiThreadDossiers');

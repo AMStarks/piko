@@ -51,6 +51,23 @@ def _resolve_focus(data: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+def _existing_crawl_incomplete(hit_meta: Dict[str, Any]) -> bool:
+    """True when shelf hit is an incomplete / failed web_text crawl."""
+    if bool(hit_meta.get("is_stub")):
+        return True
+    qa = hit_meta.get("crawl_qa")
+    if isinstance(qa, dict) and qa.get("ok") is False:
+        return True
+    role = str(hit_meta.get("literature_role") or hit_meta.get("connector") or "")
+    if role == "web_text" or hit_meta.get("pages_scraped") is not None:
+        # Legacy crawls without crawl_qa / pages_content are not full deliveries.
+        if not isinstance(qa, dict) and hit_meta.get("pages_content") is None:
+            return True
+        if isinstance(qa, dict) and qa.get("ok") is not True:
+            return True
+    return False
+
+
 def _persist_item(
     conn: Any,
     row: Dict[str, Any],
@@ -59,12 +76,14 @@ def _persist_item(
     query: str,
     require_image: bool,
     require_document: bool = False,
+    force_recrawl: bool = False,
     errors: List[str],
 ) -> Optional[Dict[str, Any]]:
     is_stub = bool(row.get("is_stub"))
     image_path = None
     image_bytes = 0
     image_url = str(row.get("image_url") or "")
+    replace_existing = False
 
     # Skip re-download when this volume title (or URL) already exists in the corpus
     title_hit = db.find_title_match(
@@ -82,8 +101,17 @@ def _persist_item(
         except Exception:
             hit_meta = {}
         has_doc = bool(hit_meta.get("document_path"))
-        # Different source/id but same title (and we already have a file): keep first id
-        if not same_key and has_doc:
+        incomplete_existing = _existing_crawl_incomplete(hit_meta)
+        row_url = str(row.get("source_url") or row.get("document_url") or "").strip()
+        url_match = bool(row_url) and str(title_hit.get("source_url") or "").strip() == row_url
+        # Replace when forced, or when the same URL/source is an incomplete crawl.
+        replace_existing = bool(force_recrawl or ((same_key or url_match) and incomplete_existing))
+        if replace_existing:
+            errors.append(
+                f"force_recrawl:#{title_hit['id']}:{row.get('source')}:{row.get('source_id')}"
+            )
+        # Different source/id but same title (and we already have a full file): keep first id
+        elif not same_key and has_doc:
             errors.append(
                 f"title_dup:#{title_hit['id']}:{row.get('source')}:{row.get('source_id')}"
             )
@@ -97,7 +125,27 @@ def _persist_item(
                 "image_path": title_hit.get("image_path"),
                 "document_path": hit_meta.get("document_path"),
                 "source_url": title_hit.get("source_url") or row.get("source_url"),
-                "is_stub": False,
+                "is_stub": bool(hit_meta.get("is_stub")),
+                "image_bytes": int(hit_meta.get("image_bytes") or 0),
+                "text_chars": text_chars,
+                "kind": hit_meta.get("kind") or (row.get("meta_extra") or {}).get("kind"),
+                "connector": hit_meta.get("connector") or row.get("connector") or row.get("source"),
+                "title_deduped": True,
+                "matched_existing_id": int(title_hit["id"]),
+            }
+        elif same_key and has_doc and not is_stub:
+            # Identical source already on shelf and new row is full — return existing.
+            text_chars = len(str(title_hit.get("official_text") or row.get("official_text") or ""))
+            return {
+                "harvest_id": int(title_hit["id"]),
+                "site": hit_meta.get("site") or focus,
+                "source": title_hit.get("source"),
+                "source_id": title_hit.get("source_id"),
+                "title": title_hit.get("title") or row.get("title"),
+                "image_path": title_hit.get("image_path"),
+                "document_path": hit_meta.get("document_path"),
+                "source_url": title_hit.get("source_url") or row.get("source_url"),
+                "is_stub": bool(hit_meta.get("is_stub")),
                 "image_bytes": int(hit_meta.get("image_bytes") or 0),
                 "text_chars": text_chars,
                 "kind": hit_meta.get("kind") or (row.get("meta_extra") or {}).get("kind"),
@@ -198,6 +246,8 @@ def _persist_item(
         "kind": meta_extra.get("kind") or ("literature" if allow_without and not image_url else "object"),
         **meta_extra,
     }
+    if not meta.get("thread"):
+        meta["thread"] = meta_extra.get("thread") or site_id or focus
     if document_path:
         meta["document_path"] = document_path
         meta["document_bytes"] = document_bytes
@@ -223,8 +273,12 @@ def _persist_item(
         "image_url": image_url or None,
         "meta_json": json.dumps(meta, ensure_ascii=False),
     }
-    hid = db.upsert_harvest(conn, payload)
-    text_chars = len(str(row.get("official_text") or ""))
+    hid = db.upsert_harvest(conn, payload, replace=bool(replace_existing))
+    text_chars = max(
+        len(str(row.get("official_text") or "")),
+        int((row.get("meta_extra") or {}).get("text_chars_total") or 0),
+        int(meta.get("text_chars_total") or 0),
+    )
     title_deduped = bool(title_hit and int(title_hit["id"]) == int(hid) and (
         str(title_hit.get("source") or "") != payload["source"]
         or str(title_hit.get("source_id") or "") != payload["source_id"]
@@ -265,14 +319,50 @@ def run_harvest(input_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         sources = [s.strip() for s in sources.split(",") if s.strip()]
     if not sources:
         sources = research_goal.load_goal().get("phase1_connectors") or [
+            "tla",
+            "oraec",
+            "papyri",
+            "topbib",
+            "digital_giza",
+            "archive_org",
             "met",
             "commons",
             "artic",
-            "digital_giza",
-            "archive_org",
-            "topbib",
-            "tla",
         ]
+
+    ingest_route: Optional[Dict[str, Any]] = None
+    try:
+        from .sources.page_probe import choose_connector, probe_url, should_auto_route
+        from .sources.web_pdf import _extract_seed_urls
+
+        auto_route = data.get("auto_route")
+        if auto_route is None:
+            auto_route = True
+        _prim, seeds, _alts = _extract_seed_urls(query)
+        if seeds and should_auto_route(list(sources), auto_route):
+            card = probe_url(seeds[0])
+            chosen = choose_connector(card)
+            if chosen:
+                ingest_route = {
+                    "connector": chosen,
+                    "kind": card.get("kind"),
+                    "hint": card.get("preferred_hint"),
+                    "fetch_url": card.get("preferred_fetch_url"),
+                    "seed_url": seeds[0],
+                    "title": card.get("title"),
+                    "error": card.get("error"),
+                }
+                sources = [chosen]
+                errors_pre = [
+                    f"ingest_route:{chosen}:{card.get('kind')}:{card.get('preferred_hint') or '-'}"
+                ]
+            else:
+                errors_pre = [f"ingest_route:none:{card.get('kind')}:{card.get('error') or '-'}"]
+        else:
+            errors_pre = []
+    except Exception as exc:
+        errors_pre = [f"ingest_route_fail:{exc}"]
+        ingest_route = None
 
     routed = run_connectors(
         site=site,
@@ -281,19 +371,20 @@ def run_harvest(input_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         sources=list(sources),
         allow_stubs=allow_stubs,
     )
-    errors: List[str] = list(routed.get("errors") or [])
+    errors: List[str] = list(errors_pre) + list(routed.get("errors") or [])
     connector_stats = dict(routed.get("connector_stats") or {})
 
     skip_thin = bool(data.get("skip_thin"))
     min_text = int(data.get("min_text_chars") if data.get("min_text_chars") is not None else 500)
     min_text = max(100, min(min_text, 5000))
     require_document = bool(data.get("require_document"))
+    force_recrawl = bool(data.get("force_recrawl") or data.get("force") or data.get("recrawl"))
     scout_only = list(sources) == ["source_scout"]
 
     def _row_too_thin(row: Dict[str, Any]) -> bool:
         kind = str((row.get("meta_extra") or {}).get("kind") or "")
         text_chars = len(str(row.get("official_text") or ""))
-        has_doc = bool(row.get("document_url") or row.get("document_path"))
+        has_doc = bool(row.get("document_url") or row.get("document_path") or row.get("document_local_path"))
         if require_document and not has_doc:
             return True
         if not skip_thin:
@@ -311,6 +402,11 @@ def run_harvest(input_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
             if _row_too_thin(row):
                 errors.append(f"skip_thin:{row.get('source')}:{row.get('source_id')}")
                 continue
+            # Incomplete crawls are stubs: skip unless allow_stubs or force_recrawl
+            # (force still persists so the shelf record is updated honestly).
+            if bool(row.get("is_stub")) and not allow_stubs and not force_recrawl:
+                errors.append(f"skip_stub:{row.get('source')}:{row.get('source_id')}")
+                continue
             persisted = _persist_item(
                 conn,
                 row,
@@ -318,6 +414,7 @@ def run_harvest(input_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
                 query=query,
                 require_image=require_image,
                 require_document=require_document,
+                force_recrawl=force_recrawl,
                 errors=errors,
             )
             if persisted:
@@ -351,6 +448,7 @@ def run_harvest(input_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         "errors": errors,
         "stats": stats,
         "db": str(db.db_path()),
+        "ingest_route": ingest_route,
     }
 
 

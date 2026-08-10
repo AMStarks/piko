@@ -105,6 +105,148 @@ const SEEDS = [
     ia_ids: ['pyramidstempleso00petruoft', 'medum00petr'],
   },
   {
+    authors: ['Herodotus'],
+    title_hints: ['Histories', 'The Histories', 'Euterpe'],
+    thread: 'premodern-reception',
+    urls: [
+      'https://www.perseus.tufts.edu/hopper/text?doc=Perseus%3atext%3a1999.01.0126',
+    ],
+    ia_ids: [],
+    note: 'Godley English Histories (Perseus TEI via hopper/dltext).',
+  },
+  {
+    authors: ['Manetho', 'W. G. Waddell', 'Waddell'],
+    title_hints: ['Aegyptiaca', 'Manetho'],
+    thread: 'premodern-reception',
+    urls: [
+      'https://archive.org/details/manethowithintro00mane',
+    ],
+    ia_ids: ['manethowithintro00mane'],
+  },
+  {
+    authors: ['Diodorus Siculus', 'Diodorus'],
+    title_hints: ['Library of History', 'Bibliotheca historica'],
+    thread: 'premodern-reception',
+    urls: [
+      'https://www.perseus.tufts.edu/hopper/text?doc=Perseus%3atext%3a1999.01.0084',
+    ],
+    ia_ids: [],
+    note: 'Oldfather English Diodorus (Book I covers Egypt).',
+  },
+  {
+    authors: ['Strabo'],
+    title_hints: ['Geography'],
+    thread: 'premodern-reception',
+    urls: [
+      'https://www.perseus.tufts.edu/hopper/text?doc=Perseus%3atext%3a1999.01.0198%3abook%3d17',
+    ],
+    ia_ids: [],
+    note: 'Strabo Geography Book XVII (Egypt).',
+  },
+  {
+    authors: ['Plutarch'],
+    title_hints: ['Isis and Osiris', 'De Iside', 'Moralia'],
+    thread: 'premodern-reception',
+    urls: [
+      'https://archive.org/details/plutarch-isis-osiris-loeb',
+      'https://archive.org/download/plutarch-isis-osiris-loeb/Plutarch_Isis_Osiris_Loeb_djvu.txt',
+    ],
+    ia_ids: ['plutarch-isis-osiris-loeb'],
+    note: 'Plutarch Isis and Osiris (Loeb OCR on IA). Dead Perseus Plut.+Isis viewer removed.',
+  },
+  {
+    authors: ['Abd al-Latif', 'Abdellatif', 'Abd-Allatif'],
+    title_hints: ['Account of Egypt', 'Relation de l\'Egypte'],
+    thread: 'premodern-reception',
+    urls: [
+      'https://archive.org/details/relationdelegypt00abda',
+    ],
+    ia_ids: ['relationdelegypt00abda'],
+    note: 'Abd al-Latif early-13th-c. account of Egypt (open scan when present).',
+  },
+  {
+    authors: ['W. M. Flinders Petrie', 'Flinders Petrie'],
+    title_hints: ['Heliopolis', 'Kafr Ammar', 'Shurafa'],
+    thread: 'heliopolis',
+    urls: [
+      'https://archive.org/details/heliopoliskafram0000wmfl',
+      'https://archive.org/download/heliopoliskafram0000wmfl/heliopoliskafram0000wmfl_djvu.txt',
+    ],
+    ia_ids: ['heliopoliskafram0000wmfl'],
+    note: 'Petrie Heliopolis / Kafr Ammar / Shurafa (live IA OCR). Heidelberg diglit viewer removed — bot wall / not a document.',
+  },
+  {
+    authors: ['Samuel A. B. Mercer', 'Mercer'],
+    title_hints: ['Pyramid Texts'],
+    thread: 'self-view',
+    urls: [
+      'https://sacred-texts.com/egy/pyt/',
+    ],
+    ia_ids: [],
+    note: 'Mercer Pyramid Texts (sacred-texts). Dead IA pyramidtextseast00merc removed.',
+  },
+  {
+    authors: ['Kurt Sethe', 'Sethe'],
+    title_hints: ['Pyramidentexte', 'Pyramid Texts', 'Die altaegyptischen Pyramidentexte'],
+    thread: 'self-view',
+    urls: [
+      'https://archive.org/details/diealtaegyptisch03sethuoft',
+    ],
+    ia_ids: ['diealtaegyptisch03sethuoft'],
+    note: 'Sethe Pyramid Texts vol. 3–4 (live IA id).',
+  },
+  {
+    authors: ['E. A. Wallis Budge', 'Wallis Budge', 'Budge'],
+    title_hints: ['Book of the Dead', 'Egyptian Book of the Dead', 'Coming Forth by Day'],
+    thread: 'self-view',
+    urls: [
+      'https://sacred-texts.com/egy/ebod/',
+    ],
+    ia_ids: [],
+    note: 'Budge BoD (sacred-texts). Dead IA bookofdead00budg removed.',
+  },
+  {
+    authors: ['Adolf Erman', 'Erman'],
+    title_hints: ['Westcar', 'Papyrus Westcar', 'Die Märchen des Papyrus Westcar'],
+    thread: 'self-view',
+    urls: [
+      'https://archive.org/details/DieMarchenDesPapyrusWestcar1',
+    ],
+    ia_ids: ['DieMarchenDesPapyrusWestcar1'],
+    note: 'Erman Märchen des Papyrus Westcar (live IA OCR). Dead rhbarnhart PDF stub dropped.',
+  },
+  {
+    authors: ['Ptahhotep', 'Battiscombe Gunn', 'Gunn'],
+    title_hints: ['Instruction of Ptahhotep', 'Wisdom of Ptahhotep', 'The Instruction of Ptah-Hotep'],
+    thread: 'self-view',
+    urls: [
+      'https://sacred-texts.com/egy/woe/',
+    ],
+    ia_ids: [],
+    note: 'Gunn / Ptahhotep via sacred-texts Wisdom of the Egyptians.',
+  },
+  {
+    authors: ['J. A. Knudtzon', 'Knudtzon', 'Winckler'],
+    title_hints: ['Amarna', 'Tell el-Amarna', 'Amarna letters', 'El-Amarna-Tafeln'],
+    thread: 'self-view',
+    urls: [
+      'https://archive.org/details/dieelamarnatafel01knud',
+    ],
+    ia_ids: ['dieelamarnatafel01knud'],
+    note: 'Knudtzon El-Amarna-Tafeln vol. 1 (live IA id).',
+  },
+  {
+    authors: ['Édouard Naville', 'Naville'],
+    title_hints: ['Heliopolis', 'Mound of the Jew', 'City of Onias'],
+    thread: 'heliopolis',
+    urls: [
+      'https://archive.org/details/moundofjewcityof00navi',
+      'https://archive.org/download/moundofjewcityof00navi/moundofjewcityof00navi_djvu.txt',
+    ],
+    ia_ids: ['moundofjewcityof00navi'],
+    note: 'Naville Heliopolis (Mound of the Jew). Heidelberg diglit removed — viewer/bot-wall risk.',
+  },
+  {
     authors: ['John Anthony West'],
     title_hints: ['Serpent in the Sky'],
     urls: [
@@ -236,6 +378,46 @@ const SEEDS = [
     note: 'Getty scan of Posnansky Tiahuanacu monuments volume (Spanish).',
   },
   {
+    authors: ['Ephraim George Squier', 'E. G. Squier', 'Squier'],
+    title_hints: ['Peru', 'Incidents of Travel and Exploration in the Land of the Incas'],
+    thread: 'tiahuanaco',
+    urls: [
+      'https://archive.org/details/peruincidentsoft00squi',
+    ],
+    ia_ids: ['peruincidentsoft00squi'],
+    note: 'Squier 1877 Peru — classic Andean survey including Tiahuanaco material.',
+  },
+  {
+    authors: ['Arthur Posnansky', 'Posnansky'],
+    title_hints: ['Tiahuanacu the Cradle of American Man', 'Tihuanacu'],
+    thread: 'tiahuanaco',
+    urls: [
+      'https://archive.org/details/tiahuanacucradle00posn',
+    ],
+    ia_ids: ['tiahuanacucradle00posn'],
+    note: 'English Posnansky volume when present on IA.',
+  },
+  {
+    authors: ['Klaus Schmidt'],
+    title_hints: ['Göbekli Tepe', 'Gobekli Tepe', 'First Temple'],
+    thread: 'gobekli-tepe',
+    urls: [
+      'https://archive.org/details/gobeklitepe',
+    ],
+    ia_ids: ['gobeklitepe'],
+    note: 'Open Gobekli survey/scan when available; dead-thread seed for gobekli-tepe.',
+  },
+  {
+    authors: ['German Archaeological Institute', 'DAI'],
+    title_hints: ['Göbekli Tepe', 'Gobekli Tepe', 'Neolithic Turkey'],
+    thread: 'gobekli-tepe',
+    urls: [
+      'https://archive.org/details/gobekli-tepe-excavations',
+    ],
+    ia_ids: [],
+    note: 'Fallback IA details slug for Gobekli excavation material.',
+  },
+  {
     authors: ['Robert Bauval', 'Adrian Gilbert'],
     title_hints: ['Orion Mystery'],
     urls: [],
@@ -283,10 +465,76 @@ const SEEDS = [
     title_hints: ['Abydos'],
     thread: 'abydos',
     urls: [
-      'https://archive.org/download/abydos1petr/abydos1petr.pdf',
       'https://archive.org/details/abydos01petr',
+      'https://archive.org/download/abydos1petr/abydos1petr.pdf',
     ],
     ia_ids: ['abydos01petr'],
+  },
+  {
+    authors: ['Gaston Maspero', 'Maspero'],
+    title_hints: ['Dawn of Civilization', 'Struggle of the Nations', 'Passing of the Empires'],
+    thread: 'giza',
+    urls: [
+      'https://archive.org/details/dawnofcivilizati00maspuoft',
+      'https://archive.org/details/struggleofnation00maspuoft',
+    ],
+    ia_ids: ['dawnofcivilizati00maspuoft', 'struggleofnation00maspuoft'],
+  },
+  {
+    authors: ['James Henry Breasted', 'Breasted'],
+    title_hints: ['Ancient Records of Egypt', 'History of Egypt'],
+    thread: 'giza',
+    urls: [
+      'https://archive.org/details/ancientrecordsof01brea',
+      'https://archive.org/details/historyofegyptfr00brea',
+    ],
+    ia_ids: ['ancientrecordsof01brea', 'historyofegyptfr00brea'],
+  },
+  {
+    authors: ['E. A. Wallis Budge', 'Wallis Budge', 'Budge'],
+    title_hints: ['Egyptian Heaven and Hell'],
+    thread: 'giza',
+    urls: [
+      'https://archive.org/details/egyptianheavenan00budg',
+    ],
+    ia_ids: ['egyptianheavenan00budg'],
+  },
+  {
+    authors: ['Arthur Weigall', 'Weigall'],
+    title_hints: ['Guide to the Antiquities', 'Treasury of Ancient Egypt', 'Inscriptions'],
+    thread: 'abydos',
+    urls: [
+      'https://archive.org/details/guidetoantiquiti00weig',
+    ],
+    ia_ids: ['guidetoantiquiti00weig'],
+  },
+  {
+    authors: ['F. Ll. Griffith', 'Francis Llewellyn Griffith', 'Griffith'],
+    title_hints: ['Egypt Exploration Fund', 'Hieratic Papyri', 'Stories of the High Priests'],
+    thread: 'abydos',
+    urls: [
+      'https://archive.org/details/storiesofhighpri00grif',
+    ],
+    ia_ids: ['storiesofhighpri00grif'],
+  },
+  {
+    authors: ['Edouard Naville', 'Naville'],
+    title_hints: ['Temple of Deir el Bahari', 'Egypt Exploration Fund', 'Abydos'],
+    thread: 'abydos',
+    urls: [
+      'https://archive.org/details/templeofdeirelba01naviuoft',
+    ],
+    ia_ids: ['templeofdeirelba01naviuoft'],
+  },
+  {
+    authors: ['Egypt Exploration Fund', 'Egypt Exploration Society'],
+    title_hints: ['Memoir', 'Archaeological Report', 'Abydos'],
+    thread: 'abydos',
+    urls: [
+      'https://archive.org/details/archaeologicalre00egyp',
+    ],
+    ia_ids: ['archaeologicalre00egyp'],
+    note: 'EEF / EES memoir scans on Archive.org — prefer details pages.',
   },
 ];
 

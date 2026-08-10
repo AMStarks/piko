@@ -23,6 +23,25 @@ def db_path() -> Path:
     return data_root() / "cultures_cache.sqlite"
 
 
+def merge_locked_meta(old_meta: Optional[Dict[str, Any]], new_meta: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Keep PM/spine thread locks across recrawl, merge, and ON CONFLICT."""
+    old = dict(old_meta or {})
+    merged = dict(new_meta or {})
+    pm_locked = bool(old.get("pm_confirmed") or old.get("pm_confirm_id") or old.get("spine_retag"))
+    if pm_locked or (old.get("thread") and not merged.get("thread")):
+        if old.get("thread"):
+            merged["thread"] = old["thread"]
+        if old.get("site"):
+            merged["site"] = old["site"]
+    if pm_locked:
+        merged["pm_confirmed"] = True
+        if old.get("pm_confirm_id"):
+            merged["pm_confirm_id"] = old["pm_confirm_id"]
+        if old.get("spine_retag"):
+            merged["spine_retag"] = old["spine_retag"]
+    return merged
+
+
 def images_dir() -> Path:
     p = data_root() / "assets" / "images"
     p.mkdir(parents=True, exist_ok=True)
@@ -167,7 +186,7 @@ def find_title_match(
     return lit_hit or any_hit
 
 
-def upsert_harvest(conn: sqlite3.Connection, row: Dict[str, Any]) -> int:
+def upsert_harvest(conn: sqlite3.Connection, row: Dict[str, Any], *, replace: bool = False) -> int:
     params = {
         "source": row.get("source") or "unknown",
         "source_id": row.get("source_id") or row.get("id") or "",
@@ -190,6 +209,46 @@ def upsert_harvest(conn: sqlite3.Connection, row: Dict[str, Any]) -> int:
             str(existing.get("source") or "") == params["source"]
             and str(existing.get("source_id") or "") == params["source_id"]
         )
+        if replace:
+            hid = int(existing["id"])
+            try:
+                old_meta = json.loads(existing.get("meta_json") or "{}") or {}
+            except Exception:
+                old_meta = {}
+            try:
+                new_meta = json.loads(params.get("meta_json") or "{}") or {}
+            except Exception:
+                new_meta = {}
+            params["meta_json"] = json.dumps(merge_locked_meta(old_meta, new_meta), ensure_ascii=False)
+            conn.execute(
+                """
+                UPDATE harvest_items SET
+                  source=?,
+                  source_id=?,
+                  source_url=?,
+                  title=?,
+                  culture=?,
+                  official_text=?,
+                  image_path=COALESCE(?, image_path),
+                  image_url=?,
+                  meta_json=?
+                WHERE id=?
+                """,
+                (
+                    params["source"],
+                    params["source_id"],
+                    params.get("source_url"),
+                    params.get("title"),
+                    params.get("culture"),
+                    params.get("official_text"),
+                    params.get("image_path"),
+                    params.get("image_url"),
+                    params.get("meta_json"),
+                    hid,
+                ),
+            )
+            conn.commit()
+            return hid
         if not same_key:
             # Merge onto the first-seen volume; keep original source/source_id as the corpus id
             hid = int(existing["id"])
@@ -245,6 +304,21 @@ def upsert_harvest(conn: sqlite3.Connection, row: Dict[str, Any]) -> int:
             )
             conn.commit()
             return hid
+
+    same_key_row = conn.execute(
+        "SELECT id, meta_json FROM harvest_items WHERE source = ? AND source_id = ?",
+        (params["source"], params["source_id"]),
+    ).fetchone()
+    if same_key_row:
+        try:
+            old_meta = json.loads(same_key_row["meta_json"] or "{}") or {}
+        except Exception:
+            old_meta = {}
+        try:
+            new_meta = json.loads(params.get("meta_json") or "{}") or {}
+        except Exception:
+            new_meta = {}
+        params["meta_json"] = json.dumps(merge_locked_meta(old_meta, new_meta), ensure_ascii=False)
 
     conn.execute(
         """

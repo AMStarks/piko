@@ -282,6 +282,13 @@ async function tryHandleCultures(req, res, ctx = {}) {
         }
       }
       let out;
+      if (['start', 'resume', 'run_now'].includes(action) && campaign.pmOwnsDaemon()) {
+        return send(res, 409, JSON.stringify({
+          ok: false,
+          error: 'research_pm_managing',
+          hint: 'PM owns research; use start_forklift only after stopping PM',
+        }));
+      }
       if (action === 'start') {
         out = campaign.startCampaign({
           topic: parsed.topic,

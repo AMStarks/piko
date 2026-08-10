@@ -455,7 +455,7 @@ function findParentLocalDocument(db, source, parentId) {
   return `/api/cultures/items/${row.id}/document`;
 }
 
-function rowToItem(row, { includeText = false, db = null } = {}) {
+function rowToItem(row, { includeText = false, includeMeta = false, db = null } = {}) {
   const meta = parseMeta(row.meta_json);
   const hasImage = !!resolveImagePath(row.image_path);
   const localDoc = resolveDocumentPath(meta.document_path);
@@ -552,6 +552,8 @@ function rowToItem(row, { includeText = false, db = null } = {}) {
   };
   if (includeText) {
     out.official_text = row.official_text || '';
+  }
+  if (includeMeta || includeText) {
     out.meta = meta;
   }
   return out;
@@ -605,6 +607,7 @@ function listItems(opts = {}) {
   const source = String(opts.source || '').trim().toLowerCase();
   const typeFilter = String(opts.type || '').trim().toLowerCase();
   const excludeCandidates = opts.exclude_candidates !== false && opts.exclude_candidates !== '0';
+  const includeMeta = opts.include_meta === true || opts.include_meta === '1';
 
   const db = openDb();
   try {
@@ -654,7 +657,7 @@ function listItems(opts = {}) {
       `,
     ).all({ ...params, limit: fetchLimit, offset: fetchOffset });
 
-    let items = rows.map((r) => rowToItem(r, { db }));
+    let items = rows.map((r) => rowToItem(r, { db, includeMeta }));
     try {
       const { attachFlag } = require('./eiCorpusFlags');
       items = items.map((it) => attachFlag(it));
@@ -773,7 +776,17 @@ function patchItemMeta(id, patch = {}) {
   try {
     const row = db.prepare('SELECT id, title, meta_json FROM harvest_items WHERE id = ?').get(hid);
     if (!row) return { ok: false, error: 'not found' };
-    const meta = { ...parseMeta(row.meta_json), ...patch };
+    const prev = parseMeta(row.meta_json);
+    const locked = !!(prev.pm_confirmed || prev.pm_confirm_id || prev.spine_retag);
+    const patchLocks = !!(patch.pm_confirmed || patch.pm_confirm_id || patch.spine_retag || patch.force_thread);
+    const meta = { ...prev, ...patch };
+    if (locked && !patchLocks) {
+      if (prev.thread) meta.thread = prev.thread;
+      if (prev.site) meta.site = prev.site;
+      if (prev.pm_confirmed) meta.pm_confirmed = prev.pm_confirmed;
+      if (prev.pm_confirm_id) meta.pm_confirm_id = prev.pm_confirm_id;
+      if (prev.spine_retag) meta.spine_retag = prev.spine_retag;
+    }
     db.prepare('UPDATE harvest_items SET meta_json = ? WHERE id = ?').run(JSON.stringify(meta), hid);
     return { ok: true, id: hid, title: row.title, meta };
   } finally {

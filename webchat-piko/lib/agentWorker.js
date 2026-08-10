@@ -101,7 +101,7 @@ function alertAgentJobFailure(job, errorMsg, result) {
   if (!envFlagOn('PIKO_AGENT_FAILURE_ALERTS', true)) return;
   if (!job) return;
   // Soft skips are not failures
-  if (job.type === 'campaign_cycle' && result && result.skipped) return;
+  if ((job.type === 'campaign_cycle' || job.type === 'research_pm_tick') && result && result.skipped) return;
   const err = String(errorMsg || (result && result.error) || '').slice(0, 200);
   const softFail = result && result.ok === false && !errorMsg;
   if (!errorMsg && !softFail) return;
@@ -137,23 +137,49 @@ function alertAgentJobFailure(job, errorMsg, result) {
 }
 
 /**
- * When a chat work order names a concrete URL/seed-list, pre-seed the ei-worker
- * plan so ingest_url / seed_snowball run through the normal pipeline (review,
- * run records) instead of a side-channel bypass.
+ * When a chat work order is an unambiguous single-URL ingest (not a site crawl),
+ * pre-seed a rules_seed plan. Site-index / "each page" asks return null so the
+ * LLM planner (or full planWork) owns the strategy.
  * @returns {object|null} plan suitable for runEiWorker, or null to fall through.
  */
 function maybeSeedDirectToolPlan(goal) {
-  const DIRECT_TOOLS = new Set(['ingest_url', 'seed_snowball']);
+  let planner;
+  try {
+    planner = require('./eiWorkPlanner');
+  } catch (_) {
+    return null;
+  }
+  if (typeof planner.isSimpleDirectIngestGoal !== 'function'
+    || !planner.isSimpleDirectIngestGoal(goal)) {
+    return null;
+  }
   let plan;
   try {
-    const { planWorkRules } = require('./eiWorkPlanner');
-    plan = planWorkRules(goal);
+    plan = planner.planWorkRules(goal);
   } catch (_) {
     return null;
   }
   const step = plan && plan.ok && plan.steps && plan.steps[0];
-  if (!step || !DIRECT_TOOLS.has(step.tool)) return null;
-  if (!/https?:\/\//i.test(String(goal || ''))) return null;
+  if (!step || step.tool !== 'ingest_url') return null;
+  const goalLow = String(goal || '').toLowerCase();
+  if (!goalLow.includes('http://') && !goalLow.includes('https://')) return null;
+  plan.mode = 'rules_seed';
+  let summary = String(plan.summary || '');
+  // Honest label: intentional rules shortcut, not "planner LLM unavailable".
+  const replacements = [
+    '(deterministic rules)',
+    '(planner llm unavailable)',
+  ];
+  for (const phrase of replacements) {
+    const idx = summary.toLowerCase().indexOf(phrase);
+    if (idx >= 0) {
+      summary = `${summary.slice(0, idx)}(rules shortcut)${summary.slice(idx + phrase.length)}`;
+    }
+  }
+  if (!summary.toLowerCase().includes('(rules shortcut)')) {
+    summary = `${summary || 'Ingest URL'} (rules shortcut)`;
+  }
+  plan.summary = summary;
   return plan;
 }
 
@@ -239,7 +265,7 @@ async function processOneJob(job, rootDir) {
         agentId = 'ei-worker';
         onProgress({
           stage: 'planned',
-          message: `Pre-seeded ${(seeded.steps[0] && seeded.steps[0].tool) || 'tool'} plan — running via ei-worker.`,
+          message: `Rules shortcut (simple URL) — ${(seeded.steps[0] && seeded.steps[0].tool) || 'tool'} via ei-worker.`,
         });
       }
     }
@@ -285,13 +311,29 @@ async function processOneJob(job, rootDir) {
     return { ok: !!out.ok, mission: out.mission, error: out.error, cancelled: !!out.cancelled };
   }
   if (job.type === 'campaign_cycle') {
-    const { runCampaignCycle, formatCampaignStatus } = require('./eiResearchCampaign');
+    const { runCampaignCycle, formatCampaignStatus, pmOwnsDaemon } = require('./eiResearchCampaign');
+    if (pmOwnsDaemon()) {
+      return { ok: true, skipped: 'research_pm_managing', reply_snip: 'Campaign cycle skipped: research_pm_managing' };
+    }
     const out = await runCampaignCycle({ rootDir: root });
     return {
       ok: !!out.ok || !!out.skipped,
       skipped: out.skipped || null,
       report: out.report || null,
       reply_snip: out.skipped ? `Campaign cycle skipped: ${out.skipped}` : formatCampaignStatus(out.state),
+    };
+  }
+  if (job.type === 'research_pm_tick') {
+    const { tickPm, formatPmStatus, summarize } = require('./eiResearchPm');
+    const out = await tickPm({ rootDir: root });
+    return {
+      ok: true,
+      skipped: out.skipped || null,
+      packet: out.packet || null,
+      confirm: out.confirm || null,
+      reply_snip: out.skipped
+        ? `Research PM tick skipped: ${out.skipped}`
+        : formatPmStatus(summarize()),
     };
   }
   if (job.type === 'article_write') {
@@ -591,6 +633,10 @@ function bootReapOrphans(root) {
       const { clearRunningLockAtBoot } = require('./eiResearchCampaign');
       if (clearRunningLockAtBoot().cleared) {
         console.log('[agent-worker] cleared stale campaign running lock (restart mid-cycle)');
+      }
+      const { clearSeekerLockAtBoot } = require('./eiResearchPm');
+      if (clearSeekerLockAtBoot().cleared) {
+        console.log('[agent-worker] cleared stale research-pm seeker lock (restart mid-seek)');
       }
     } catch (_) { /* ok */ }
   }

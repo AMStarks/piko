@@ -148,50 +148,72 @@ const ATTEMPTED_MAX_KEYS = Math.max(
   Number(process.env.PIKO_EI_ATTEMPTED_MAX_KEYS || 5000) || 5000,
 );
 const MAX_LEAD_RETRIES = 2;
-const BIB_LEADS_PER_CYCLE = Math.max(0, Math.min(8, Number(process.env.PIKO_EI_CAMPAIGN_BIB_LEADS || 3)));
-const TERMINAL_SUCCESS = new Set(['keep', 'kept', 'unsure']);
-const TERMINAL_DONE = new Set(['keep', 'kept', 'unsure', 'drop']); // drop = wrong book, do not re-mine
-const RETRYABLE_EDGE = new Set(['seek_failed', 'empty', 'error']);
+const BIB_LEADS_PER_CYCLE = Math.max(0, Math.min(8, Number(process.env.PIKO_EI_CAMPAIGN_BIB_LEADS || 5)));
+const TERMINAL_SUCCESS = new Set(['keep', 'kept']);
+const TERMINAL_DONE = new Set(['keep', 'kept', 'drop']); // drop = wrong book, do not re-mine
+const RETRYABLE_EDGE = new Set(['seek_failed', 'empty', 'error', 'unsure']);
 
-const DEFAULT_TOPIC = 'Alternative history — lost civilizations, cataclysms, anomalous engineering: '
-  + 'Egypt (Giza, Abydos/Oserion, Heliopolis), Göbekli Tepe, Tiahuanaco/Puma Punku, '
-  + 'Younger Dryas and megaflood geology, Atlantis/antediluvian literature, comparative flood myths, '
-  + 'archaeoastronomy, and the orthodox excavation record the alternative authors argue against.';
+const DEFAULT_TOPIC = 'Egyptian primary record — self-view and pre-modern reception: '
+  + 'ancient Egyptian hieroglyphs, texts, and excavation materials (Abydos/Oserion, Heliopolis/Iunu, Giza); '
+  + 'how Egyptians viewed themselves (Pyramid Texts, Coffin Texts, Book of the Dead, instructions, letters); '
+  + 'how pre-modern societies viewed Ancient Egypt (Herodotus, Manetho, Strabo, Diodorus, Plutarch, '
+  + 'then medieval/Islamic and early-modern witnesses). Supporting comparative evidence: Göbekli Tepe, '
+  + 'Atlantis/antediluvian literature, Younger Dryas/megaflood geology, Tiahuanaco/Puma Punku, flood myths. '
+  + 'Hancock and kin remain readers of that combined record.';
 
 /** Standing threads mirroring the adapter research goal — first-cycle lead source. */
 const DEFAULT_THREADS = [
-  { id: 'giza', label: 'Giza / precision engineering', queries: [
-    '"The Giza Power Plant" Dunn PDF',
+  { id: 'giza', label: 'Giza complex', queries: [
     'Petrie "Pyramids and Temples of Gizeh" survey PDF',
-    'Giza pyramid construction engineering analysis PDF',
+    'Digital Giza mastaba inscription excavation',
+    'Pyramid Texts Giza translation PDF',
   ] },
   { id: 'abydos', label: 'Abydos / Oserion', queries: [
     'Osireion Abydos architecture excavation report PDF',
-    '"Umm el-Qa\'ab" early dynastic excavation PDF',
+    '"Umm el-Qa\'ab" early dynastic ivory label excavation PDF',
+    'Petrie Abydos Egypt Exploration Fund PDF',
   ] },
-  { id: 'gobekli-tepe', label: 'Göbekli Tepe', queries: [
-    '"Göbekli Tepe" Schmidt excavation report PDF',
+  { id: 'heliopolis', label: 'Heliopolis (Iunu)', queries: [
+    'Heliopolis Iunu temple Ra obelisk excavation PDF',
+    'Matariya Heliopolis inscription catalogue PDF',
+  ] },
+  { id: 'self-view', label: 'Egyptian texts — self-view', queries: [
+    'Pyramid Texts Faulkner Mercer translation PDF',
+    'Coffin Texts Egyptian funerary PDF',
+    'Book of the Dead coming forth by day PDF',
+    'Instruction of Ptahhotep translation PDF',
+  ] },
+  { id: 'premodern-reception', label: 'Pre-modern witnesses', queries: [
+    'Herodotus Histories Book 2 Egypt translation',
+    'Manetho Aegyptiaca Waddell PDF',
+    'Diodorus Siculus Book 1 Egypt PDF',
+    'Strabo Geography Book 17 Egypt PDF',
+    'Plutarch Isis and Osiris PDF',
+  ] },
+  { id: 'gobekli-tepe', label: 'Göbekli Tepe (supporting)', queries: [
+    'Klaus Schmidt Gobekli Tepe excavation PDF',
     'Karahan Tepe Tas Tepeler excavation PDF',
   ] },
-  { id: 'tiahuanaco', label: 'Tiahuanaco / Puma Punku', queries: [
-    'Puma Punku stonework analysis PDF',
-    'Tiwanaku excavation report archaeology PDF',
+  { id: 'cataclysm', label: 'Younger Dryas / megaflood (supporting)', queries: [
+    'Bretz channeled scabland megaflood PDF',
+    'Younger Dryas impact hypothesis PDF',
   ] },
-  { id: 'cataclysm', label: 'Younger Dryas / megafloods', queries: [
-    'Bretz "Channeled Scabland" paper PDF',
-    'Younger Dryas impact hypothesis Firestone PNAS PDF',
-    'meltwater pulse 1B sea level rise PDF',
+  { id: 'atlantis', label: 'Atlantis / antediluvian (supporting)', queries: [
+    'Donnelly "Atlantis the Antediluvian World" PDF',
+    'Hapgood Maps of the Ancient Sea Kings PDF',
   ] },
-  { id: 'flood-myths', label: 'Flood myths / Atlantis literature', queries: [
-    'Plato Timaeus Critias translation Atlantis PDF',
-    '"Popol Vuh" translation Tedlock PDF',
-    'Atrahasis Gilgamesh flood tablet translation PDF',
+  { id: 'tiahuanaco', label: 'Tiahuanaco / Puma Punku (supporting)', queries: [
+    'Posnansky Tiahuanaco excavation PDF',
+    'Puma Punku Tiwanaku architecture PDF',
+  ] },
+  { id: 'flood-myths', label: 'Flood myths (supporting)', queries: [
+    'Gilgamesh flood tablet translation PDF',
+    'Atrahasis deluge myth PDF',
   ] },
 ];
 
 const KNOWN_THREAD_IDS = new Set([
   ...DEFAULT_THREADS.map((t) => t.id),
-  'atlantis',
   'other',
 ]);
 
@@ -239,8 +261,15 @@ function defaultState() {
       reflection_leads_kept: 0,
       keeps_by_via_seed_url: 0,
       keeps_by_via_seek: 0,
+      keeps_by_via_chase: 0,
       keeps_by_via_other: 0,
+      chase_attempts: 0,
+      chase_empty: 0,
+      catalog_leads_added: 0,
+      catalog_leads_kept: 0,
     },
+    catalog_seen: [],
+    catalog_cursor: 0,
     thread_coverage: {},
     reports: [],
     /** Rolling list of recently rejected reflection titles (WP7.1). */
@@ -293,7 +322,11 @@ function last24hStats() {
 
 function effectiveIntervalMinutes(state) {
   const s = state || loadState();
-  if ((s.idle_streak || 0) >= IDLE_STREAK_THRESHOLD) return IDLE_BACKOFF_MIN;
+  if ((s.idle_streak || 0) >= IDLE_STREAK_THRESHOLD) {
+    // E: do not stretch the interval while high-yield leads are waiting.
+    if (hasHighYieldPending(s)) return Math.max(1, Number(s.interval_minutes) || 1);
+    return IDLE_BACKOFF_MIN;
+  }
   return Math.max(1, Number(s.interval_minutes) || 1);
 }
 
@@ -304,30 +337,153 @@ function resetIdleStreak(state) {
   return s;
 }
 
-/** Pending leads that are not on cooldown (and thus can be sought). */
-function eligiblePendingLeads(state) {
-  return (state.leads || []).filter(
-    (l) => l.status === 'pending' && !queryOnCooldown(state, l.query),
+/**
+ * Explicit lead-carried seed URLs only (not seed-pack lookup).
+ * Seed-pack fallback must not fake eligibility or cooldown bypass.
+ */
+function carriedSeedUrls(lead) {
+  if (!Array.isArray(lead && lead.seed_urls) || !lead.seed_urls.length) return [];
+  return preferArchiveDetailsUrls(lead.seed_urls).slice(0, 6);
+}
+
+/** Fresh carried seed URLs that have not been kept yet (Workstream B / E). */
+function leadHasFreshSeedUrls(lead) {
+  if ((Number(lead && lead.seed_url_attempts) || 0) >= 2) return false;
+  const urls = carriedSeedUrls(lead);
+  if (!urls.length) return false;
+  return urls.some((u) => !alreadyKeptUrl(u));
+}
+
+/** True when unsure-gate soft mode should still allow this lead. */
+function leadAllowedUnderUnsureGate(lead) {
+  if (!lead) return false;
+  if (leadHasFreshSeedUrls(lead)) return true;
+  const src = String(lead.source || '');
+  if (src === 'catalog' || src === 'thread_seed' || src === 'operator') return true;
+  const access = String(lead.access || '');
+  // E: PD + seeded continue under soft gate even without carried URLs.
+  // Speculative / dossier_gap text seeks stay deferred.
+  if (access === 'public_domain_likely' || access === 'seeded') return true;
+  return false;
+}
+
+/** High-yield pending work (seeded/PD/catalog) — must not idle-backoff. */
+function hasHighYieldPending(state) {
+  const seekable = seekablePendingLeads(state, {
+    seededOnlyMode: isSeededOnlyModeActive(),
+  });
+  return seekable.some((l) => leadAllowedUnderUnsureGate(l));
+}
+
+/**
+ * Retire leads whose seed URLs are exhausted and no free query variant remains.
+ * Keeps them out of high-yield / seekable queues.
+ */
+function retireSeedExhaustedLeads(state) {
+  let n = 0;
+  for (const lead of state.leads || []) {
+    if (!lead || lead.status !== 'pending') continue;
+    if ((Number(lead.seed_url_attempts) || 0) < 2) continue;
+    if (leadHasFreeQueryVariant(state, lead)) continue;
+    lead.status = 'seed_exhausted';
+    lead.last_skip_reason = 'seed_exhausted';
+    n += 1;
+  }
+  return n;
+}
+
+/**
+ * Effective cooldown window for a lead. Seeded/PD use the shorter fail window
+ * so empty overnight seeks do not lock high-yield titles for a full week.
+ */
+function effectiveCooldownDaysForLead(lead, stampedDays) {
+  const stamped = Number.isFinite(Number(stampedDays)) ? Number(stampedDays) : QUERY_COOLDOWN_DAYS;
+  const access = String((lead && lead.access) || '');
+  if (access === 'seeded' || access === 'public_domain_likely') {
+    return Math.min(stamped, FAIL_COOLDOWN_DAYS);
+  }
+  return stamped;
+}
+
+/** Like queryOnCooldown, but softens the window for seeded/PD leads (E). */
+function queryOnCooldownForLead(state, lead, q = null) {
+  const query = q != null ? q : (lead && lead.query);
+  const key = queryKey(query);
+  const ts = state.attempted_queries && state.attempted_queries[key];
+  if (!ts) return false;
+  const meta = (state.attempted_meta && state.attempted_meta[key]) || {};
+  const stamped = Number(
+    meta.cooldown_days != null && Number.isFinite(Number(meta.cooldown_days))
+      ? meta.cooldown_days
+      : QUERY_COOLDOWN_DAYS,
   );
+  const days = effectiveCooldownDaysForLead(lead, stamped);
+  const ageMs = Date.now() - new Date(ts).getTime();
+  return Number.isFinite(ageMs) && ageMs < days * 24 * 3600 * 1000;
+}
+
+/** Pending leads that can be sought (free query variant, or fresh seed URLs). */
+function eligiblePendingLeads(state) {
+  return (state.leads || []).filter((l) => {
+    if (l.status !== 'pending') return false;
+    if (leadHasFreeQueryVariant(state, l)) return true;
+    return leadHasFreshSeedUrls(l);
+  });
+}
+
+/**
+ * Leads the cycle will actually seek. Under soft unsure-gate, speculative
+ * cooldown-free leads are NOT seekable — counting them as eligible suppressed
+ * catalog refill and starved overnight compounding.
+ */
+function seekablePendingLeads(state, opts = {}) {
+  const seededOnly = opts.seededOnlyMode === true;
+  return eligiblePendingLeads(state).filter((l) => {
+    if (!seededOnly) return true;
+    return leadAllowedUnderUnsureGate(l);
+  });
+}
+
+function isSeededOnlyModeActive() {
+  try {
+    const { listUnsureQueue } = require('./eiUnsureQueue');
+    return (listUnsureQueue({ limit: 50 }).items || []).length >= UNSURE_PAUSE_THRESHOLD;
+  } catch (_) {
+    return false;
+  }
 }
 
 /**
  * Reflection normally pauses during idle backoff to save LLM cycles, but a
- * starved campaign (zero eligible pending leads) must still reflect —
- * reflection is the lead generator. Pending leads that are all cooling count
- * as starved (WP2.8).
+ * starved campaign (zero seekable pending leads) must still reflect —
+ * reflection is the lead generator. Soft-gated speculative-only queues count
+ * as starved (same kink as catalog refill).
  */
 function shouldReflectThisCycle(state) {
   const idleBackingOff = (state.idle_streak || 0) >= IDLE_STREAK_THRESHOLD;
   if (!idleBackingOff) return { run: true, reason: 'normal' };
-  const eligible = eligiblePendingLeads(state).length;
-  if (eligible === 0) return { run: true, reason: 'starvation_recovery' };
+  const seekable = seekablePendingLeads(state, {
+    seededOnlyMode: isSeededOnlyModeActive(),
+  }).length;
+  if (seekable === 0) return { run: true, reason: 'starvation_recovery' };
   return { run: false, reason: 'idle_backoff' };
 }
 
-/** Cycle-end idle accounting: any seek or new lead resets the streak. */
-function updateIdleStreak(state, seekCount, leadsAdded) {
-  if (Number(seekCount || 0) === 0 && Number(leadsAdded || 0) === 0) {
+/** Cycle-end idle: only productive keeps or new seekable supply reset idle. */
+function updateIdleStreak(state, seekCount, leadsAdded, keepCount = 0) {
+  const productive = Number(keepCount || 0) > 0 || Number(leadsAdded || 0) > 0;
+  if (!productive) {
+    // Seekable high-yield still waiting — not idle-backoff, but empty seeks
+    // alone must not pretend the night was productive.
+    if (hasHighYieldPending(state)) {
+      state.idle_streak = 0;
+      return 0;
+    }
+    if (Number(seekCount || 0) > 0) {
+      // Empty seeks: increment gently so status shows starvation pressure
+      state.idle_streak = (state.idle_streak || 0) + 1;
+      return state.idle_streak;
+    }
     state.idle_streak = (state.idle_streak || 0) + 1;
   } else {
     state.idle_streak = 0;
@@ -336,12 +492,25 @@ function updateIdleStreak(state, seekCount, leadsAdded) {
 }
 
 function loadState() {
+  let s;
   try {
     const raw = JSON.parse(fs.readFileSync(statePath(), 'utf8'));
-    return { ...defaultState(), ...raw };
+    s = { ...defaultState(), ...raw };
   } catch (_) {
-    return defaultState();
+    s = defaultState();
   }
+  const latched = latchPmOwns({ ...s });
+  const drifted = !!latched.pm_owns !== !!s.pm_owns
+    || !!latched.enabled !== !!s.enabled
+    || !!latched.paused !== !!s.paused
+    || !!latched.running !== !!s.running;
+  if (drifted) {
+    try {
+      const { atomicWriteJson } = require('./atomicJson');
+      atomicWriteJson(statePath(), { ...latched, updated_at: new Date().toISOString() });
+    } catch (_) { /* best-effort relatch */ }
+  }
+  return latched;
 }
 
 /**
@@ -360,9 +529,38 @@ function clearRunningLockAtBoot() {
   return { cleared: true };
 }
 
+function pmOwnsDaemon(state) {
+  const s = state || (() => {
+    try { return loadState(); } catch (_) { return null; }
+  })();
+  if (s && s.pm_owns) return true;
+  try { return require('./eiResearchPm').isPmManaging(); } catch (_) {
+    const p = path.join(culturesDataRoot(), 'research_pm.json');
+    try {
+      if (!fs.existsSync(p)) return false;
+      const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+      return !!(j && j.enabled && !j.paused);
+    } catch (_) {
+      try { return fs.existsSync(p); } catch (_) { return false; }
+    }
+  }
+}
+
+function latchPmOwns(s) {
+  const next = s && typeof s === 'object' ? s : {};
+  if (pmOwnsDaemon(next)) {
+    next.pm_owns = true;
+    next.enabled = false;
+    next.paused = true;
+    next.running = false;
+    next.running_since = null;
+  }
+  return next;
+}
+
 function saveState(state) {
   const rev = Number(state.revision || 0) + 1;
-  const s = { ...state, revision: rev, updated_at: new Date().toISOString() };
+  let s = latchPmOwns({ ...state, revision: rev, updated_at: new Date().toISOString() });
   const { atomicWriteJson } = require('./atomicJson');
   atomicWriteJson(statePath(), s);
   return s;
@@ -370,7 +568,17 @@ function saveState(state) {
 
 /** Mid-cycle save that merges API-written leads/fields first (WP7.8). */
 function saveStateMerged(state) {
-  return saveState(mergeExternalState(state));
+  const saved = saveState(mergeExternalState(state));
+  if (state && typeof state === 'object') {
+    state.enabled = saved.enabled;
+    state.paused = saved.paused;
+    state.running = saved.running;
+    state.running_since = saved.running_since;
+    state.pm_owns = saved.pm_owns;
+    state.revision = saved.revision;
+    state.updated_at = saved.updated_at;
+  }
+  return saved;
 }
 
 /**
@@ -398,6 +606,16 @@ function mergeExternalState(localState) {
   if (Array.isArray(disk.reflection_prompt_extras)) {
     local.reflection_prompt_extras = disk.reflection_prompt_extras;
   }
+  // Operator topic/pause written mid-cycle must survive finalizeCycle.
+  if (typeof disk.topic === 'string' && disk.topic.trim()) {
+    local.topic = disk.topic;
+  }
+  if (typeof disk.paused === 'boolean') local.paused = disk.paused;
+  if (typeof disk.enabled === 'boolean') local.enabled = disk.enabled;
+  if (typeof disk.running === 'boolean') local.running = disk.running;
+  if ('running_since' in disk) local.running_since = disk.running_since;
+  if (disk.pm_owns) local.pm_owns = true;
+  latchPmOwns(local);
   if (disk.scorecard_trigger_last_fired && typeof disk.scorecard_trigger_last_fired === 'object') {
     local.scorecard_trigger_last_fired = {
       ...(local.scorecard_trigger_last_fired || {}),
@@ -596,28 +814,78 @@ function itemSourceUrls(it) {
  * @param {{ exceptHarvestId?: number }} [opts]
  */
 function alreadyKeptUrl(url, opts = {}) {
+  return !!findKeptItemByUrl(url, opts);
+}
+
+/**
+ * Resolve a corpus item that already carries this source URL.
+ * @returns {null|{ harvest_id:number, title:string, pages_scraped:number,
+ *   has_local_document:boolean, is_full_web_text:boolean, meta:object, item:object }}
+ */
+function findKeptItemByUrl(url, opts = {}) {
   const key = normalizeSourceUrl(url);
-  if (!key || key.length < 12) return false;
+  if (!key || key.length < 12) return null;
   const exceptId = opts.exceptHarvestId != null ? Number(opts.exceptHarvestId) : null;
   try {
+    const { isFullWebTextDelivery, isFullDocumentDelivery, evaluateCrawlQa, isPartialWebTextDelivery } = require('./eiCrawlQa');
     let offset = 0;
     const page = 100;
     for (let guard = 0; guard < 50; guard += 1) {
-      const out = listItems({ limit: page, offset });
+      const out = listItems({ limit: page, offset, include_meta: true });
       const items = out.items || [];
       if (!items.length) break;
       for (const it of items) {
         const hid = Number(it.id || it.harvest_id);
         if (exceptId != null && hid === exceptId) continue;
         for (const u of itemSourceUrls(it)) {
-          if (normalizeSourceUrl(u) === key) return true;
+          if (normalizeSourceUrl(u) !== key) continue;
+          const meta = it.meta || {};
+          const pages = Number(meta.pages_scraped || meta.page_count || 0) || 0;
+          const hasDoc = !!(it.has_local_document || it.local_document_path || meta.local_document_path);
+          const textLen = Number(meta.body_chars || meta.full_text_chars || meta.content_chars || meta.text_chars_total || 0)
+            || String(it.official_text || '').length;
+          const qaInput = {
+            pages_scraped: pages,
+            pages_content: meta.pages_content,
+            pages_chrome: meta.pages_chrome,
+            pages_failed: meta.pages_failed,
+            links_found: meta.links_found,
+            chrome_ratio: meta.chrome_ratio,
+            body_chars: meta.body_chars || textLen,
+            text_chars_total: meta.text_chars_total || textLen,
+            crawl_truncated: meta.crawl_truncated,
+            crawl_qa: meta.crawl_qa,
+            has_local_document: hasDoc,
+          };
+          const qa = evaluateCrawlQa(qaInput);
+          const isFull = isFullWebTextDelivery(qaInput) && qa.ok;
+          const isFullDoc = isFullDocumentDelivery({
+            ...meta,
+            ...qaInput,
+            has_local_document: hasDoc,
+            source: it.source,
+          });
+          const isPartial = !isFull && !isFullDoc && isPartialWebTextDelivery({ ...qaInput, has_local_document: hasDoc });
+          return {
+            harvest_id: hid,
+            title: String(it.title || meta.work_title || '').slice(0, 200),
+            pages_scraped: pages,
+            has_local_document: hasDoc,
+            is_full_web_text: isFull,
+            is_full_document: isFullDoc,
+            is_thin_stub: !isFull && !isFullDoc && !isPartial,
+            is_partial_web_text: isPartial,
+            crawl_qa: qa,
+            meta,
+            item: it,
+          };
         }
       }
       if (items.length < page) break;
       offset += page;
     }
   } catch (_) { /* best-effort */ }
-  return false;
+  return null;
 }
 
 /** Is a work with (roughly) this title already kept in the corpus? */
@@ -640,10 +908,11 @@ function alreadyInCorpus(titleOrQuery) {
     let offset = 0;
     const page = 100;
     for (let guard = 0; guard < 50; guard += 1) {
-      const out = listItems({ limit: page, offset });
+      const out = listItems({ limit: page, offset, include_meta: true });
       const items = out.items || [];
       if (!items.length) break;
       for (const it of items) {
+        if (!itemCountsAsCorpusKeep(it)) continue;
         const candidate = [it.title, (it.meta && (it.meta.work_title || it.meta.document_url)) || ''].join(' ');
         if (titleMatchScore(probe, candidate) >= 0.8) return true;
       }
@@ -651,6 +920,28 @@ function alreadyInCorpus(titleOrQuery) {
       offset += page;
     }
   } catch (_) { /* corpus check is best-effort */ }
+  return false;
+}
+
+/**
+ * Count only true keeps for coverage / dedupe.
+ * Prefer flag=keep; when flags exist, exclude review/unsure/drop; unflagged
+ * items still count (legacy corpora before flagging).
+ */
+function itemCountsAsCorpusKeep(item) {
+  if (!item) return false;
+  let flag = item.flag;
+  if (flag == null && item.id != null) {
+    try {
+      const { getFlag } = require('./eiCorpusFlags');
+      const f = getFlag(item.id);
+      flag = f && f.flag;
+    } catch (_) { /* optional */ }
+  }
+  if (flag == null || flag === '') return true;
+  const f = String(flag).toLowerCase();
+  if (f === 'keep' || f === 'kept' || f === 'accept') return true;
+  if (f === 'review' || f === 'unsure' || f === 'drop' || f === 'reject') return false;
   return false;
 }
 
@@ -717,8 +1008,9 @@ function authorSurname(author) {
 
 /**
  * Alternate seek queries for retries so we don't repeat a failed formulation.
- * attempt 0: "Title" Surname PDF
- * attempt 1: Title Surname archive.org
+ * Prefer Archive.org before open-web PDF lottery (Phase B).
+ * attempt 0: Title Surname archive.org
+ * attempt 1: "Title" Surname PDF
  * attempt 2: Title full text
  */
 function reformulateQuery(lead, attempt) {
@@ -727,12 +1019,52 @@ function reformulateQuery(lead, attempt) {
   const n = Math.max(0, Number(attempt) || 0);
   if (!title) return collapseWhitespace((lead && lead.query) || '').slice(0, 200);
   if (n <= 0) {
-    return collapseWhitespace(`"${title}" ${surname} PDF`).slice(0, 200);
-  }
-  if (n === 1) {
     return collapseWhitespace(`${title} ${surname} archive.org`).slice(0, 200);
   }
+  if (n === 1) {
+    return collapseWhitespace(`"${title}" ${surname} PDF`).slice(0, 200);
+  }
   return collapseWhitespace(`${title} full text`).slice(0, 200);
+}
+
+/** True when the lead's current query is free, or any reformulate variant is. */
+function leadHasFreeQueryVariant(state, lead) {
+  if (!lead) return false;
+  if (!queryOnCooldownForLead(state, lead, lead.query)) return true;
+  if (!lead.title || !lead.author) return false;
+  for (let attempt = 0; attempt <= MAX_LEAD_RETRIES; attempt += 1) {
+    const alt = reformulateQuery(lead, attempt);
+    if (alt && !queryOnCooldownForLead(state, lead, alt)) return true;
+  }
+  return false;
+}
+
+/**
+ * Phase A.1 — pending leads whose current query is cooling but a reformulate
+ * variant is free get advanced in place so they become seek-eligible.
+ */
+function advanceCooledPendingLeads(state) {
+  let advanced = 0;
+  for (const lead of state.leads || []) {
+    if (lead.status !== 'pending') continue;
+    if (!queryOnCooldownForLead(state, lead)) continue;
+    if (!lead.title || !lead.author) continue;
+    for (let attempt = 0; attempt <= MAX_LEAD_RETRIES; attempt += 1) {
+      const alt = reformulateQuery(lead, attempt);
+      if (!alt || queryKey(alt) === queryKey(lead.query)) continue;
+      if (queryOnCooldownForLead(state, lead, alt)) continue;
+      if ((state.leads || []).some(
+        (l) => l !== lead && queryKey(l.query) === queryKey(alt) && leadBlocksDedupe(state, l),
+      )) continue;
+      lead.query = alt;
+      lead.retry_count = attempt;
+      lead.query_attempt = attempt;
+      lead.last_skip_reason = 'cooldown_variant_advance';
+      advanced += 1;
+      break;
+    }
+  }
+  return advanced;
 }
 
 function candidateKey(author, title) {
@@ -757,13 +1089,42 @@ function threadForHarvestId(harvestId) {
 
 function guessThreadFromBlob(blob) {
   const s = toLowerAsciiish(blob);
-  if (includesAny(s, ['giza', 'orion', 'petrie', 'dunn'])) return 'giza';
-  if (includesAny(s, ['abydos', 'osireion', 'oserion', 'umm el'])) return 'abydos';
-  if (includesAny(s, ['göbekli', 'gobekli', 'karahan', 'tepe'])) return 'gobekli-tepe';
-  if (includesAny(s, ['tiahuanaco', 'tiwanaku', 'puma punku'])) return 'tiahuanaco';
-  if (includesAny(s, ['younger dryas', 'bretz', 'scabland', 'meltwater', 'cataclysm'])) return 'cataclysm';
-  if (includesAny(s, ['atlantis', 'antediluvian', 'donnelly'])) return 'atlantis';
-  if (includesAny(s, ['flood', 'gilgamesh', 'atrahasis', 'popol vuh'])) return 'flood-myths';
+  if (includesAny(s, [
+    'heliopolis', 'iunu', 'innu', 'matariya', 'benben',
+  ])) return 'heliopolis';
+  if (includesAny(s, [
+    'herodotus', 'manetho', 'strabo', 'diodorus', 'plutarch', 'josephus',
+    'maqrizi', 'abd al-latif', 'abdellatif', 'isis and osiris',
+  ])) return 'premodern-reception';
+  if (includesAny(s, [
+    'pyramid text', 'pyramidentext', 'pyramidentexte', 'coffin text',
+    'book of the dead', 'coming forth by day',
+    'ptahhotep', 'westcar', 'amarna letter', 'el-amarna', 'el amarna',
+    'amarna', 'amarnatafel', 'instruction of',
+  ])) return 'self-view';
+  if (
+    includesAny(s, [
+      'giza', 'gizeh', 'orion', 'dunn', 'sphinx',
+      'serapeum', 'maspero', 'breasted', 'khufu', 'cheops',
+    ]) || hasWord(s, 'pyramid') || hasWord(s, 'pyramids')
+  ) return 'giza';
+  if (includesAny(s, [
+    'abydos', 'osireion', 'oserion', 'umm el', 'deir el bahari', 'deir el-bahari',
+    'naville', 'weigall', 'egypt exploration',
+  ])) return 'abydos';
+  if (includesAny(s, ['göbekli', 'gobekli', 'karahan', 'nevali cori', 'nevalı çori'])) return 'gobekli-tepe';
+  if (includesAny(s, [
+    'tiahuanaco', 'tiahuanacu', 'tihuanacu', 'tiwanaku', 'puma punku', 'posnansky', 'squier',
+  ])) {
+    return 'tiahuanaco';
+  }
+  if (includesAny(s, ['younger dryas', 'bretz', 'scabland', 'meltwater', 'cataclysm', 'ragnarok'])) {
+    return 'cataclysm';
+  }
+  if (includesAny(s, ['atlantis', 'antediluvian', 'donnelly', 'hapgood'])) return 'atlantis';
+  if (includesAny(s, ['flood', 'gilgamesh', 'atrahasis', 'popol vuh', 'deluge', 'timaeus', 'critias'])) {
+    return 'flood-myths';
+  }
   return 'other';
 }
 
@@ -780,17 +1141,21 @@ function leadId() {
  * cleanly: '... the book <Title> by <Author>.' — mirrors eiSeedSnowball missions.
  */
 function missionForQuery(q) {
+  const { appendDomainBriefToMission } = require('./eiDomainGate');
   const parsed = parseQuotedQuery(q);
+  let mission;
   if (parsed && parsed.title) {
     const title = parsed.title.trim();
     const author = (parsed.author || '').trim();
-    return `Please find and add to Corpus the book ${title}${author ? ` by ${author}` : ''}.`;
+    mission = `Please find and add to Corpus the book ${title}${author ? ` by ${author}` : ''}.`;
+  } else {
+    let rest = String(q || '').trim();
+    const restLow = toLowerAsciiish(rest);
+    if (restLow.endsWith(' pdf')) rest = rest.slice(0, -4).trim();
+    else if (restLow === 'pdf') rest = '';
+    mission = `Please find and add to Corpus ${rest}`;
   }
-  let rest = String(q || '').trim();
-  const restLow = toLowerAsciiish(rest);
-  if (restLow.endsWith(' pdf')) rest = rest.slice(0, -4).trim();
-  else if (restLow === 'pdf') rest = '';
-  return `Please find and add to Corpus ${rest}`;
+  return appendDomainBriefToMission(mission);
 }
 
 /**
@@ -831,7 +1196,7 @@ function sanitizeLead(lead) {
   // Build a query from title+author when missing (thread_seed / dossier_gap / reflection)
   let builtQuery = rawQuery;
   if ((!builtQuery || builtQuery.length < 8) && title && author) {
-    builtQuery = collapseWhitespace(`"${stripQuotes(title)}" ${firstAuthorSurname(author)} PDF`).slice(0, 200);
+    builtQuery = reformulateQuery({ title: stripQuotes(title), author }, 0);
   }
 
   if (source === 'reflection') {
@@ -845,7 +1210,10 @@ function sanitizeLead(lead) {
     }
     // Always use the reformulation ladder's attempt-0 form so cooldown stamps match.
     const query = reformulateQuery({ title, author }, 0);
-    const mission = `Please find and add to Corpus the book ${title} by ${author}.`.slice(0, 400);
+    const { appendDomainBriefToMission } = require('./eiDomainGate');
+    const mission = appendDomainBriefToMission(
+      `Please find and add to Corpus the book ${title} by ${author}.`,
+    ).slice(0, 800);
     return {
       ok: true,
       lead: {
@@ -862,13 +1230,15 @@ function sanitizeLead(lead) {
 
   // thread / operator / seed — keep query as given (or built) if long enough
   if (!builtQuery || builtQuery.length < 8) return { ok: false, reason: 'short_query' };
+  const { appendDomainBriefToMission } = require('./eiDomainGate');
+  const baseMission = rawMission || (title && author
+    ? `Please find and add to Corpus the book ${title} by ${author}.`
+    : missionForQuery(builtQuery));
   return {
     ok: true,
     lead: {
       query: builtQuery.slice(0, 200),
-      mission: (rawMission || (title && author
-        ? `Please find and add to Corpus the book ${title} by ${author}.`
-        : missionForQuery(builtQuery))).slice(0, 400),
+      mission: appendDomainBriefToMission(baseMission).slice(0, 800),
       title: title || null,
       author: author || null,
       thread: normalizeThreadId(lead && lead.thread),
@@ -876,6 +1246,122 @@ function sanitizeLead(lead) {
       source,
     },
   };
+}
+
+const GARBAGE_TITLE_MARKERS = [
+  'no título', 'no titulo', 'no title', 'untitled', 'sin título', 'sin titulo',
+  'no título específico', 'no titulo especifico', '(no title', 'n/a title',
+  'título específico mencionado', 'titulo especifico mencionado',
+];
+
+const EGYPT_SCOPED_THREADS = new Set([
+  'giza', 'abydos', 'heliopolis', 'self-view', 'premodern-reception',
+]);
+
+/** Spine vs supporting: supporting must not crowd out Egyptian self-view. */
+const SPINE_THREADS = [
+  'self-view', 'heliopolis', 'premodern-reception', 'abydos', 'giza',
+];
+const SUPPORTING_THREADS = new Set([
+  'gobekli-tepe', 'cataclysm', 'atlantis', 'tiahuanaco', 'flood-myths',
+]);
+const SEEK_THREAD_ORDER = [
+  'self-view', 'heliopolis', 'premodern-reception', 'abydos', 'giza',
+  'gobekli-tepe', 'cataclysm', 'atlantis', 'tiahuanaco', 'flood-myths', 'other',
+];
+const DEAD_THREAD_KEEP_FLOOR = 3;
+const SELF_VIEW_SUPPORTING_GATE = 10;
+
+function threadSeekRank(thread) {
+  const tid = normalizeThreadId(thread);
+  const i = SEEK_THREAD_ORDER.indexOf(tid);
+  return i < 0 ? SEEK_THREAD_ORDER.length : i;
+}
+
+function isSupportingThread(thread) {
+  return SUPPORTING_THREADS.has(normalizeThreadId(thread));
+}
+
+function threadKeepCount(state, tid) {
+  const cov = (state && state.thread_coverage) || {};
+  return Number((cov[tid] && cov[tid].keeps) || 0) || 0;
+}
+
+function threadIsDead(state, tid) {
+  return threadKeepCount(state, tid) < DEAD_THREAD_KEEP_FLOOR;
+}
+
+function selfViewKeeps(state) {
+  return threadKeepCount(state, 'self-view');
+}
+
+/** Supporting evidence waits until the Egyptian self-view spine has enough keeps. */
+function allowSupportingLead(state, lead) {
+  if (!state) return true;
+  if (!isSupportingThread(lead && lead.thread)) return true;
+  if (selfViewKeeps(state) < SELF_VIEW_SUPPORTING_GATE) return false;
+  return Number(state.cycle_count || 0) % 4 === 0;
+}
+
+/** Clear junk for Egypt-scoped threads (Spanish colonial / church mission noise). */
+const OFF_TOPIC_EGYPT_MARKERS = [
+  'guanajuato', 'cárcel de corte', 'carcel de corte', 'padre melchor',
+  'misiones en la', 'ala sombra generosa', 'muerte del padre',
+];
+
+/** Publisher / edition / role junk that bibliography mining often dumps. */
+const BIB_JUNK_TITLE_MARKERS = [
+  'publisher information', 'publisher of', 'editor of', 'illustrator of',
+  'decorator of', 'digitized edition', 'everyman\'s library', 'everymans library',
+  'memoir fund', 'no título', 'no titulo', 'invitación y respuesta',
+  'respuesta a la invitación', 'preparativos para la visita',
+];
+
+/** Minimum bib rank to enqueue / keep pending (Phase D). */
+const BIB_MIN_RANK = Math.max(0, Number(process.env.PIKO_EI_CAMPAIGN_BIB_MIN_RANK || 10));
+
+function isGarbageLeadTitle(title) {
+  const t = toLowerAsciiish(String(title || '').trim());
+  if (!t || t.length < 3) return true;
+  if (t === 'n/a' || t === 'na' || t === 'tbd') return true;
+  if (includesAny(t, GARBAGE_TITLE_MARKERS)) return true;
+  // Title is only parentheses / punctuation / whitespace
+  let hasLetterOrDigit = false;
+  for (let i = 0; i < t.length; i += 1) {
+    const c = t.charCodeAt(i);
+    const isDigit = c >= 48 && c <= 57;
+    const isLatin = (c >= 97 && c <= 122);
+    if (isDigit || isLatin) { hasLetterOrDigit = true; break; }
+  }
+  return !hasLetterOrDigit;
+}
+
+function isBibJunkTitle(title) {
+  const t = toLowerAsciiish(String(title || '').trim());
+  if (!t) return true;
+  if (isGarbageLeadTitle(t)) return true;
+  return includesAny(t, BIB_JUNK_TITLE_MARKERS);
+}
+
+/** Any 4-digit year in blob (for demoting modern secondary literature). */
+function extractAnyYear(blob) {
+  for (const run of extractDigitRuns(blob)) {
+    if (run.text.length !== 4) continue;
+    const y = run.value;
+    if (y >= 1500 && y <= 2100) return y;
+  }
+  return null;
+}
+
+function isOffTopicEgyptLead(lead) {
+  const thread = normalizeThreadId(lead && lead.thread);
+  if (!EGYPT_SCOPED_THREADS.has(thread)) return false;
+  const blob = toLowerAsciiish([
+    (lead && lead.title) || '',
+    (lead && lead.query) || '',
+    (lead && lead.why) || '',
+  ].join(' '));
+  return includesAny(blob, OFF_TOPIC_EGYPT_MARKERS);
 }
 
 function pruneBadPendingLeads(state) {
@@ -888,20 +1374,94 @@ function pruneBadPendingLeads(state) {
     ) {
       l.status = 'pruned_bad';
       pruned += 1;
+      continue;
+    }
+    // Phase A.3 — soft-prune garbage bibliography / placeholder titles
+    if (l.source === 'bibliography') {
+      if (isGarbageLeadTitle(l.title) || isBibJunkTitle(l.title) || !String(l.author || '').trim()) {
+        l.status = 'pruned_bad';
+        l.last_skip_reason = 'garbage_bib_lead';
+        pruned += 1;
+        continue;
+      }
+      if (isOffTopicEgyptLead(l)) {
+        l.status = 'pruned_bad';
+        l.last_skip_reason = 'off_topic_egypt_thread';
+        pruned += 1;
+        continue;
+      }
+      // Phase D — drop low-rank speculative bib so the queue stays seekable
+      if (scoreBibLead(l) < BIB_MIN_RANK) {
+        l.status = 'pruned_low_rank';
+        l.last_skip_reason = 'bib_low_rank';
+        pruned += 1;
+        continue;
+      }
+    }
+    if (isGarbageLeadTitle(l.title) && l.title) {
+      l.status = 'pruned_bad';
+      l.last_skip_reason = 'garbage_title';
+      pruned += 1;
+      continue;
+    }
+    if (isOffTopicEgyptLead(l)) {
+      l.status = 'pruned_bad';
+      l.last_skip_reason = 'off_topic_egypt_thread';
+      pruned += 1;
+      continue;
+    }
+    try {
+      const { isOffDomainJunkLead } = require('./eiDomainGate');
+      if (isOffDomainJunkLead(l)) {
+        l.status = 'pruned_bad';
+        l.last_skip_reason = 'off_domain_junk';
+        pruned += 1;
+        continue;
+      }
+    } catch (_) { /* optional */ }
+    if (isLikelyHallucinatedDossierLead(l)) {
+      l.status = 'pruned_bad';
+      l.last_skip_reason = 'hallucinated_dossier_gap';
+      pruned += 1;
     }
   }
   return pruned;
 }
 
-/** Prefer curated Archive.org / seed-pack URLs before open-web seek. */
+function isArchiveDetailsUrl(url) {
+  return toLowerAsciiish(url).includes('archive.org/details/');
+}
+
+function isHttpUrl(url) {
+  const u = toLowerAsciiish(url);
+  return u.startsWith('http://') || u.startsWith('https://');
+}
+
+/** Prefer archive.org/details/ URLs ahead of download mirrors / other hosts. */
+function preferArchiveDetailsUrls(urls) {
+  const details = [];
+  const rest = [];
+  for (const u of urls || []) {
+    if (isArchiveDetailsUrl(u)) details.push(u);
+    else rest.push(u);
+  }
+  return details.concat(rest);
+}
+
+/** Prefer lead-carried URLs, then curated Archive.org / seed-pack URLs. */
 function seedUrlsForLead(lead) {
+  if (Array.isArray(lead && lead.seed_urls) && lead.seed_urls.length) {
+    return preferArchiveDetailsUrls(lead.seed_urls).slice(0, 6);
+  }
   try {
     const { seedsForGoal } = require('./eiSeedPack');
     const mission = lead.mission || lead.query || '';
     const fromMission = seedsForGoal(mission);
-    if (fromMission.urls && fromMission.urls.length) return fromMission.urls.slice(0, 4);
+    if (fromMission.urls && fromMission.urls.length) {
+      return preferArchiveDetailsUrls(fromMission.urls).slice(0, 6);
+    }
     const fromQuery = seedsForGoal(lead.query || '');
-    return (fromQuery.urls || []).slice(0, 4);
+    return preferArchiveDetailsUrls(fromQuery.urls || []).slice(0, 6);
   } catch (_) {
     return [];
   }
@@ -910,14 +1470,89 @@ function seedUrlsForLead(lead) {
 const PD_AUTHORS = [
   'petrie', 'donnelly', 'posnansky', 'plato', 'herodotus', 'bretz',
   'diodorus', 'strabo', 'pliny', 'lepsius', 'mariette', 'hapgood',
+  'maspero', 'breasted', 'budge', 'weigall', 'griffith', 'naville',
+  'erman', 'sethe', 'gardiner', 'wilkinson', 'edwards', 'brugsch',
 ];
+
+function isEgyptologyThread(thread) {
+  return EGYPT_SCOPED_THREADS.has(normalizeThreadId(thread));
+}
+
+/** Extract ingestable host/PDF URLs from seek gap / source_candidate rows. */
+function gapIngestUrlsFromSeekResult(result) {
+  const items = (result && result.items) || [];
+  const urls = [];
+  for (const it of items) {
+    const meta = it.meta_extra || it.meta || {};
+    const title = String(it.title || '');
+    const isGap = meta.literature_role === 'web_pdf_gap'
+      || meta.kind === 'source_candidate'
+      || startsWithIgnoreCase(title, '[gap]');
+    if (!isGap) continue;
+    const u = String(it.source_url || it.document_url || meta.source_url || '').trim();
+    if (!isHttpUrl(u)) continue;
+    if (urls.includes(u)) continue;
+    urls.push(u);
+  }
+  return preferArchiveDetailsUrls(urls).slice(0, 3);
+}
+
+/**
+ * Catalog discovery (oraec/papyri/TM) — no mission-fit; collect source URLs to ingest.
+ */
+async function catalogDiscoverUrls(lead, runTool, opts = {}) {
+  if (String(process.env.PIKO_EI_CAMPAIGN_CATALOG || '1') === '0') {
+    return { urls: [], tried: [] };
+  }
+  const q = String((lead && (lead.title || lead.query)) || '').trim();
+  if (!q) return { urls: [], tried: [] };
+  const toolOpts = {
+    goal: lead.mission || lead.query || q,
+    rootDir: opts.rootDir,
+    source: 'ei_research_campaign',
+    pikoUserId: 'agent:ei-campaign',
+  };
+  const tried = [];
+  const urls = [];
+  const tools = ['seek_oraec', 'seek_papyri', 'seek_trismegistos'];
+  if (isEgyptologyThread(lead && lead.thread)) tools.push('seek_digital_giza');
+  for (const tool of tools) {
+    tried.push(tool);
+    try {
+      const out = await runTool(tool, { query: q, limit: 6 }, toolOpts);
+      const items = (out && out.result && out.result.items) || [];
+      for (const it of items) {
+        const u = String(it.source_url || it.document_url || '').trim();
+        if (!isHttpUrl(u)) continue;
+        if (alreadyKeptUrl(u)) continue;
+        if (!urls.includes(u)) urls.push(u);
+      }
+    } catch (_) { /* next catalog tool */ }
+    if (urls.length >= 3) break;
+  }
+  return { urls: preferArchiveDetailsUrls(urls).slice(0, 3), tried };
+}
 
 /**
  * Classify lead access likelihood: seeded | public_domain_likely | speculative.
  */
 function classifyLeadAccess(lead) {
+  if (Array.isArray(lead && lead.seed_urls) && lead.seed_urls.length) return 'seeded';
   const urls = seedUrlsForLead(lead || {});
   if (urls && urls.length) return 'seeded';
+  // Title/author match against curated seed pack (even when query form differs).
+  try {
+    const { getSeeds } = require('./eiSeedPack');
+    for (const seed of getSeeds()) {
+      const title = (seed.title_hints && seed.title_hints[0]) || '';
+      const author = (seed.authors && seed.authors[0]) || '';
+      if (!title || !author) continue;
+      if (!leadMatchesSeed(lead, title, author)) continue;
+      if ((seed.urls && seed.urls.length) || (seed.ia_ids && seed.ia_ids.length)) {
+        return 'seeded';
+      }
+    }
+  } catch (_) { /* optional */ }
   const blob = [
     (lead && lead.title) || '',
     (lead && lead.author) || '',
@@ -937,6 +1572,484 @@ function classifyLeadAccess(lead) {
   return 'speculative';
 }
 
+/**
+ * Phase D — rank a bibliography (or bib-like) lead for intake quality.
+ * Higher is better. Used to filter mineBibliographyLeads and prune pending.
+ */
+function scoreBibLead(lead) {
+  const title = String((lead && lead.title) || '').trim();
+  const author = String((lead && lead.author) || '').trim();
+  if (!title || !author) return -100;
+  if (isBibJunkTitle(title)) return -100;
+  try {
+    const { isOffDomainJunkLead } = require('./eiDomainGate');
+    if (isOffDomainJunkLead(lead)) return -100;
+  } catch (_) { /* optional */ }
+
+  let score = 0;
+  const access = (lead && lead.access) || classifyLeadAccess(lead);
+  if (access === 'seeded') score += 100;
+  else if (access === 'public_domain_likely') score += 80;
+  else score -= 40; // speculative
+
+  let thread = normalizeThreadId(lead && lead.thread);
+  if (thread === 'other') {
+    const guessed = guessThreadFromBlob([title, author, (lead && lead.why) || '', (lead && lead.query) || ''].join(' '));
+    if (guessed !== 'other') thread = guessed;
+  }
+  if (thread !== 'other') score += 15;
+  if (isEgyptologyThread(thread)) score += 25;
+
+  const year = extractAnyYear([title, author, (lead && lead.why) || ''].join(' '));
+  if (year != null && year >= 1990) score -= 50;
+  else if (year != null && year >= 1950) score -= 30;
+
+  // Role / publisher phrasing without a real work title
+  const tLow = toLowerAsciiish(title);
+  if (startsWithAny(tLow, ['publisher ', 'editor ', 'illustrator ', 'decorator ', 'digitized '])) {
+    score -= 40;
+  }
+  return score;
+}
+
+/** True when a reflection lead matches curated seed gaps or dossier wanted_sources. */
+function matchesGroundedGap(lead) {
+  try {
+    const { getSeeds } = require('./eiSeedPack');
+    for (const seed of getSeeds()) {
+      const title = (seed.title_hints && seed.title_hints[0]) || '';
+      const author = (seed.authors && seed.authors[0]) || '';
+      if (title && author && leadMatchesSeed(lead, title, author)) return true;
+    }
+  } catch (_) { /* optional */ }
+  try {
+    const { dossierWantedLeads } = require('./eiThreadDossiers');
+    for (const w of dossierWantedLeads(40)) {
+      if (w && w.title && w.author && leadMatchesSeed(lead, w.title, w.author)) return true;
+    }
+  } catch (_) { /* optional */ }
+  return false;
+}
+
+/**
+ * Phase D — retarget pending leads stuck on thread=other when title/author implies a real thread.
+ */
+function rethreadPendingOtherLeads(state) {
+  let n = 0;
+  for (const l of state.leads || []) {
+    if (l.status !== 'pending') continue;
+    if (normalizeThreadId(l.thread) !== 'other') continue;
+    const guessed = guessThreadFromBlob([
+      l.title || '', l.author || '', l.query || '', l.why || '',
+    ].join(' '));
+    if (guessed === 'other') continue;
+    l.thread = guessed;
+    l.last_skip_reason = 'rethreaded_from_other';
+    n += 1;
+  }
+  return n;
+}
+
+/** Title/author only — omit site/mission/focus so a Giza seek cannot steal Heliopolis/PT. */
+const SPECIFIC_OVER_GIZA = new Set([
+  'heliopolis', 'self-view', 'premodern-reception', 'abydos',
+]);
+
+function guessThreadFromItem(it) {
+  const meta = (it && it.meta) || {};
+  const authors = [
+    ...(Array.isArray(meta.authors) ? meta.authors : []),
+    ...(Array.isArray(it.authors) ? it.authors : []),
+    meta.author, it.author,
+  ];
+  const titleBlob = [it.title, meta.work_title, ...authors].filter(Boolean).join(' ');
+  let guessed = guessThreadFromBlob(titleBlob);
+  if (guessed === 'other') {
+    const fullBlob = [titleBlob, meta.note, meta.mission, meta.site].filter(Boolean).join(' ');
+    guessed = guessThreadFromBlob(fullBlob);
+    if (guessed === 'other') {
+      try {
+        const { matchThreadId } = require('./eiThreadDossiers');
+        guessed = normalizeThreadId(matchThreadId(fullBlob) || 'other');
+      } catch (_) { /* keep other */ }
+    }
+  }
+  return guessed;
+}
+
+function shouldRethreadHarvest(current, guessed) {
+  if (!guessed || guessed === 'other' || guessed === current) return false;
+  if (current === 'other') return true;
+  // Recrawl under a Giza focus often stamps thread=giza onto Heliopolis / PT / witnesses.
+  if (current === 'giza' && SPECIFIC_OVER_GIZA.has(guessed)) return true;
+  return false;
+}
+
+/**
+ * Patch harvest meta.thread for keeps stuck on other / missing thread.
+ * Also corrects Giza-steal when title/author clearly belongs to a more specific thread.
+ * Coverage keeps are recomputed from the DB each cycle — do not mutate counters here.
+ */
+function rethreadOtherHarvestItems(state, opts = {}) {
+  const limit = Math.max(1, Math.min(40, Number(opts.limit || 12)));
+  let patched = 0;
+  let offset = 0;
+  const page = 100;
+  const { patchItemMeta } = require('./culturesCorpusApi');
+  try {
+    for (let guard = 0; guard < 50 && patched < limit; guard += 1) {
+      const out = listItems({
+        limit: page,
+        offset,
+        exclude_candidates: true,
+        include_meta: true,
+      });
+      const items = (out && out.items) || [];
+      if (!items.length) break;
+      for (const it of items) {
+        if (patched >= limit) break;
+        const hid = Number(it.id || it.harvest_id);
+        if (!Number.isFinite(hid) || hid <= 0) continue;
+        const meta = it.meta || {};
+        if (meta.pm_confirmed || meta.pm_confirm_id || meta.spine_retag) continue;
+        const current = normalizeThreadId(meta.thread || 'other');
+        const guessed = guessThreadFromItem(it);
+        if (!shouldRethreadHarvest(current, guessed)) continue;
+        try {
+          const patchOut = patchItemMeta(hid, { thread: guessed });
+          if (!(patchOut && patchOut.ok)) continue;
+        } catch (_) {
+          continue;
+        }
+        patched += 1;
+      }
+      if (items.length < page) break;
+      offset += page;
+    }
+  } catch (_) {
+    return { ok: false, patched };
+  }
+  return { ok: true, patched };
+}
+
+/**
+ * Authoritative keep counts from the corpus DB. Seeks stay event-based.
+ */
+function recomputeThreadCoverageKeeps(state) {
+  if (!state.thread_coverage || typeof state.thread_coverage !== 'object') {
+    state.thread_coverage = {};
+  }
+  const counts = { other: 0 };
+  for (const t of DEFAULT_THREADS) counts[t.id] = 0;
+  let total = 0;
+  let offset = 0;
+  const page = 100;
+  try {
+    for (let guard = 0; guard < 50; guard += 1) {
+      const out = listItems({
+        limit: page,
+        offset,
+        exclude_candidates: true,
+        include_meta: true,
+      });
+      const items = (out && out.items) || [];
+      if (!items.length) break;
+      for (const it of items) {
+        if (!itemCountsAsCorpusKeep(it)) continue;
+        const meta = it.meta || {};
+        const tid = normalizeThreadId(meta.thread || 'other');
+        if (counts[tid] == null) counts[tid] = 0;
+        counts[tid] += 1;
+        total += 1;
+      }
+      if (items.length < page) break;
+      offset += page;
+    }
+  } catch (_) { /* best-effort recount */ }
+  for (const [tid, n] of Object.entries(counts)) {
+    if (!state.thread_coverage[tid]) state.thread_coverage[tid] = { keeps: 0, seeks: 0 };
+    state.thread_coverage[tid].keeps = n;
+  }
+  // Zero known threads that had inflated counters but no DB rows this recount.
+  for (const tid of Object.keys(state.thread_coverage)) {
+    if (counts[tid] == null) {
+      state.thread_coverage[tid].keeps = 0;
+    }
+  }
+  return { total, by_thread: counts };
+}
+
+/**
+ * Digest undigested keeps (spine first), then rethread harvest meta.
+ */
+async function digestAndRethreadOther(state, opts = {}) {
+  const envLimit = Number(process.env.PIKO_EI_CYCLE_DIGEST_LIMIT || 24);
+  const limit = Math.max(4, Math.min(40, Number(opts.limit != null ? opts.limit : envLimit) || 24));
+  const report = { digested: 0, rethreaded: 0, reattributed: 0, errors: [] };
+  try {
+    const { backfillCorpusLearning } = require('./eiCorpusNotes');
+    const bf = await backfillCorpusLearning({
+      limit,
+      onlyOther: false,
+      priorityFirst: true,
+      skipThin: true,
+      deep: false,
+      index: true,
+      skipCampaignMigrate: true,
+    });
+    report.digested = (bf.digested || []).length;
+    if (bf.errors && bf.errors.length) report.errors = bf.errors.slice(0, 5);
+  } catch (e) {
+    report.errors.push({ stage: 'digest', error: String(e.message || e).slice(0, 120) });
+  }
+  try {
+    report.rethreaded = Number((rethreadOtherHarvestItems(state, { limit: 40 }).patched) || 0);
+  } catch (e) {
+    report.errors.push({ stage: 'rethread', error: String(e.message || e).slice(0, 120) });
+  }
+  // Coverage is recomputed from DB each cycle; reattribute is retired.
+  report.reattributed = 0;
+  return report;
+}
+
+/** Chase yield demotion after sustained empty chase (item 4). */
+function chaseIsDemoted(state) {
+  const attempts = Number((state.stats && state.stats.chase_attempts) || 0);
+  const keeps = Number((state.stats && state.stats.keeps_by_via_chase) || 0);
+  return attempts >= 10 && keeps === 0;
+}
+
+/**
+ * Whether to run chase for this lead.
+ * @param {'first'|'fallback'} mode
+ */
+function shouldChaseForLead(state, lead, mode) {
+  if (String(process.env.PIKO_EI_CAMPAIGN_CHASE_FALLBACK || '1') === '0') return false;
+  const egypt = isEgyptologyThread(lead && lead.thread);
+  const bib = String((lead && lead.source) || '') === 'bibliography';
+  const demoted = chaseIsDemoted(state);
+  if (!demoted) {
+    if (mode === 'first') return bib || egypt;
+    return true;
+  }
+  // Demoted: rare Egyptology-only chase (every 4th cycle — use cycle_count so
+  // we don't deadlock when attempts stop incrementing because chase is skipped).
+  if (!egypt) return false;
+  const cycle = Number(state.cycle_count || 0);
+  if (cycle % 4 !== 0) return false;
+  if (mode === 'first') return bib;
+  return true;
+}
+
+function recordChaseAttempt(state, keptCount) {
+  state.stats = state.stats || {};
+  state.stats.chase_attempts = (state.stats.chase_attempts || 0) + 1;
+  if (!(Number(keptCount) > 0)) {
+    state.stats.chase_empty = (state.stats.chase_empty || 0) + 1;
+  }
+}
+
+/**
+ * When reflection is sterile, inject catalog / dead-thread / curated seeds.
+ */
+function injectNoveltyLeads(state, max = 3) {
+  const limit = Math.max(0, Math.min(6, Number(max) || 0));
+  if (!limit) return 0;
+  let added = 0;
+  // Catalog-first (Workstream C) when discovery is enabled.
+  if (String(process.env.PIKO_EI_CAMPAIGN_CATALOG_DISCOVERY || '1') !== '0') {
+    try {
+      // Synchronous path for novelty: use cache-only / budget 1 via catalogRefillLeads.
+      // catalogRefillLeads is async; novelty inject is sync — use seed pack path when
+      // we cannot await. Prefer dead-thread + curated here; cycle-level catalog refill
+      // handles the primary supply. Still try a sync cache hit via buildCatalogLeads.
+      const catalog = require('./eiCatalogDiscovery');
+      const { loadCache, catalogTermsForThread, buildCatalogLeads } = catalog;
+      const cache = loadCache();
+      for (const t of DEFAULT_THREADS) {
+        if (added >= limit) break;
+        const terms = catalogTermsForThread(t.id);
+        if (!terms) continue;
+        const cacheKey = `${terms.query}||${terms.yearMax == null ? 'none' : String(terms.yearMax)}`;
+        const hit = cache[cacheKey];
+        if (!(hit && Array.isArray(hit.docs) && hit.docs.length)) continue;
+        const leads = buildCatalogLeads(state, t.id, hit.docs, limit - added);
+        for (const L of leads) {
+          rememberCatalogIdentifier(state, L.catalog_identifier);
+          if (addLead(state, L)) added += 1;
+          if (added >= limit) break;
+        }
+      }
+    } catch (_) { /* optional */ }
+  }
+  if (added >= limit) return added;
+  added += seedDeadThreads(state);
+  if (added >= limit) return added;
+  try {
+    const { getSeeds } = require('./eiSeedPack');
+    for (const seed of getSeeds()) {
+      if (added >= limit) break;
+      const title = (seed.title_hints && seed.title_hints[0]) || '';
+      const author = (seed.authors && seed.authors[0]) || '';
+      if (!title || !author) continue;
+      if (!(seed.urls && seed.urls.length) && !(seed.ia_ids && seed.ia_ids.length)) continue;
+      if (hintOnCooldown(state, title, author)) continue;
+      if (alreadyInCorpus(`${title} ${author}`)) continue;
+      let thread = normalizeThreadId(seed.thread || 'other');
+      if (thread === 'other') {
+        thread = guessThreadFromBlob(`${title} ${author}`);
+      }
+      const seedUrls = [];
+      for (const u of seed.urls || []) seedUrls.push(u);
+      for (const id of seed.ia_ids || []) seedUrls.push(`https://archive.org/details/${id}`);
+      if (addLead(state, {
+        title,
+        author,
+        thread,
+        source: 'thread_seed',
+        access: 'seeded',
+        why: 'novelty inject — curated open-access gap',
+        seed_urls: seedUrls.length ? seedUrls : undefined,
+      })) {
+        added += 1;
+      }
+    }
+  } catch (_) { /* optional */ }
+  return added;
+}
+
+function rememberCatalogIdentifier(state, identifier) {
+  const id = String(identifier || '').trim();
+  if (!id) return;
+  if (!Array.isArray(state.catalog_seen)) state.catalog_seen = [];
+  if (state.catalog_seen.includes(id)) return;
+  state.catalog_seen.push(id);
+  if (state.catalog_seen.length > 500) {
+    state.catalog_seen = state.catalog_seen.slice(-500);
+  }
+}
+
+/**
+ * Primary lead supply: archive.org catalog → seeded URL leads (Workstream C).
+ * @param {object} state
+ * @param {number} max
+ * @param {{ fetchFn?: Function }} opts
+ */
+async function catalogRefillLeads(state, max = 3, opts = {}) {
+  if (String(process.env.PIKO_EI_CAMPAIGN_CATALOG_DISCOVERY || '1') === '0') {
+    return { added: 0, skipped: 'disabled' };
+  }
+  const limit = Math.max(0, Math.min(6, Number(max) || 0));
+  if (!limit) return { added: 0, skipped: 'zero_max' };
+  let catalog;
+  try {
+    catalog = require('./eiCatalogDiscovery');
+  } catch (e) {
+    return { added: 0, error: String(e.message || e).slice(0, 120) };
+  }
+  const { catalogTermsForThread, iaSearchTextsCached, buildCatalogLeads } = catalog;
+  if (!Array.isArray(state.catalog_seen)) state.catalog_seen = [];
+  if (state.catalog_cursor == null || !Number.isFinite(Number(state.catalog_cursor))) {
+    state.catalog_cursor = 0;
+  }
+  state.stats = state.stats || {};
+
+  const pendingByThread = {};
+  for (const l of pendingLeads(state)) {
+    if (String(l.source || '') !== 'catalog') continue;
+    const tid = normalizeThreadId(l.thread);
+    pendingByThread[tid] = (pendingByThread[tid] || 0) + 1;
+  }
+
+  const ranked = DEFAULT_THREADS
+    .map((t, idx) => {
+      const cov = (state.thread_coverage || {})[t.id] || {};
+      return {
+        id: t.id,
+        keeps: Number(cov.keeps) || 0,
+        idx,
+        pendingCatalog: pendingByThread[t.id] || 0,
+      };
+    })
+    .filter((t) => t.pendingCatalog < 2)
+    .filter((t) => allowSupportingLead(state, { thread: t.id }))
+    .sort((a, b) => {
+      const deadA = a.keeps < DEAD_THREAD_KEEP_FLOOR ? 0 : 1;
+      const deadB = b.keeps < DEAD_THREAD_KEEP_FLOOR ? 0 : 1;
+      if (deadA !== deadB) return deadA - deadB;
+      const rankA = threadSeekRank(a.id);
+      const rankB = threadSeekRank(b.id);
+      if (rankA !== rankB) return rankA - rankB;
+      if (a.keeps !== b.keeps) return a.keeps - b.keeps;
+      const rotA = (a.idx - state.catalog_cursor + DEFAULT_THREADS.length) % DEFAULT_THREADS.length;
+      const rotB = (b.idx - state.catalog_cursor + DEFAULT_THREADS.length) % DEFAULT_THREADS.length;
+      return rotA - rotB;
+    });
+
+  if (!ranked.length) return { added: 0, skipped: 'threads_capped' };
+
+  // Try up to 3 ranked threads so one empty/deferred cache miss does not
+  // starve every other thread for the cycle (Workstream H).
+  let lastEmpty = null;
+  for (let attempt = 0; attempt < Math.min(3, ranked.length); attempt += 1) {
+    const target = ranked[attempt];
+    const terms = catalogTermsForThread(target.id);
+    if (!terms) {
+      lastEmpty = { added: 0, skipped: 'no_terms', thread: target.id };
+      continue;
+    }
+
+    const httpBudget = { remaining: attempt === 0 ? 1 : 0 };
+    const search = await iaSearchTextsCached({
+      query: terms.query,
+      yearMax: terms.yearMax,
+      rows: 50,
+      fetchFn: opts.fetchFn,
+      httpBudget,
+    });
+    state.catalog_cursor = (Number(state.catalog_cursor) + 1) % DEFAULT_THREADS.length;
+
+    if (!(search && search.docs && search.docs.length)) {
+      lastEmpty = {
+        added: 0,
+        thread: target.id,
+        cached: !!(search && search.cached),
+        deferred: !!(search && search.deferred),
+        error: (search && search.error) || 'empty_docs',
+      };
+      continue;
+    }
+
+    const leads = buildCatalogLeads(state, target.id, search.docs, limit);
+    let added = 0;
+    for (const L of leads) {
+      rememberCatalogIdentifier(state, L.catalog_identifier);
+      if (addLead(state, L)) {
+        added += 1;
+        state.stats.catalog_leads_added = (state.stats.catalog_leads_added || 0) + 1;
+      }
+    }
+    if (added > 0 || leads.length > 0) {
+      return {
+        added,
+        thread: target.id,
+        docs: search.docs.length,
+        cached: !!search.cached,
+        candidates: leads.length,
+      };
+    }
+    lastEmpty = {
+      added: 0,
+      thread: target.id,
+      docs: search.docs.length,
+      cached: !!search.cached,
+      candidates: 0,
+      error: 'no_new_candidates',
+    };
+  }
+  return lastEmpty || { added: 0, skipped: 'exhausted' };
+}
+
 function addLead(state, lead) {
   const sanitized = sanitizeLead(lead);
   if (!sanitized.ok) return false;
@@ -944,6 +2057,12 @@ function addLead(state, lead) {
   let q = clean.query;
   let retryCount = Math.max(0, Number(lead.retry_count || 0));
   let queryAttempt = 0;
+  const carriedUrls = Array.isArray(lead.seed_urls)
+    ? preferArchiveDetailsUrls(lead.seed_urls).slice(0, 6)
+    : [];
+  // Only explicit lead-carried URLs bypass query cooldown at enqueue time.
+  // Seed-pack lookup must not let cooled reflection titles sneak back in.
+  const hasFreshSeedUrls = carriedUrls.some((u) => !alreadyKeptUrl(u));
   // Prefer a reformulated query when the default form is still cooling down.
   if (queryOnCooldown(state, q) && clean.title && clean.author && retryCount < MAX_LEAD_RETRIES) {
     for (let attempt = Math.max(1, retryCount + 1); attempt <= MAX_LEAD_RETRIES; attempt += 1) {
@@ -960,11 +2079,13 @@ function addLead(state, lead) {
   const key = queryKey(q);
   // WP7.3: dedupe against pending/running, or terminal leads still on cooldown.
   if (state.leads.some((l) => queryKey(l.query) === key && leadBlocksDedupe(state, l))) return false;
-  if (queryOnCooldown(state, q)) return false;
+  // Seeded/catalog leads with fresh URLs may enqueue even when the text query is cooling.
+  if (queryOnCooldown(state, q) && !hasFreshSeedUrls) return false;
   if (alreadyInCorpus(`${clean.title || ''} ${clean.author || ''}`)
     || alreadyInCorpus(q)) return false;
-  const access = lead.access || classifyLeadAccess({ ...clean, query: q });
-  state.leads.push({
+  const access = lead.access || classifyLeadAccess({ ...clean, query: q, seed_urls: carriedUrls });
+  if (!allowSupportingLead(state, { thread: clean.thread || lead.thread })) return false;
+  const row = {
     id: leadId(),
     query: q,
     mission: clean.mission,
@@ -978,7 +2099,15 @@ function addLead(state, lead) {
     query_attempt: queryAttempt,
     status: 'pending',
     added_at: new Date().toISOString(),
-  });
+  };
+  if (carriedUrls.length) {
+    row.seed_urls = carriedUrls;
+    row.seed_url_attempts = Math.max(0, Number(lead.seed_url_attempts) || 0);
+  }
+  if (lead.catalog_identifier) {
+    row.catalog_identifier = String(lead.catalog_identifier);
+  }
+  state.leads.push(row);
   return true;
 }
 
@@ -1055,7 +2184,8 @@ async function backfillBibliographyFromKeeps(state, opts = {}) {
 /**
  * Convert bibliography citation edges into campaign leads (compounding loop).
  * Mines: queued edges with no later terminal outcome, plus retryable failed seeks
- * (seek_failed/empty/error). Skips keep/unsure/drop.
+ * (seek_failed/empty/error/unsure). Skips keep/drop.
+ * Phase D: rank candidates (PD / seed / Egyptology first); only enqueue high-rank.
  */
 function mineBibliographyLeads(state, max = BIB_LEADS_PER_CYCLE) {
   const limit = Math.max(0, Math.min(8, Number(max)));
@@ -1079,9 +2209,8 @@ function mineBibliographyLeads(state, max = BIB_LEADS_PER_CYCLE) {
     byKey.get(key).push({ idx, e, title, author });
   });
 
-  let added = 0;
+  const candidates = [];
   for (const rows of byKey.values()) {
-    if (added >= limit) break;
     rows.sort((a, b) => a.idx - b.idx);
     const last = rows[rows.length - 1];
     const outcomes = rows.map((r) => String(r.e.outcome || ''));
@@ -1098,18 +2227,48 @@ function mineBibliographyLeads(state, max = BIB_LEADS_PER_CYCLE) {
     if (!queuedOpen && !retryable) continue;
 
     const { title, author, e } = last;
+    if (isBibJunkTitle(title) || !author) continue;
     const fromId = e.from_id;
-    const thread = fromId != null ? threadForHarvestId(fromId) : 'other';
-    const retryCount = retryable ? 1 : 0;
-    const query = reformulateQuery({ title, author }, retryCount);
-    if (addLead(state, {
+    let thread = fromId != null ? threadForHarvestId(fromId) : 'other';
+    if (thread === 'other') {
+      const guessed = guessThreadFromBlob([title, author, e.why || ''].join(' '));
+      if (guessed !== 'other') thread = guessed;
+    }
+    const probe = { title, author, thread, why: e.why, source: 'bibliography' };
+    const access = classifyLeadAccess(probe);
+    const rank = scoreBibLead({ ...probe, access });
+    if (rank < BIB_MIN_RANK) continue;
+    candidates.push({
       title,
       author,
-      query,
       thread,
-      source: 'bibliography',
       why: String(e.why || 'cited in corpus bibliography').slice(0, 240),
-      retry_count: retryCount,
+      retry_count: retryable ? 1 : 0,
+      access,
+      rank,
+    });
+  }
+
+  candidates.sort((a, b) => {
+    const d = (b.rank || 0) - (a.rank || 0);
+    if (d !== 0) return d;
+    return String(a.title).localeCompare(String(b.title));
+  });
+
+  let added = 0;
+  for (const c of candidates) {
+    if (added >= limit) break;
+    const query = reformulateQuery({ title: c.title, author: c.author }, c.retry_count);
+    if (addLead(state, {
+      title: c.title,
+      author: c.author,
+      query,
+      thread: c.thread,
+      source: 'bibliography',
+      why: c.why,
+      retry_count: c.retry_count,
+      access: c.access,
+      bib_rank: c.rank,
     })) {
       added += 1;
     }
@@ -1130,9 +2289,8 @@ function formatBibGapsHint(limit = 8, state = null) {
       if (!byKey.has(key)) byKey.set(key, []);
       byKey.get(key).push({ idx, e, title, author });
     });
-    const gaps = [];
+    const ranked = [];
     for (const rows of byKey.values()) {
-      if (gaps.length >= limit) break;
       rows.sort((a, b) => a.idx - b.idx);
       const outcomes = rows.map((r) => String(r.e.outcome || ''));
       const last = rows[rows.length - 1];
@@ -1147,8 +2305,22 @@ function formatBibGapsHint(limit = 8, state = null) {
       if (!openQueued && !RETRYABLE_EDGE.has(lastOutcome)) continue;
       if (alreadyInCorpus(`${last.title} ${last.author}`)) continue;
       if (state && hintOnCooldown(state, last.title, last.author)) continue;
-      gaps.push(`"${last.title}" ${last.author}`);
+      if (isBibJunkTitle(last.title)) continue;
+      const thread = last.e && last.e.from_id != null
+        ? threadForHarvestId(last.e.from_id)
+        : 'other';
+      const rank = scoreBibLead({
+        title: last.title,
+        author: last.author,
+        thread,
+        why: (last.e && last.e.why) || '',
+        source: 'bibliography',
+      });
+      if (rank < BIB_MIN_RANK) continue;
+      ranked.push({ title: last.title, author: last.author, rank });
     }
+    ranked.sort((a, b) => (b.rank || 0) - (a.rank || 0));
+    const gaps = ranked.slice(0, limit).map((g) => `"${g.title}" ${g.author}`);
     if (!gaps.length) return '';
     return `BIBLIOGRAPHY CITATIONS TO CHASE (prefer these — from kept works):\n${gaps.join('\n')}`;
   } catch (_) {
@@ -1193,9 +2365,9 @@ function leadMatchesSeed(lead, title, author) {
 }
 
 /**
- * Every cycle: enqueue curated seed-pack leads for threads with 0 keeps.
- * Dead = keeps===0 AND (seeks>=3 OR untried seed-pack entries exist).
- * If a matching lead is already pending under the wrong thread, retarget it.
+ * Every cycle: enqueue curated seed-pack leads for thin/dead threads.
+ * Dead = keeps < DEAD_THREAD_KEEP_FLOOR (self-view with 2 keeps still seeds).
+ * Skip seeds already on the shelf; do not fake coverage credits.
  */
 function seedDeadThreads(state) {
   let added = 0;
@@ -1206,8 +2378,8 @@ function seedDeadThreads(state) {
     return 0;
   }
   for (const t of DEFAULT_THREADS) {
-    const cov = (state.thread_coverage || {})[t.id] || {};
-    if ((cov.keeps || 0) > 0) continue;
+    if (!threadIsDead(state, t.id)) continue;
+    if (!allowSupportingLead(state, { thread: t.id })) continue;
 
     const allSeeds = (seedsForThread(t.id) || []).filter((seed) => {
       const title = (seed.title_hints && seed.title_hints[0]) || '';
@@ -1215,25 +2387,13 @@ function seedDeadThreads(state) {
       if (!title || !author) return false;
       return !!(seed.urls && seed.urls.length) || !!(seed.ia_ids && seed.ia_ids.length);
     });
-    // If a curated seed is already in the corpus but never credited to this
-    // thread (common when ingest ran under thread=other), credit the keep.
-    for (const seed of allSeeds) {
-      const title = (seed.title_hints && seed.title_hints[0]) || '';
-      const author = (seed.authors && seed.authors[0]) || '';
-      if (alreadyInCorpus(`${title} ${author}`) && (cov.keeps || 0) === 0) {
-        bumpThread(state, t.id, 'keeps', 1);
-        cov.keeps = (state.thread_coverage[t.id] && state.thread_coverage[t.id].keeps) || 1;
-      }
-    }
-    if ((cov.keeps || 0) > 0) continue;
 
     const untried = allSeeds.filter((seed) => {
       const title = (seed.title_hints && seed.title_hints[0]) || '';
       const author = (seed.authors && seed.authors[0]) || '';
       return !seedHasBeenAttempted(state, title, author);
     });
-    const dead = (cov.seeks || 0) >= 3 || untried.length > 0;
-    if (!dead || !untried.length) continue;
+    if (!untried.length) continue;
 
     const hasPendingOnThread = pendingLeads(state).some((l) => (
       normalizeThreadId(l.thread) === t.id
@@ -1278,15 +2438,123 @@ function pendingLeads(state) {
   return state.leads.filter((l) => l.status === 'pending');
 }
 
-const PRIORITY_SOURCES = new Set(['operator', 'dossier_gap', 'thread_seed', 'article_gap']);
+const PRIORITY_SOURCES = new Set([
+  'operator',
+  'catalog',
+  'thread_seed',
+  'article_gap',
+  'dossier_gap',
+]);
 
+/** Obvious LLM-invented dossier authors / generic study titles. */
+const HALLUCINATED_AUTHOR_MARKERS = [
+  'john smith', 'maria lopez', 'sarah m. jones', 'sarah jones',
+  'jane doe', 'john doe', 'jane roe', 'john roe',
+];
+const HALLUCINATED_TITLE_MARKERS = [
+  'a comprehensive study',
+  'a comprehensive archaeological study',
+  'from pharaonic to christian times',
+];
+
+function isLikelyHallucinatedDossierLead(lead) {
+  if (String((lead && lead.source) || '') !== 'dossier_gap') return false;
+  const author = toLowerAsciiish((lead && lead.author) || '');
+  const title = toLowerAsciiish((lead && lead.title) || '');
+  if (includesAny(author, HALLUCINATED_AUTHOR_MARKERS)) return true;
+  if (includesAny(title, HALLUCINATED_TITLE_MARKERS)) return true;
+  return false;
+}
+
+/**
+ * Seek order: carried-seed catalog/thread_seed first, then bib seeded/PD,
+ * speculative + hallucinated dossier_gap last.
+ */
 function leadPriority(lead) {
   const src = String((lead && lead.source) || '');
-  if (PRIORITY_SOURCES.has(src)) return 0;
   const acc = String((lead && lead.access) || '');
-  if (acc === 'seeded') return 1;
-  if (acc === 'public_domain_likely') return 2;
-  return 3; // speculative / untagged
+  const carried = carriedSeedUrls(lead).length > 0;
+  if (src === 'operator') return 0;
+  if (src === 'catalog' || (carried && (src === 'thread_seed' || src === 'catalog'))) return 0;
+  if (src === 'thread_seed' || carried) return 1;
+  if (src === 'article_gap') return 2;
+  if (src === 'bibliography') {
+    if (acc === 'seeded' || carried) return 2;
+    if (acc === 'public_domain_likely') return 3;
+    if (isEgyptologyThread(lead && lead.thread)) return 4;
+    return 6;
+  }
+  if (src === 'dossier_gap') return isLikelyHallucinatedDossierLead(lead) ? 8 : 5;
+  if (acc === 'seeded') return 3;
+  if (acc === 'public_domain_likely') return 4;
+  return 5;
+}
+
+/** Keep/unsure judgments from a mission-fit payload (purged excluded). */
+function judgmentsFromMissionFit(mf) {
+  const judgments = (mf && Array.isArray(mf.judgments)) ? mf.judgments : [];
+  return {
+    keeps: judgments.filter((j) => j && j.verdict === 'keep' && !j.purged),
+    unsures: judgments.filter((j) => j && j.verdict === 'unsure' && !j.purged),
+  };
+}
+
+/**
+ * Flatten keep/unsure judgments from chase_topbib / chase_tla tool output
+ * (nested under result.chased[].mission_fit).
+ */
+function judgmentsFromChaseTool(out) {
+  const keeps = [];
+  const unsures = [];
+  const chased = (out && out.result && Array.isArray(out.result.chased)) ? out.result.chased : [];
+  for (const c of chased) {
+    const j = judgmentsFromMissionFit(c && c.mission_fit);
+    keeps.push(...j.keeps);
+    unsures.push(...j.unsures);
+  }
+  const top = judgmentsFromMissionFit(out && out.mission_fit);
+  keeps.push(...top.keeps);
+  unsures.push(...top.unsures);
+  return { keeps, unsures };
+}
+
+/**
+ * After open-web seek returns empty, chase bibliographic pointers (TopBib → TLA)
+ * then PDF via the existing chase_* tools.
+ */
+async function chaseFallbackForLead(lead, runTool, opts = {}) {
+  if (String(process.env.PIKO_EI_CAMPAIGN_CHASE_FALLBACK || '1') === '0') {
+    return { keeps: [], unsures: [], via: null, tried: [] };
+  }
+  const goal = String((lead && (lead.mission || lead.query)) || '').trim();
+  const query = (lead && lead.title && lead.author)
+    ? `${lead.title} ${lead.author}`
+    : String((lead && lead.query) || goal).trim();
+  if (!query) return { keeps: [], unsures: [], via: null, tried: [] };
+
+  const toolOpts = {
+    goal: goal || query,
+    rootDir: opts.rootDir,
+    source: 'ei_research_campaign',
+    pikoUserId: 'agent:ei-campaign',
+  };
+  const tried = [];
+  for (const tool of ['chase_topbib', 'chase_tla']) {
+    tried.push(tool);
+    try {
+      const out = await runTool(tool, {
+        query,
+        limit: 8,
+        chase_limit: Math.max(1, Math.min(3, Number(process.env.PIKO_EI_CAMPAIGN_CHASE_LIMIT || 2))),
+      }, toolOpts);
+      if (out && out.mission_fit && out.mission_fit.error === 'mission_fit_error') continue;
+      const { keeps, unsures } = judgmentsFromChaseTool(out);
+      if (keeps.length || unsures.length) {
+        return { keeps, unsures, via: tool, tried };
+      }
+    } catch (_) { /* try next chase tool */ }
+  }
+  return { keeps: [], unsures: [], via: null, tried };
 }
 
 /** Stable priority order for seek batch selection (replaces FIFO). */
@@ -1294,6 +2562,8 @@ function orderLeads(pending) {
   return [...(pending || [])].sort((a, b) => {
     const d = leadPriority(a) - leadPriority(b);
     if (d !== 0) return d;
+    const tr = threadSeekRank(a.thread) - threadSeekRank(b.thread);
+    if (tr !== 0) return tr;
     return String(a.added_at || '').localeCompare(String(b.added_at || ''));
   });
 }
@@ -1301,8 +2571,9 @@ function orderLeads(pending) {
 /**
  * Pick normal seek batch (max N) then seeded-extra leads not already in batch.
  */
-function pickSeekBatches(pending, seeksPerCycle, seededExtra) {
-  const ordered = orderLeads(pending);
+function pickSeekBatches(pending, seeksPerCycle, seededExtra, state) {
+  const eligible = (pending || []).filter((l) => allowSupportingLead(state, l));
+  const ordered = orderLeads(eligible);
   const batch = ordered.slice(0, Math.max(1, Math.min(4, Number(seeksPerCycle) || 2)));
   const inBatch = new Set(batch.map((l) => l.id));
   const extraMax = Math.max(0, Math.min(4, Number(seededExtra) || 0));
@@ -1313,49 +2584,12 @@ function pickSeekBatches(pending, seeksPerCycle, seededExtra) {
 }
 
 /**
- * Move keeps counted under `other` to a real thread when a corpus note clearly matches.
- * Tracks harvest ids so the same note is never moved twice. Never invents keeps.
+ * Retired: coverage keeps are derived from the DB via recomputeThreadCoverageKeeps.
+ * Kept as a no-op export for older callers/tests.
  */
 function reattributeOtherCoverageFromNotes(state) {
-  if (!state.thread_coverage || typeof state.thread_coverage !== 'object') {
-    state.thread_coverage = {};
-  }
-  const other = state.thread_coverage.other;
-  if (!other || !(Number(other.keeps) > 0)) {
-    state._last_reattributed = 0;
-    return 0;
-  }
-  if (!Array.isArray(state.reattributed_harvest_ids)) state.reattributed_harvest_ids = [];
-  const done = new Set(state.reattributed_harvest_ids.map(Number).filter((n) => Number.isFinite(n)));
-  let notes = [];
-  let matchThreadId;
-  try {
-    const { listNotes } = require('./eiCorpusNotes');
-    notes = listNotes(200);
-    ({ matchThreadId } = require('./eiThreadDossiers'));
-  } catch (_) {
-    state._last_reattributed = 0;
-    return 0;
-  }
-  let moved = 0;
-  for (const n of notes) {
-    if (!(Number(other.keeps) > 0)) break;
-    const hid = Number(n.harvest_id || n.id);
-    if (!Number.isFinite(hid) || hid <= 0 || done.has(hid)) continue;
-    const blob = [n.title, n.author, n.summary, ...(n.sites || []), ...(n.people || [])]
-      .filter(Boolean)
-      .join(' ');
-    const tid = normalizeThreadId(matchThreadId(blob) || 'other');
-    done.add(hid);
-    if (tid === 'other') continue;
-    if (!state.thread_coverage[tid]) state.thread_coverage[tid] = { keeps: 0, seeks: 0 };
-    other.keeps -= 1;
-    state.thread_coverage[tid].keeps = (state.thread_coverage[tid].keeps || 0) + 1;
-    moved += 1;
-  }
-  state.reattributed_harvest_ids = [...done].slice(-500);
-  state._last_reattributed = moved;
-  return moved;
+  if (state) state._last_reattributed = 0;
+  return 0;
 }
 
 /**
@@ -1380,10 +2614,20 @@ function migrateCampaignState(state) {
     'reflection_leads_added',
     'reflection_leads_sought',
     'reflection_leads_kept',
+    'chase_attempts',
+    'chase_empty',
+    'keeps_by_via_chase',
+    'catalog_leads_added',
+    'catalog_leads_kept',
   ]) {
     if (state.stats[k] == null || !Number.isFinite(Number(state.stats[k]))) {
       state.stats[k] = Number(state.stats[k]) || 0;
     }
+  }
+  if (!Array.isArray(state.catalog_seen)) state.catalog_seen = [];
+  if (state.catalog_seen.length > 500) state.catalog_seen = state.catalog_seen.slice(-500);
+  if (state.catalog_cursor == null || !Number.isFinite(Number(state.catalog_cursor))) {
+    state.catalog_cursor = 0;
   }
   // S1 scorecard auto-trigger cooldowns (persist last-fired per rule).
   if (!state.scorecard_trigger_last_fired || typeof state.scorecard_trigger_last_fired !== 'object') {
@@ -1470,7 +2714,7 @@ function migrateCampaignState(state) {
       if (!state.attempted_queries || !state.attempted_queries[k]) delete state.attempted_meta[k];
     }
   }
-  reattributeOtherCoverageFromNotes(state);
+  // Coverage keeps are recomputed from the DB at cycle start (recomputeThreadCoverageKeeps).
   return state;
 }
 
@@ -1564,10 +2808,14 @@ function buildReflectPromptParts(state, opts = {}) {
     : '';
 
   const system = `You are Piko, building deep expertise by growing a document corpus.
-Propose NEXT seek missions as concrete books/papers with REAL author surnames — never "Surname", "Author", "Unknown", or placeholders.
-Prefer public-domain / Archive.org–likely works. Prefer the curated gap list, bibliography citations from kept works, and evidence-gap dossier wanted_sources when they fit.
+The campaign discovers concrete Archive.org texts via catalog search. Your job is to name UNDER-COVERED TOPICS and GAPS per thread grounded in the notes below — not to invent bibliography from memory.
+When you do propose a specific work, it MUST be (a) on the curated open-access gap list, (b) dossier wanted_sources, or (c) clearly public-domain / Archive.org–likely (pre-1930 or known PD Egyptology authors) AND grounded in the provided notes.
+Titles you cannot ground in the notes or curated/dossier lists will be rejected.
+Use REAL author surnames — never "Surname", "Author", "Unknown", or placeholders.
+Do NOT propose modern secondary speculation, publisher/edition metadata, or off-topic titles.
 Do NOT invent fictional titles. Do NOT confuse Churchward (Mu) with Donnelly (Atlantis: The Antediluvian World).
-Return JSON only: {"leads":[{"title":"Exact Title","author":"Full Author Name","thread":"giza|abydos|gobekli-tepe|tiahuanaco|cataclysm|flood-myths|atlantis|other","why":"short"}]}
+Assign a real thread when possible — avoid "other" unless truly unclassifiable.
+Return JSON only: {"leads":[{"title":"Exact Title","author":"Full Author Name","thread":"giza|abydos|heliopolis|self-view|premodern-reception|gobekli-tepe|cataclysm|atlantis|tiahuanaco|flood-myths|other","why":"short"}]}
 At most 5 leads. Each lead MUST include both title and author fields.${extraBlock}`;
 
   const rejectedBlock = rejectedLines
@@ -1651,17 +2899,31 @@ function applyReflectionProposedLeads(state, proposed, opts = {}) {
       rejectLead(l, 'in_corpus');
       continue;
     }
+    // Sanitize before grounding so missing_title / placeholder beat not_grounded.
+    const sanitized = sanitizeLead(packed);
+    if (!sanitized.ok) {
+      rejectLead(l, sanitized.reason || 'sanitize');
+      continue;
+    }
+    Object.assign(packed, sanitized.lead);
     const access = classifyLeadAccess(packed);
     packed.access = access;
+    // Phase D: speculative reflection only if curated/dossier-grounded.
+    if (access === 'speculative' && !matchesGroundedGap(packed)) {
+      rejectLead(l, 'not_grounded');
+      continue;
+    }
     // WP2.8: cap on pending speculative leads, not per reflection batch.
     if (access === 'speculative' && pendingSpeculative() >= 1) {
       rejectLead(l, 'speculative_cap');
       continue;
     }
-    const sanitized = sanitizeLead(packed);
-    if (!sanitized.ok) {
-      rejectLead(l, sanitized.reason || 'sanitize');
-      continue;
+    // Phase D: re-thread "other" before enqueue.
+    if (normalizeThreadId(packed.thread) === 'other') {
+      const guessed = guessThreadFromBlob([
+        packed.title || '', packed.author || '', packed.why || '', packed.query || '',
+      ].join(' '));
+      if (guessed !== 'other') packed.thread = guessed;
     }
     if (addLead(state, packed)) {
       added += 1;
@@ -1683,35 +2945,31 @@ function applyReflectionProposedLeads(state, proposed, opts = {}) {
       }
     }
   }
-  // If LLM added nothing useful, enqueue up to 2 curated seed-pack gaps
-  if (added === 0) {
-    try {
-      const { getSeeds } = require('./eiSeedPack');
-      for (const seed of getSeeds()) {
-        if (added >= 2) break;
-        const title = (seed.title_hints && seed.title_hints[0]) || '';
-        const author = (seed.authors && seed.authors[0]) || '';
-        if (!title || !author) continue;
-        if (!(seed.urls && seed.urls.length) && !(seed.ia_ids && seed.ia_ids.length)) continue;
-        if (hintOnCooldown(state, title, author)) continue;
-        if (addLead(state, {
-          title, author, thread: 'other', source: 'reflection',
-          why: 'curated open-access gap fill',
-        })) added += 1;
-      }
-    } catch (_) { /* optional */ }
+  // Novelty inject when LLM added nothing, or mostly repeat/sterile rejects.
+  const repeatRejects = rejectedDetails.filter((d) => d.reason === 'repeat_rejected').length;
+  const noveltyFail = list.length > 0 && (
+    added === dossierGapAdded
+    || rejected >= list.length
+    || repeatRejects >= Math.ceil(list.length * 0.6)
+  );
+  let noveltyInjected = 0;
+  if (added === dossierGapAdded || noveltyFail) {
+    const want = added === dossierGapAdded ? 3 : 2;
+    noveltyInjected = injectNoveltyLeads(state, want);
+    added += noveltyInjected;
   }
   state.stats.reflections = (state.stats.reflections || 0) + 1;
   if (!state.stats.reflection_leads_added) state.stats.reflection_leads_added = 0;
   // Count only LLM/self-set adds beyond dossier-gap seeds already queued separately.
-  const selfSetAdded = Math.max(0, added - dossierGapAdded);
-  state.stats.reflection_leads_added += selfSetAdded;
+  const selfSetAdded = Math.max(0, added - dossierGapAdded - noveltyInjected);
+  state.stats.reflection_leads_added += selfSetAdded + noveltyInjected;
   return {
     proposed: list.length,
     added,
     rejected,
     rejected_details: rejectedDetails.slice(0, 10),
     dossier_gap_added: dossierGapAdded,
+    novelty_injected: noveltyInjected,
     access: accessCounts,
   };
 }
@@ -1732,6 +2990,7 @@ function seededExtraLimit() {
 
 async function runCampaignCycle(opts = {}) {
   let state = loadState();
+  if (pmOwnsDaemon(state)) return { ok: true, skipped: 'research_pm_managing' };
   if (!state.enabled) return { ok: false, skipped: 'campaign_disabled' };
   if (state.paused) return { ok: false, skipped: 'campaign_paused' };
   if (state.running && state.running_since
@@ -1740,10 +2999,14 @@ async function runCampaignCycle(opts = {}) {
   }
 
   migrateCampaignState(state);
+  const coverageRecount = recomputeThreadCoverageKeeps(state);
   const resetRunning = resetStaleRunningLeads(state);
   state.running = true;
   state.running_since = new Date().toISOString();
   state = saveState(state);
+  if (pmOwnsDaemon(state) || !state.enabled || state.paused) {
+    return { ok: true, skipped: 'research_pm_managing' };
+  }
 
   const report = {
     cycle: state.cycle_count + 1,
@@ -1763,8 +3026,9 @@ async function runCampaignCycle(opts = {}) {
 
   let leadsAdded = 0;
   const sourceBreakdown = {
-    bibliography: 0, reflection: 0, thread: 0, thread_seed: 0, operator: 0, other: 0,
+    bibliography: 0, reflection: 0, thread: 0, thread_seed: 0, catalog: 0, operator: 0, other: 0,
   };
+  report.coverage_recount = coverageRecount;
 
   try {
     const runTool = opts.runToolFn || require('./eiAgentTools').runTool;
@@ -1773,25 +3037,44 @@ async function runCampaignCycle(opts = {}) {
     const pruned = pruneBadPendingLeads(state);
     if (pruned) report.skipped.push({ reason: 'pruned_bad_leads', count: pruned });
 
-    // Operator loop: pause seeking when unsure queue is large
+    const rethreaded = rethreadPendingOtherLeads(state);
+    if (rethreaded) report.skipped.push({ reason: 'rethreaded_other', count: rethreaded });
+
+    // Item 1: digest undigested other keeps + patch harvest threads.
+    try {
+      report.other_learning = await digestAndRethreadOther(state);
+    } catch (e) {
+      report.other_learning = { error: String(e.message || e).slice(0, 160) };
+    }
+
+    const advanced = advanceCooledPendingLeads(state);
+    if (advanced) report.skipped.push({ reason: 'cooldown_variant_advanced', count: advanced });
+
+    // Workstream D: drop junk unsures (Google-intro / metadata / no content)
+    // before the gate can permanently freeze the campaign.
+    try {
+      const { autoResolveJunkUnsures } = require('./eiUnsureQueue');
+      report.unsure_auto = await autoResolveJunkUnsures({ limit: 20 });
+    } catch (e) {
+      report.unsure_auto = { error: String(e.message || e).slice(0, 160) };
+    }
+
+    // Soft unsure gate: pause speculative text seeks only; seeded/catalog
+    // continues. Hard skip of the whole seek path caused overnight deadlock.
     let unsureCount = 0;
     try {
       const { listUnsureQueue } = require('./eiUnsureQueue');
       unsureCount = (listUnsureQueue({ limit: 50 }).items || []).length;
     } catch (_) { /* optional */ }
-    if (unsureCount >= UNSURE_PAUSE_THRESHOLD) {
-      report.unsure_gate = { count: unsureCount, threshold: UNSURE_PAUSE_THRESHOLD, seeks_skipped: true };
-      const gate = shouldReflectThisCycle(state);
-      if (!gate.run) {
-        report.reflection = { skipped: gate.reason, added: 0 };
-      } else {
-        report.reflection = await reflect(state).catch((e) => ({ error: String(e.message || e).slice(0, 160) }));
-        if (gate.reason === 'starvation_recovery' && report.reflection) report.reflection.recovery = true;
-        leadsAdded += Number((report.reflection && report.reflection.added) || 0);
-      }
-      state.cycle_count += 1;
-      state.last_cycle_at = new Date().toISOString();
-    } else {
+    const seededOnlyMode = unsureCount >= UNSURE_PAUSE_THRESHOLD;
+    if (seededOnlyMode) {
+      report.unsure_gate = {
+        count: unsureCount,
+        threshold: UNSURE_PAUSE_THRESHOLD,
+        mode: 'seeded_only',
+        seeks_skipped: false,
+      };
+    }
 
     // Dead-thread seed rescue — every cycle, not only when starved
     report.dead_thread_seeds = seedDeadThreads(state);
@@ -1803,6 +3086,27 @@ async function runCampaignCycle(opts = {}) {
     leadsAdded += Number(report.bib_leads || 0);
     sourceBreakdown.bibliography += Number(report.bib_leads || 0);
 
+    // Catalog-first refill when the *seekable* queue is thin. Soft gate makes
+    // speculative leads ineligible to seek — do not let them suppress refill.
+    const seekableCount = seekablePendingLeads(state, { seededOnlyMode }).length;
+    if (seekableCount < (Number(state.seeks_per_cycle) || 2) + 2) {
+      try {
+        report.catalog_refill = await catalogRefillLeads(state, 3, { fetchFn: opts.fetchFn });
+        const nCat = Number((report.catalog_refill && report.catalog_refill.added) || 0);
+        leadsAdded += nCat;
+        sourceBreakdown.catalog += nCat;
+        if (seededOnlyMode) {
+          report.catalog_refill = {
+            ...(report.catalog_refill || {}),
+            seekable_before: seekableCount,
+            seeded_only_mode: true,
+          };
+        }
+      } catch (e) {
+        report.catalog_refill = { error: String(e.message || e).slice(0, 160) };
+      }
+    }
+
     if (pendingLeads(state).length < 2) {
       const refilled = refillLeadsFromThreads(state);
       leadsAdded += refilled;
@@ -1810,9 +3114,16 @@ async function runCampaignCycle(opts = {}) {
     }
 
     // Skip cooling leads for this cycle (stay pending); retire zombies (WP2.3).
+    // Workstream B/E: carried seed URLs bypass; seeded/PD use a shorter window.
+    const seedExhausted = retireSeedExhaustedLeads(state);
+    if (seedExhausted) {
+      report.skipped.push({ reason: 'seed_exhausted', count: seedExhausted });
+    }
     const eligible = [];
     for (const lead of orderLeads(pendingLeads(state))) {
-      if (queryOnCooldown(state, lead.query)) {
+      const seedBypass = leadHasFreshSeedUrls(lead);
+      const onCooldown = queryOnCooldownForLead(state, lead);
+      if (onCooldown && !seedBypass) {
         const nowIso = new Date().toISOString();
         lead.last_skip_reason = 'cooldown';
         lead.last_skip_at = nowIso;
@@ -1829,10 +3140,17 @@ async function runCampaignCycle(opts = {}) {
         state.stats.skipped_duplicates += 1;
         continue;
       }
+      if (seedBypass && queryOnCooldown(state, lead.query)) {
+        lead._cooldown_bypassed_seed = true;
+      }
       if (alreadyInCorpus(lead.query) || (lead.title && alreadyInCorpus(`${lead.title} ${lead.author || ''}`))) {
         lead.status = 'already_in_corpus';
         report.skipped.push({ query: lead.query, reason: 'already_in_corpus' });
         state.stats.skipped_duplicates += 1;
+        continue;
+      }
+      if (seededOnlyMode && !leadAllowedUnderUnsureGate(lead)) {
+        report.skipped.push({ query: lead.query, reason: 'unsure_gate_deferred' });
         continue;
       }
       // Cleared for seek — reset skip tracking
@@ -1846,11 +3164,16 @@ async function runCampaignCycle(opts = {}) {
       eligible,
       state.seeks_per_cycle,
       seededExtraLimit(),
+      state,
     );
 
     const newKeepIds = [];
 
     async function processLead(lead, { seedOnly = false } = {}) {
+      if (pmOwnsDaemon(state)) {
+        if (lead.status === 'running') lead.status = 'pending';
+        return;
+      }
       lead.status = 'running';
       lead.last_attempt_at = new Date().toISOString();
       // WP2.4: do NOT stamp cooldown at seek start — stamp on terminal outcome.
@@ -1885,8 +3208,48 @@ async function runCampaignCycle(opts = {}) {
         let keeps = [];
         let unsures = [];
         let via = seedOnly ? 'seed_url' : 'seek';
+        let chaseTried = [];
+        let catalogTried = [];
+        const seekPlan = [];
 
-        const seedUrls = seedUrlsForLead(lead);
+        const toolOpts = {
+          goal: lead.mission || lead.query,
+          rootDir: opts.rootDir,
+          source: 'ei_research_campaign',
+          pikoUserId: 'agent:ei-campaign',
+          campaignDomain: true,
+          campaignTopic: state.topic || DEFAULT_TOPIC,
+          thread: normalizeThreadId(lead.thread),
+        };
+
+        const ingestUrlList = async (urls, viaLabel) => {
+          let abortMissionFit = false;
+          for (const url of urls) {
+            try {
+              const ing = await runTool('ingest_url', {
+                url,
+                note: lead.mission || lead.query,
+                title: lead.title || '',
+              }, toolOpts);
+              if (ing.mission_fit && ing.mission_fit.error === 'mission_fit_error') {
+                abortMissionFit = true;
+                break;
+              }
+              const mf = ing.mission_fit || (ing.result && ing.result.mission_fit);
+              const fromIng = judgmentsFromMissionFit(mf);
+              if (fromIng.keeps.length) {
+                keeps = fromIng.keeps;
+                unsures = fromIng.unsures;
+                via = viaLabel;
+                break;
+              }
+              if (fromIng.unsures.length && !unsures.length) unsures = fromIng.unsures;
+            } catch (_) { /* try next url */ }
+          }
+          return abortMissionFit;
+        };
+
+        const seedUrls = preferArchiveDetailsUrls(seedUrlsForLead(lead));
         const freshUrls = seedUrls.filter((u) => !alreadyKeptUrl(u));
         if (seedUrls.length && !freshUrls.length) {
           stampAttempted(state, lead.query, { ...stampMeta, days: QUERY_COOLDOWN_DAYS });
@@ -1901,24 +3264,70 @@ async function runCampaignCycle(opts = {}) {
             via: 'seed_url',
             skipped_duplicate_url: true,
             seed_only: !!seedOnly,
+            seek_plan: ['seed'],
           });
           saveStateMerged(state);
           return;
         }
 
-        for (const url of freshUrls.slice(0, 2)) {
-          try {
-            const ing = await runTool('ingest_url', {
-              url,
-              note: lead.mission || lead.query,
-              title: lead.title || '',
-            }, {
-              goal: lead.mission || lead.query,
-              rootDir: opts.rootDir,
-              source: 'ei_research_campaign',
-              pikoUserId: 'agent:ei-campaign',
+        const cooldownBypassedSeed = !!lead._cooldown_bypassed_seed;
+        if (lead._cooldown_bypassed_seed) delete lead._cooldown_bypassed_seed;
+
+        if (freshUrls.length) {
+          seekPlan.push('seed');
+          const aborted = await ingestUrlList(freshUrls.slice(0, 3), 'seed_url');
+          if (aborted) {
+            lead.status = 'mission_fit_error';
+            stampAttempted(state, lead.query, { ...stampMeta, days: FAIL_COOLDOWN_DAYS });
+            lead.seed_url_attempts = (Number(lead.seed_url_attempts) || 0) + 1;
+            report.seeks.push({
+              query: lead.query,
+              thread: normalizeThreadId(lead.thread),
+              kept: 0,
+              unsure: 0,
+              via: 'seed_url',
+              mission_fit_error: true,
+              seek_plan: seekPlan,
+              cooldown_bypassed_seed: cooldownBypassedSeed,
             });
-            if (ing.mission_fit && ing.mission_fit.error === 'mission_fit_error') {
+            saveStateMerged(state);
+            return;
+          }
+          if (!keeps.length) {
+            lead.seed_url_attempts = (Number(lead.seed_url_attempts) || 0) + 1;
+          }
+        }
+
+        // Chase-first for bibliography / Egyptology — demoted after empty streak.
+        const chaseFirst = !seedOnly && shouldChaseForLead(state, lead, 'first');
+
+        if (!keeps.length && !unsures.length && !seedOnly && chaseFirst) {
+          seekPlan.push('chase');
+          const chased = await chaseFallbackForLead(lead, runTool, opts);
+          if (chased.tried && chased.tried.length) {
+            chaseTried = chased.tried;
+            recordChaseAttempt(state, chased.keeps.length);
+          }
+          if (chased.keeps.length || chased.unsures.length) {
+            keeps = chased.keeps;
+            unsures = chased.unsures;
+            via = chased.via || 'chase';
+          }
+        }
+
+        // Phase C: niche Egyptology catalogs (oraec/papyri/TM). Off by default —
+        // they flooded `other` with inscription fragments overnight.
+        if (
+          !keeps.length && !unsures.length && !seedOnly
+          && isEgyptologyThread(lead.thread)
+          && String(process.env.PIKO_EI_CAMPAIGN_NICHE_CATALOG || '1') !== '0'
+        ) {
+          seekPlan.push('catalog');
+          const cat = await catalogDiscoverUrls(lead, runTool, opts);
+          catalogTried = cat.tried || [];
+          if (cat.urls && cat.urls.length) {
+            const aborted = await ingestUrlList(cat.urls, 'catalog');
+            if (aborted) {
               lead.status = 'mission_fit_error';
               stampAttempted(state, lead.query, { ...stampMeta, days: FAIL_COOLDOWN_DAYS });
               report.seeks.push({
@@ -1926,36 +3335,24 @@ async function runCampaignCycle(opts = {}) {
                 thread: normalizeThreadId(lead.thread),
                 kept: 0,
                 unsure: 0,
-                via: 'seed_url',
+                via: 'catalog',
                 mission_fit_error: true,
+                seek_plan: seekPlan,
+                catalog_tried: catalogTried,
               });
               saveStateMerged(state);
               return;
             }
-            const mf = ing.mission_fit || (ing.result && ing.result.mission_fit);
-            const k = ((mf && mf.judgments) || []).filter((j) => j.verdict === 'keep' && !j.purged);
-            const u = ((mf && mf.judgments) || []).filter((j) => j.verdict === 'unsure' && !j.purged);
-            if (k.length) {
-              keeps = k;
-              unsures = u;
-              via = 'seed_url';
-              break;
-            }
-            if (u.length && !unsures.length) unsures = u;
-          } catch (_) { /* try next url / fall through */ }
+          }
         }
 
-        if (!keeps.length && !seedOnly) {
+        if (!keeps.length && !unsures.length && !seedOnly) {
+          seekPlan.push('seek');
           const out = await runTool('seek_files', {
             query: lead.query,
             limit: 10,
             max_keeps: 2,
-          }, {
-            goal: lead.mission || lead.query,
-            rootDir: opts.rootDir,
-            source: 'ei_research_campaign',
-            pikoUserId: 'agent:ei-campaign',
-          });
+          }, toolOpts);
           if (out.mission_fit && out.mission_fit.error === 'mission_fit_error') {
             lead.status = 'mission_fit_error';
             stampAttempted(state, lead.query, { ...stampMeta, days: FAIL_COOLDOWN_DAYS });
@@ -1966,14 +3363,57 @@ async function runCampaignCycle(opts = {}) {
               unsure: 0,
               via: 'seek',
               mission_fit_error: true,
+              seek_plan: seekPlan,
             });
             saveStateMerged(state);
             return;
           }
           const mf = out.mission_fit || (out.result && out.result.mission_fit);
-          keeps = ((mf && mf.judgments) || []).filter((j) => j.verdict === 'keep' && !j.purged);
-          unsures = ((mf && mf.judgments) || []).filter((j) => j.verdict === 'unsure' && !j.purged);
+          const fromSeek = judgmentsFromMissionFit(mf);
+          keeps = fromSeek.keeps;
+          unsures = fromSeek.unsures;
           via = 'seek';
+
+          // Phase B.4 — ingest gap host/PDF URLs (never keep the gap row itself).
+          if (!keeps.length && !unsures.length) {
+            const gapUrls = gapIngestUrlsFromSeekResult(out.result || {})
+              .filter((u) => !alreadyKeptUrl(u));
+            if (gapUrls.length) {
+              seekPlan.push('gap_ingest');
+              const aborted = await ingestUrlList(gapUrls, 'gap_ingest');
+              if (aborted) {
+                lead.status = 'mission_fit_error';
+                stampAttempted(state, lead.query, { ...stampMeta, days: FAIL_COOLDOWN_DAYS });
+                report.seeks.push({
+                  query: lead.query,
+                  thread: normalizeThreadId(lead.thread),
+                  kept: 0,
+                  unsure: 0,
+                  via: 'gap_ingest',
+                  mission_fit_error: true,
+                  seek_plan: seekPlan,
+                });
+                saveStateMerged(state);
+                return;
+              }
+            }
+          }
+
+          // Chase fallback only when allowed and we did not already chase-first.
+          if (!keeps.length && !unsures.length && !chaseFirst
+            && shouldChaseForLead(state, lead, 'fallback')) {
+            seekPlan.push('chase');
+            const chased = await chaseFallbackForLead(lead, runTool, opts);
+            if (chased.tried && chased.tried.length) {
+              chaseTried = chased.tried;
+              recordChaseAttempt(state, chased.keeps.length);
+            }
+            if (chased.keeps.length || chased.unsures.length) {
+              keeps = chased.keeps;
+              unsures = chased.unsures;
+              via = chased.via || 'chase';
+            }
+          }
         }
 
         // Keep-time URL dedupe: drop judgments whose source URL is already kept.
@@ -2015,6 +3455,10 @@ async function runCampaignCycle(opts = {}) {
           unsure: unsures.length,
           via,
           seed_only: !!seedOnly,
+          seek_plan: seekPlan,
+          cooldown_bypassed_seed: cooldownBypassedSeed,
+          ...(chaseTried.length ? { chase_tried: chaseTried } : {}),
+          ...(catalogTried.length ? { catalog_tried: catalogTried } : {}),
         });
         report.keeps.push(...keeps.map((j) => j.harvest_id));
         report.unsures.push(...unsures.map((j) => j.harvest_id));
@@ -2025,7 +3469,13 @@ async function runCampaignCycle(opts = {}) {
           // Lifetime via counters (WP6.6) — scorecard must not depend on last-12 reports.
           const viaKey = via === 'seed_url'
             ? 'keeps_by_via_seed_url'
-            : (via === 'seek' ? 'keeps_by_via_seek' : 'keeps_by_via_other');
+            : (via === 'seek'
+              ? 'keeps_by_via_seek'
+              : ((via === 'chase_topbib' || via === 'chase_tla' || via === 'chase')
+                ? 'keeps_by_via_chase'
+                : (via === 'catalog' || via === 'gap_ingest'
+                  ? 'keeps_by_via_other'
+                  : 'keeps_by_via_other')));
           state.stats[viaKey] = (state.stats[viaKey] || 0) + keeps.length;
           // Completed seek (kept) — full cooldown.
           stampAttempted(state, lead.query, { ...stampMeta, days: QUERY_COOLDOWN_DAYS });
@@ -2033,10 +3483,14 @@ async function runCampaignCycle(opts = {}) {
           if (lead.source === 'reflection') {
             state.stats.reflection_leads_kept = (state.stats.reflection_leads_kept || 0) + 1;
           }
+          if (lead.source === 'catalog') {
+            state.stats.catalog_leads_kept = (state.stats.catalog_leads_kept || 0) + keeps.length;
+          }
         } else if (unsures.length) {
-          // Reviewed and left unsure — treat as completed outcome, full cooldown.
-          stampAttempted(state, lead.query, { ...stampMeta, days: QUERY_COOLDOWN_DAYS });
-          lead.status = 'done';
+          // Soft outcome: short fail cooldown, leave pending so bib can retry.
+          stampAttempted(state, lead.query, { ...stampMeta, days: FAIL_COOLDOWN_DAYS });
+          lead.status = 'pending';
+          lead.last_skip_reason = 'unsure_soft';
         } else {
           retryOrFail('no_keeps');
         }
@@ -2048,14 +3502,18 @@ async function runCampaignCycle(opts = {}) {
     }
 
     // --- Seek phase (priority batch; seed URL ingest first, then web seek) ---
-    for (const lead of batch) {
-      await processLead(lead, { seedOnly: false });
-    }
+    if (!pmOwnsDaemon(state)) {
+      for (const lead of batch) {
+        await processLead(lead, { seedOnly: false });
+      }
 
-    // --- Seeded fast lane: extra Archive.org ingests, no open-web seek ---
-    for (const lead of seededExtraLeads) {
-      if (!seedUrlsForLead(lead).length) continue;
-      await processLead(lead, { seedOnly: true });
+      // --- Seeded fast lane: extra Archive.org ingests, no open-web seek ---
+      for (const lead of seededExtraLeads) {
+        if (!seedUrlsForLead(lead).length) continue;
+        await processLead(lead, { seedOnly: true });
+      }
+    } else {
+      report.skipped.push({ reason: 'research_pm_managing' });
     }
 
     // --- Expand phase: queue bibliography citations for mining (no inline seek) ---
@@ -2101,7 +3559,7 @@ async function runCampaignCycle(opts = {}) {
       report.reflection = { skipped: reflectGate.reason, added: 0 };
     } else {
       try {
-        report.reflection = await reflect(state);
+        report.reflection = await reflect(state, opts);
         if (reflectGate.reason === 'starvation_recovery' && report.reflection) {
           report.reflection.recovery = true;
         }
@@ -2157,7 +3615,6 @@ async function runCampaignCycle(opts = {}) {
 
     state.cycle_count += 1;
     state.last_cycle_at = new Date().toISOString();
-    } // end else (not unsure-gated)
   } catch (e) {
     report.error = String(e.message || e).slice(0, 300);
   } finally {
@@ -2169,12 +3626,19 @@ async function runCampaignCycle(opts = {}) {
     report.leads_added = leadsAdded;
     const seekCount = (report.seeks || []).length;
     const keepCount = [...new Set(report.keeps || [])].length;
-    updateIdleStreak(state, seekCount, leadsAdded);
+    updateIdleStreak(state, seekCount, leadsAdded, keepCount);
     report.idle_streak = state.idle_streak;
     state.running = false;
     state.running_since = null;
     // WP2.7: merge any leads/fields written by API while this cycle ran.
     state = mergeExternalState(state);
+    if (pmOwnsDaemon(state)) {
+      state.pm_owns = true;
+      state.enabled = false;
+      state.paused = true;
+      state.running = false;
+      state.running_since = null;
+    }
     if (state.leads.length > 200) {
       state.leads = state.leads.filter((l) => l.status === 'pending').concat(
         state.leads.filter((l) => l.status !== 'pending').slice(-80),
@@ -2209,6 +3673,7 @@ async function runCampaignCycle(opts = {}) {
 
 function dueForCycle(state) {
   const s = state || loadState();
+  if (pmOwnsDaemon(s)) return false;
   if (!s.enabled || s.paused) return false;
   if (s.running && s.running_since
     && Date.now() - new Date(s.running_since).getTime() < STALE_RUNNING_MS) return false;
@@ -2369,7 +3834,7 @@ function expertiseSnapshot(state) {
   let notesForThreadFn = null;
   try {
     const { listNotes } = require('./eiCorpusNotes');
-    notesCount = listNotes(200).length;
+    notesCount = listNotes(5000).length;
   } catch (_) { /* optional */ }
   try {
     const dmod = require('./eiThreadDossiers');
@@ -2403,7 +3868,7 @@ function expertiseSnapshot(state) {
     const art = articleByThread[id];
     let notesForT = 0;
     if (notesForThreadFn) {
-      try { notesForT = notesForThreadFn(id, { limit: 100 }).length; } catch (_) { notesForT = 0; }
+      try { notesForT = notesForThreadFn(id, { limit: 400 }).length; } catch (_) { notesForT = 0; }
     } else {
       notesForT = d ? Number(d.note_count || 0) : 0;
     }
@@ -2472,6 +3937,10 @@ function summarize(state) {
   const idleStreak = Number(s.idle_streak || 0);
   const backingOff = idleStreak >= IDLE_STREAK_THRESHOLD;
   const intervalEff = effectiveIntervalMinutes(s);
+  const seededOnly = isSeededOnlyModeActive();
+  const eligibleN = eligiblePendingLeads(s).length;
+  const seekableN = seekablePendingLeads(s, { seededOnlyMode: seededOnly }).length;
+  const pendingN = pendingLeads(s).length;
   return {
     enabled: s.enabled,
     paused: s.paused,
@@ -2487,7 +3956,13 @@ function summarize(state) {
     next_cycle_due: s.enabled && !s.paused
       ? new Date((s.last_cycle_at ? new Date(s.last_cycle_at).getTime() : Date.now()) + intervalEff * 60000).toISOString()
       : null,
-    pending_leads: pendingLeads(s).length,
+    pending_leads: pendingN,
+    eligible_pending: eligibleN,
+    seekable_pending: seekableN,
+    unsure_gate_mode: seededOnly ? 'seeded_only' : 'open',
+    empty_seek_hint: (seekableN === 0 && pendingN > 0)
+      ? 'pending leads exist but none are currently seekable (cooldown / unsure gate / seed exhausted)'
+      : null,
     stats: s.stats,
     thread_coverage: s.thread_coverage,
     last_report: lastReport,
@@ -2555,7 +4030,11 @@ function bustLegateStateCache() {
 
 function startCampaign(opts = {}) {
   let state = loadState();
+  if (pmOwnsDaemon(state) && !opts.force_forklift) {
+    return { ok: false, error: 'research_pm_managing', hint: 'use start_forklift to re-enable the daemon' };
+  }
   migrateCampaignState(state);
+  if (opts.force_forklift) state.pm_owns = false;
   state.enabled = true;
   state.paused = false;
   state.idle_streak = 0;
@@ -2591,6 +4070,9 @@ function pauseCampaign() {
 
 function resumeCampaign() {
   const state = loadState();
+  if (pmOwnsDaemon(state)) {
+    return { ok: false, error: 'research_pm_managing', hint: 'use start_forklift to re-enable the daemon' };
+  }
   if (!state.enabled) return startCampaign();
   state.paused = false;
   state.idle_streak = 0;
@@ -2599,10 +4081,13 @@ function resumeCampaign() {
   return { ok: true, status: summarize(state) };
 }
 
-function stopCampaign() {
+function stopCampaign(opts = {}) {
   const state = loadState();
   state.enabled = false;
-  state.paused = false;
+  state.paused = true;
+  state.running = false;
+  state.running_since = null;
+  if (opts.pm_owns) state.pm_owns = true;
   saveState(state);
   bustLegateStateCache();
   return { ok: true, status: summarize(state) };
@@ -2633,8 +4118,16 @@ function formatCampaignStatus(status) {
     `Research campaign: ${s.enabled ? (s.paused ? 'PAUSED' : 'ACTIVE') : 'stopped'}`
       + ` · mode=${s.mode || 'active'}`
       + ` · cycles=${s.cycle_count} · keeps=${s.stats.keeps} · unsures=${s.stats.unsures}`
-      + ` · pending leads=${s.pending_leads}`,
+      + ` · pending leads=${s.pending_leads}`
+      + (s.seekable_pending != null ? ` · seekable=${s.seekable_pending}` : '')
+      + (s.eligible_pending != null ? ` · eligible=${s.eligible_pending}` : ''),
   ];
+  if (s.unsure_gate_mode === 'seeded_only') {
+    lines.push('Unsure gate: seeded_only (speculative text seeks deferred)');
+  }
+  if (s.empty_seek_hint) {
+    lines.push(`Seek queue: ${s.empty_seek_hint}`);
+  }
   if (s.enabled && !s.paused && s.next_cycle_due) {
     lines.push(`Next cycle due: ${s.next_cycle_due}`
       + ` (every ${s.effective_interval_minutes || s.interval_minutes}m`
@@ -2670,6 +4163,7 @@ function formatCampaignStatus(status) {
 }
 
 module.exports = {
+  DEFAULT_TOPIC,
   DEFAULT_THREADS,
   KNOWN_THREAD_IDS,
   QUERY_COOLDOWN_DAYS,
@@ -2708,6 +4202,7 @@ module.exports = {
   formatCampaignStatus,
   alreadyInCorpus,
   alreadyKeptUrl,
+  findKeptItemByUrl,
   normalizeSourceUrl,
   itemSourceUrls,
   flagDuplicateUrlKeeps,
@@ -2717,6 +4212,15 @@ module.exports = {
   allVariantsOnCooldown,
   hintOnCooldown,
   eligiblePendingLeads,
+  seekablePendingLeads,
+  isSeededOnlyModeActive,
+  queryOnCooldownForLead,
+  effectiveCooldownDaysForLead,
+  hasHighYieldPending,
+  retireSeedExhaustedLeads,
+  itemCountsAsCorpusKeep,
+  TERMINAL_SUCCESS,
+  TERMINAL_DONE,
   addLead,
   sanitizeLead,
   pruneBadPendingLeads,
@@ -2726,6 +4230,45 @@ module.exports = {
   reattributeOtherCoverageFromNotes,
   orderLeads,
   leadPriority,
+  PRIORITY_SOURCES,
+  BIB_LEADS_PER_CYCLE,
+  judgmentsFromMissionFit,
+  judgmentsFromChaseTool,
+  chaseFallbackForLead,
+  advanceCooledPendingLeads,
+  leadHasFreeQueryVariant,
+  preferArchiveDetailsUrls,
+  gapIngestUrlsFromSeekResult,
+  catalogDiscoverUrls,
+  isGarbageLeadTitle,
+  isBibJunkTitle,
+  isEgyptologyThread,
+  scoreBibLead,
+  matchesGroundedGap,
+  rethreadPendingOtherLeads,
+  rethreadOtherHarvestItems,
+  digestAndRethreadOther,
+  recomputeThreadCoverageKeeps,
+  chaseIsDemoted,
+  shouldChaseForLead,
+  recordChaseAttempt,
+  injectNoveltyLeads,
+  catalogRefillLeads,
+  leadHasFreshSeedUrls,
+  carriedSeedUrls,
+  leadAllowedUnderUnsureGate,
+  isLikelyHallucinatedDossierLead,
+  seedUrlsForLead,
+  guessThreadFromBlob,
+  pmOwnsDaemon,
+  threadIsDead,
+  allowSupportingLead,
+  threadSeekRank,
+  isSupportingThread,
+  DEAD_THREAD_KEEP_FLOOR,
+  SELF_VIEW_SUPPORTING_GATE,
+  SEEK_THREAD_ORDER,
+  BIB_MIN_RANK,
   pickSeekBatches,
   seedDeadThreads,
   refillLeadsFromThreads,

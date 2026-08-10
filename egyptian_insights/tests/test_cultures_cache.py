@@ -60,6 +60,76 @@ class CulturesCacheTests(unittest.TestCase):
         )
         self.assertFalse(self.db.titles_match("Tanis", "Hawara"))
 
+    def test_upsert_replace_preserves_pm_confirmed_thread(self):
+        conn = self.db.connect()
+        hid = self.db.upsert_harvest(
+            conn,
+            {
+                "source": "web_document",
+                "source_id": "sethe-pt",
+                "title": "Die altaegyptischen Pyramidentexte",
+                "source_url": "https://archive.org/stream/diealtaegyptisch03sethuoft/diealtaegyptisch03sethuoft_djvu.txt",
+                "official_text": "utterance " * 80,
+                "meta_json": json.dumps(
+                    {"thread": "self-view", "site": "self-view", "pm_confirmed": True, "pm_confirm_id": "rpc_1"},
+                    ensure_ascii=False,
+                ),
+            },
+        )
+        hid2 = self.db.upsert_harvest(
+            conn,
+            {
+                "source": "web_document",
+                "source_id": "sethe-pt",
+                "title": "Die altaegyptischen Pyramidentexte",
+                "source_url": "https://archive.org/stream/diealtaegyptisch03sethuoft/diealtaegyptisch03sethuoft_djvu.txt",
+                "official_text": "utterance " * 120,
+                "meta_json": json.dumps({"thread": "giza", "site": "giza"}, ensure_ascii=False),
+            },
+            replace=True,
+        )
+        self.assertEqual(hid, hid2)
+        row = self.db.get_harvest(conn, hid)
+        meta = json.loads(row["meta_json"] or "{}")
+        self.assertEqual(meta.get("thread"), "self-view")
+        self.assertEqual(meta.get("site"), "self-view")
+        self.assertTrue(meta.get("pm_confirmed"))
+        conn.close()
+
+    def test_upsert_on_conflict_preserves_pm_confirmed_thread(self):
+        conn = self.db.connect()
+        hid = self.db.upsert_harvest(
+            conn,
+            {
+                "source": "web_document",
+                "source_id": "amarna-knud",
+                "title": "Die El-Amarna-Tafeln",
+                "source_url": "https://archive.org/details/dieelamarnatafel01knud",
+                "official_text": "tablet " * 80,
+                "meta_json": json.dumps(
+                    {"thread": "self-view", "site": "self-view", "pm_confirmed": True},
+                    ensure_ascii=False,
+                ),
+            },
+        )
+        hid2 = self.db.upsert_harvest(
+            conn,
+            {
+                "source": "web_document",
+                "source_id": "amarna-knud",
+                "title": "Die El-Amarna-Tafeln recrawl",
+                "source_url": "https://archive.org/details/dieelamarnatafel01knud",
+                "official_text": "tablet " * 120,
+                "meta_json": json.dumps({"thread": "giza", "site": "giza"}, ensure_ascii=False),
+            },
+        )
+        self.assertEqual(hid, hid2)
+        row = self.db.get_harvest(conn, hid)
+        meta = json.loads(row["meta_json"] or "{}")
+        self.assertEqual(meta.get("thread"), "self-view")
+        self.assertTrue(meta.get("pm_confirmed"))
+        conn.close()
+
     def test_upsert_dedupes_by_title_across_sources(self):
         conn = self.db.connect()
         hid = self.db.upsert_harvest(

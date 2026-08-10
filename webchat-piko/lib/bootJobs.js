@@ -7,7 +7,7 @@ const path = require('path');
 const { exec } = require('child_process');
 const { isBackgroundJobEnabled } = require('./tenantBackgroundJobs');
 
-const EXPECTED_JOB_IDS = ['campaign_cycle_enqueue', 'unified_heartbeat', 'tripwire_eval', 'ausmaker_watchman', 'daily_digest', 'urgency_engine', 'weekly_po', 'history_dump', 'proactive_cycle', 'intent_poller', 'legion_watch', 'api_ping', 'legion_backup', 'context_refresh', 'nightly_wisdom', 'ei_platform_eval', 'ei_engineering_queue', 'ei_stance_synthesis', 'ei_quarantine_cleanup', 'nightly_quant', 'belief-consolidation', 'memory-consolidation', 'weekly-retro', 'daily_memory_summarize', 'rabbit_hole_daily', 'meta_reflection_weekly', 'ea_lookin'];
+const EXPECTED_JOB_IDS = ['campaign_cycle_enqueue', 'research_pm_tick', 'unified_heartbeat', 'tripwire_eval', 'ausmaker_watchman', 'daily_digest', 'urgency_engine', 'weekly_po', 'history_dump', 'proactive_cycle', 'intent_poller', 'legion_watch', 'api_ping', 'legion_backup', 'context_refresh', 'nightly_wisdom', 'ei_platform_eval', 'ei_engineering_queue', 'ei_stance_synthesis', 'ei_quarantine_cleanup', 'nightly_quant', 'belief-consolidation', 'memory-consolidation', 'weekly-retro', 'daily_memory_summarize', 'rabbit_hole_daily', 'meta_reflection_weekly', 'ea_lookin'];
 
 /**
  * @param {object} scheduler - createScheduler() instance
@@ -60,8 +60,8 @@ function registerBootJobs(scheduler, ctx) {
       intervalMs: 60 * 1000,
       tenantGate: cultureOnly,
       fn: async () => {
-        const { dueForCycle } = require('./eiResearchCampaign');
-        if (!dueForCycle()) return;
+        const { dueForCycle, pmOwnsDaemon } = require('./eiResearchCampaign');
+        if (pmOwnsDaemon() || !dueForCycle()) return;
         const { enqueueAgentJob } = require('./agentOrchestrator');
         const { listJobs } = require('./agentJobs');
         const pending = listJobs(60)
@@ -69,6 +69,26 @@ function registerBootJobs(scheduler, ctx) {
         if (pending) return;
         enqueueAgentJob('campaign_cycle', { source: 'scheduler' }, { rootDir: rootDir });
         console.log('[campaign] enqueued research campaign cycle');
+      },
+    });
+    bootScheduler.register({
+      id: 'research_pm_tick',
+      intervalMs: 60 * 1000,
+      tenantGate: cultureOnly,
+      fn: async () => {
+        const { dueForPmTick, isPmManaging } = require('./eiResearchPm');
+        if (!isPmManaging() || !dueForPmTick()) return;
+        const { enqueueAgentJob } = require('./agentOrchestrator');
+        const { listJobs } = require('./agentJobs');
+        const pending = listJobs(60).some((j) => {
+          if (!['pending', 'running'].includes(j.status)) return false;
+          if (j.type === 'research_pm_tick') return true;
+          const p = j.payload || {};
+          return j.type === 'agent_run' && p.agent_id === 'ei-seeker';
+        });
+        if (pending) return;
+        enqueueAgentJob('research_pm_tick', { source: 'scheduler' }, { rootDir: rootDir });
+        console.log('[research-pm] enqueued PM tick');
       },
     });
     bootScheduler.register({
